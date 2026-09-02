@@ -67,16 +67,13 @@ importers:
 
   packages/contracts:
     dependencies:
-      '@memberjunction/core':
-        specifier: ^5.51.2
-        version: 5.51.2
-      '@memberjunction/global':
-        specifier: ^5.51.2
-        version: 5.51.2
       zod:
         specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
+      '@memberjunction/core':
+        specifier: ^5.51.2
+        version: 5.51.2
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
@@ -86,12 +83,6 @@ importers:
 
   packages/engine:
     dependencies:
-      '@memberjunction/core':
-        specifier: ^5.51.2
-        version: 5.51.2
-      '@memberjunction/global':
-        specifier: ^5.51.2
-        version: 5.51.2
       '@memberjunction/loom-contracts':
         specifier: workspace:*
         version: link:../contracts
@@ -102,6 +93,9 @@ importers:
         specifier: ^3.25.76
         version: 3.25.76
     devDependencies:
+      '@memberjunction/core':
+        specifier: ^5.51.2
+        version: 5.51.2
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1

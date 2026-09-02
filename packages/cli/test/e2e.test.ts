@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import * as os from 'node:os';
 import { executeBuild } from '../src/commands/build.js';
 import { executeAccumulate } from '../src/commands/accumulate.js';
 import { executeValidate } from '../src/commands/validate.js';
 
 describe('Loom E2E Fixture Pipeline', () => {
   const fixturePath = path.resolve(__dirname, '../../../projects/fixture');
-  const tempOutputDir = path.resolve(__dirname, '../../../projects/fixture/test-output');
+  const tempOutputDir = path.join(os.tmpdir(), `loom-e2e-${Date.now()}`);
   const tempMetadataDir = path.join(tempOutputDir, 'metadata');
 
   beforeAll(async () => {
@@ -16,14 +17,14 @@ describe('Loom E2E Fixture Pipeline', () => {
 
   afterAll(async () => {
     await fs.rm(tempOutputDir, { recursive: true, force: true });
-    await fs.rm(path.resolve(__dirname, '../../../projects/fixture/migrations'), {
+    await fs.rm(path.resolve(fixturePath, 'migrations'), {
       recursive: true,
       force: true,
     });
   });
 
   it('builds full baseline, validates gates, accumulates delta, and re-validates', async () => {
-    // 1. Build baseline into test-output/metadata
+    // 1. Build baseline into isolated temp directory
     await executeBuild({
       project: fixturePath,
       seed: '101',
@@ -59,7 +60,7 @@ describe('Loom E2E Fixture Pipeline', () => {
     const updatedPeople = JSON.parse(await fs.readFile(personFile, 'utf8'));
     expect(updatedPeople.length).toBe(12); // 10 baseline + 2 accumulated
 
-    // 4. Validate accumulated dataset
+    // 4. Re-validate accumulated dataset
     const report2 = await executeValidate({
       project: fixturePath,
       data: tempMetadataDir,

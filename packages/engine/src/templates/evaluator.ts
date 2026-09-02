@@ -55,8 +55,13 @@ function evalField(
   }
 
   if ('seq' in fs) {
-    const counter = scope[fs.seq];
-    return typeof counter === 'number' ? counter : 0;
+    const key = `__seq_${fs.seq}`;
+    const current = typeof scope[key] === 'number'
+      ? (scope[key] as number) + 1
+      : (typeof scope[fs.seq] === 'number' ? (scope[fs.seq] as number) + 1 : 1);
+    scope[key] = current;
+    scope[fs.seq] = current;
+    return current;
   }
 
   // The remaining tags require an RNG handle
@@ -81,7 +86,22 @@ function evalField(
   }
 
   if ('chance' in fs) {
-    const p = typeof fs.chance === 'number' ? fs.chance : Number(resolveDotPath(scope, fs.chance));
+    let p: number;
+    if (typeof fs.chance === 'number') {
+      p = fs.chance;
+    } else {
+      const resolved = resolveDotPath(scope, fs.chance);
+      if (resolved === undefined || resolved === null) {
+        throw new Error(`evalField: chance path '${fs.chance}' resolved to undefined/null`);
+      }
+      p = Number(resolved);
+      if (isNaN(p)) {
+        throw new Error(`evalField: chance path '${fs.chance}' resolved to non-numeric value: ${resolved}`);
+      }
+    }
+    if (p < 0 || p > 1) {
+      throw new Error(`evalField: chance probability must be within [0, 1], received ${p}`);
+    }
     return rng.bernoulli(p);
   }
 
@@ -114,20 +134,18 @@ export function renderRow(
   scope: Record<string, unknown>,
   rng?: RngStream
 ): Record<string, unknown> {
-  const localScope: Record<string, unknown> = { ...scope };
-
   // 1. Evaluate pre-bindings in `let`
   if (template.let) {
     for (const [key, spec] of Object.entries(template.let)) {
-      localScope[key] = evalField(spec, localScope, rng);
+      scope[key] = evalField(spec, scope, rng);
     }
   }
 
-  // 2. Render output columns in `row`
-  const result: Record<string, unknown> = {};
-  for (const [col, spec] of Object.entries(template.row)) {
-    result[col] = evalField(spec, localScope, rng);
+  // 2. Evaluate row fields
+  const output: Record<string, unknown> = {};
+  for (const [fieldName, spec] of Object.entries(template.row)) {
+    output[fieldName] = evalField(spec, scope, rng);
   }
 
-  return result;
+  return output;
 }

@@ -16,13 +16,13 @@ program
   .description('Build full simulation baseline from declarative metadata')
   .requiredOption('-p, --project <path>', 'Path to project directory containing domain.json')
   .option('-s, --seed <number>', 'Deterministic seed', '42')
-  .option('-r, --release <date>', 'Release baseline date (YYYY-MM-DD)')
+  .option('-r, --release <date>', 'Release baseline date (YYYY-MM-DD)', '2026-09-02')
   .option('-o, --output <dir>', 'Custom output directory for metadata')
   .action(async (opts) => {
     try {
       await executeBuild(opts);
     } catch (err) {
-      console.error('Build Error:', err);
+      console.error('Build Error:', err instanceof Error ? err.message : err);
       process.exit(1);
     }
   });
@@ -34,12 +34,13 @@ program
   .requiredOption('--prior-state <dir>', 'Path to committed metadata/ directory')
   .option('-w, --weeks <number>', 'Number of weeks to advance', '1')
   .option('-s, --seed <number>', 'Simulation seed', '42')
+  .option('-a, --as-of <date>', 'Explicit as-of simulation date (YYYY-MM-DD)')
   .option('-o, --output <dir>', 'Custom output directory')
   .action(async (opts) => {
     try {
       await executeAccumulate(opts);
     } catch (err) {
-      console.error('Accumulate Error:', err);
+      console.error('Accumulate Error:', err instanceof Error ? err.message : err);
       process.exit(1);
     }
   });
@@ -53,7 +54,7 @@ program
     try {
       await executeValidate(opts);
     } catch (err) {
-      console.error('Validate Error:', err);
+      console.error('Validate Error:', err instanceof Error ? err.message : err);
       process.exit(1);
     }
   });

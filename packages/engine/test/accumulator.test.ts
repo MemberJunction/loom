@@ -48,7 +48,7 @@ describe('Accumulator', () => {
       ],
     };
 
-    const result = accumulator.computeDelta(
+    const result = accumulator.ComputeDelta(
       domain,
       2,
       '2026-09-01',
@@ -62,6 +62,30 @@ describe('Accumulator', () => {
     ]);
   });
 
+  it('throws an error if a row is missing an ID instead of collapsing onto undefined', () => {
+    const priorState = {};
+    const currentState = {
+      Person: [{ Name: 'Missing ID' }],
+    };
+
+    expect(() =>
+      accumulator.ComputeDelta(domain, 1, '2026-09-01', priorState, currentState)
+    ).toThrowError(/missing required primary key 'ID'/);
+  });
+
+  it('enforces that prior IDs are never reassigned across entities', () => {
+    const priorState = {
+      Person: [{ ID: 'id-100', Name: 'Alice' }],
+    };
+    const currentState = {
+      Order: [{ ID: 'id-100', Total: 50 }],
+    };
+
+    expect(() =>
+      accumulator.ComputeDelta(domain, 2, '2026-09-01', priorState, currentState)
+    ).toThrowError(/cannot be reassigned/);
+  });
+
   it('detects status transitions on mutable entities', () => {
     const priorState = {
       Person: [{ ID: 'p-1', Name: 'Alice', Status: 'PendingRenewal' }],
@@ -71,7 +95,7 @@ describe('Accumulator', () => {
       Person: [{ ID: 'p-1', Name: 'Alice', Status: 'Renewed' }],
     };
 
-    const result = accumulator.computeDelta(
+    const result = accumulator.ComputeDelta(
       domain,
       2,
       '2026-09-01',
@@ -99,7 +123,7 @@ describe('Accumulator', () => {
     };
 
     expect(() =>
-      accumulator.computeDelta(
+      accumulator.ComputeDelta(
         domain,
         2,
         '2026-09-01',

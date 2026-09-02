@@ -21,6 +21,7 @@ export function logit(p: number): number {
  *   mean(sigmoid(beta0 + scores[i])) === target
  *
  * Uses Newton-Raphson with bisection fallback.
+ * Strictly verifies convergence before returning.
  */
 export function calibrateIntercept(
   scores: readonly number[],
@@ -80,6 +81,18 @@ export function calibrateIntercept(
     }
 
     b0 = nextB0;
+  }
+
+  // Verify final convergence
+  let finalSum = 0;
+  for (let i = 0; i < n; i++) {
+    finalSum += sigmoid(b0 + (scores[i] ?? 0));
+  }
+  const finalDiff = Math.abs(finalSum / n - target);
+  if (finalDiff > tolerance * 50) {
+    throw new Error(
+      `calibrateIntercept: failed to achieve target convergence within ${maxIterations} iterations (target: ${target}, achieved: ${(finalSum / n).toFixed(6)}, diff: ${finalDiff.toFixed(6)})`
+    );
   }
 
   return b0;

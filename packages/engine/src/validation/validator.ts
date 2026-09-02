@@ -1,4 +1,6 @@
 import type { DomainConfig, FactorContract } from '@memberjunction/loom-contracts';
+import { compileFeature } from '../features/compiler.js';
+import { sigmoid } from '../math/calibration.js';
 
 export interface GateResult {
   name: string;
@@ -25,10 +27,7 @@ export interface ValidationReport {
  * Enforces Invariant 7: every check states the size of the population it visited.
  */
 export class Validator {
-  /**
-   * Runs all validation gates across the dataset.
-   */
-  public validate(
+  public Validate(
     domain: DomainConfig,
     data: Record<string, readonly Record<string, unknown>[]>,
     factors: readonly FactorContract[] = []
@@ -41,7 +40,7 @@ export class Validator {
     // 2. Primary key uniqueness & non-null fields
     this.checkSchemaInvariants(domain, data, gates);
 
-    // 3. Factor contract tolerance gates
+    // 3. Factor contract tolerance gates (empirical verification)
     this.checkFactorContracts(data, factors, gates);
 
     const passedCount = gates.filter((g) => g.passed).length;
@@ -57,6 +56,13 @@ export class Validator {
       gates,
     };
   }
+  public validate(
+    domain: DomainConfig,
+    data: Record<string, readonly Record<string, unknown>[]>,
+    factors: readonly FactorContract[] = []
+  ): ValidationReport {
+    return this.Validate(domain, data, factors);
+  }
 
   private checkReferentialClosure(
     domain: DomainConfig,
@@ -66,18 +72,37 @@ export class Validator {
     for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
       const records = data[entityName] ?? [];
       for (const fk of Object.values(entityCfg.foreignKeys)) {
+        if (!fk.targetField) {
+          throw new Error(
+            `Validator: FK '${fk.fieldName}' on entity '${entityName}' must explicitly declare 'targetField'`
+          );
+        }
+
         const targetRecords = data[fk.targetEntity] ?? [];
+        // Normalized case-insensitive set of valid target IDs
         const targetIds = new Set(
-          targetRecords.map((r) => String(r[fk.targetField] ?? r['ID'] ?? r['id']))
+          targetRecords.map((r) => {
+            const raw = r[fk.targetField];
+            return typeof raw === 'string' ? raw.toLowerCase() : String(raw ?? '');
+          })
         );
 
         let danglingCount = 0;
+        let examinedFkCount = 0;
+        const fieldCfg = entityCfg.fields[fk.fieldName];
+        const isNullable = fieldCfg?.nullable ?? true;
+
         for (const row of records) {
-          const fkVal = row[fk.fieldName];
-          if (fkVal !== undefined && fkVal !== null) {
-            if (!targetIds.has(String(fkVal))) {
+          const rawVal = row[fk.fieldName];
+          if (rawVal !== undefined && rawVal !== null && rawVal !== '') {
+            examinedFkCount++;
+            const normalized = typeof rawVal === 'string' ? rawVal.toLowerCase() : String(rawVal);
+            if (!targetIds.has(normalized)) {
               danglingCount++;
             }
+          } else if (!isNullable) {
+            // Null in non-nullable field
+            danglingCount++;
           }
         }
 
@@ -88,8 +113,8 @@ export class Validator {
           populationCount: records.length,
           message:
             danglingCount === 0
-              ? `All ${records.length} foreign key values resolve to valid target records`
-              : `Found ${danglingCount} dangling foreign key references across ${records.length} records`,
+              ? `All ${examinedFkCount} populated foreign key references resolve to valid target records`
+              : `Found ${danglingCount} dangling/invalid foreign key references across ${records.length} records`,
           expected: 0,
           actual: danglingCount,
         });
@@ -108,12 +133,13 @@ export class Validator {
       let duplicateIdCount = 0;
 
       for (const row of records) {
-        const id = String(row['ID'] ?? row['id']);
-        if (id) {
-          if (seenIds.has(id)) {
+        const idVal = row['ID'] ?? row['id'];
+        if (idVal !== undefined && idVal !== null) {
+          const normId = typeof idVal === 'string' ? idVal.toLowerCase() : String(idVal);
+          if (seenIds.has(normId)) {
             duplicateIdCount++;
           }
-          seenIds.add(id);
+          seenIds.add(normId);
         }
       }
 
@@ -139,14 +165,50 @@ export class Validator {
   ): void {
     for (const factor of factors) {
       const targetRecords = data[factor.effect] ?? [];
+      const n = targetRecords.length;
+
+      if (n === 0) {
+        gates.push({
+          name: `Factor Gate: ${factor.id} (${factor.effect})`,
+          category: 'factor',
+          passed: false,
+          populationCount: 0,
+          message: `Evaluation failed: target entity '${factor.effect}' has 0 records`,
+          expected: factor.target,
+          actual: 0,
+        });
+        continue;
+      }
+
+      // Compile arrows
+      const compiledArrows = Object.values(factor.arrows).map((arrow) => ({
+        beta: arrow.beta,
+        evaluator: compileFeature(arrow.feature),
+      }));
+
+      let sumScore = 0;
+      for (const record of targetRecords) {
+        let recordScore = 0;
+        for (const arrow of compiledArrows) {
+          recordScore += arrow.beta * arrow.evaluator(record);
+        }
+        sumScore += sigmoid(recordScore);
+      }
+
+      const empiricalMean = sumScore / n;
+      const diff = Math.abs(empiricalMean - factor.target);
+      const passed = diff <= factor.tolerance;
+
       gates.push({
         name: `Factor Gate: ${factor.id} (${factor.effect})`,
         category: 'factor',
-        passed: true,
-        populationCount: targetRecords.length,
-        message: `Evaluated across ${targetRecords.length} records. Adheres to target ${factor.target} within +/- ${factor.tolerance}`,
+        passed,
+        populationCount: n,
+        message: passed
+          ? `Adheres to target ${factor.target} (observed: ${empiricalMean.toFixed(4)}, diff: ${diff.toFixed(4)} <= ${factor.tolerance})`
+          : `Tolerance breach: target ${factor.target} +/- ${factor.tolerance} (observed: ${empiricalMean.toFixed(4)}, diff: ${diff.toFixed(4)})`,
         expected: factor.target,
-        actual: factor.target,
+        actual: Number(empiricalMean.toFixed(4)),
       });
     }
   }

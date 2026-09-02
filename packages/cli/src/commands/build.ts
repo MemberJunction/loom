@@ -101,9 +101,10 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
   console.log(`   ✓ Emitted ${writtenMetadata.length} metadata files to ${outputDir}`);
 
   // Emit baseline Skyway migration
+  const migrationVersion = `0000_${releaseDate.replace(/-/g, '')}`;
   const migrationPath = await emitSkywayMigration({
     outputDir: migrationsDir,
-    version: `${Date.now()}`,
+    version: migrationVersion,
     description: `Baseline_${loaded.domain.name}`,
     domain: loaded.domain,
     data: allRecords,

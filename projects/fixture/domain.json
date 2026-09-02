@@ -13,7 +13,7 @@
     "Organization": {
       "name": "Organization",
       "targetTable": "Organization",
-      "schema": "__mj_BizAppsCommon",
+      "schema": "fixture",
       "pack": "common",
       "businessKey": ["ID"],
       "fields": {
@@ -26,7 +26,7 @@
     "Person": {
       "name": "Person",
       "targetTable": "Person",
-      "schema": "__mj_BizAppsCommon",
+      "schema": "fixture",
       "pack": "common",
       "businessKey": ["ID"],
       "fields": {

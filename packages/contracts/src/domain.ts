@@ -77,12 +77,11 @@ export function createDomainConfigFromMJEntities(
   for (const entity of entities) {
     const fields: Record<string, FieldConfig> = {};
     const foreignKeys: Record<string, ForeignKeyConfig> = {};
-    const pkFields: string[] = [];
+    const candidateBusinessKeys: string[] = [];
 
     for (const field of entity.Fields ?? []) {
       const fieldType = mapMJTypeToFieldType(field.Type);
       const isPk = field.IsPrimaryKey ?? false;
-      if (isPk) pkFields.push(field.Name);
 
       fields[field.Name] = {
         name: field.Name,
@@ -94,8 +93,15 @@ export function createDomainConfigFromMJEntities(
         valueListType: field.ValueListType ?? undefined,
       };
 
+      // Identify non-PK business key candidates (e.g. Code, Name, Email, ExternalID)
+      if (!isPk && (field.Name.endsWith('Code') || field.Name.endsWith('Number') || field.Name === 'Name' || field.Name.endsWith('Key'))) {
+        candidateBusinessKeys.push(field.Name);
+      }
+
       if (field.RelatedEntity && field.RelatedEntityFieldName) {
-        foreignKeys[`FK_${entity.Name}_${field.RelatedEntity}`] = {
+        // Disambiguate foreign key key by fieldName so multiple FKs to same entity don't collide
+        const fkKey = `FK_${entity.Name}_${field.Name}_${field.RelatedEntity}`;
+        foreignKeys[fkKey] = {
           fieldName: field.Name,
           targetEntity: field.RelatedEntity,
           targetField: field.RelatedEntityFieldName,
@@ -104,12 +110,17 @@ export function createDomainConfigFromMJEntities(
       }
     }
 
+    // Never default businessKey to ['ID'], as that causes circular dependency during deterministic minting
+    const businessKey = candidateBusinessKeys.length > 0
+      ? [candidateBusinessKeys[0]!]
+      : ['NaturalKey'];
+
     entityConfigs[entity.Name] = {
       name: entity.Name,
       targetTable: entity.BaseTable ?? entity.Name,
       schema: entity.SchemaName ?? 'dbo',
       pack: defaultPack,
-      businessKey: pkFields.length > 0 ? pkFields : ['ID'],
+      businessKey,
       fields,
       foreignKeys,
       isImmutable: false,
