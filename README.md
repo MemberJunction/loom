@@ -152,16 +152,14 @@ Loom includes an autonomous **Agent Skill** designed to run recurring weekly sim
 
 ---
 
-## 🤝 Part of the MemberJunction Toolchain
+## 🤝 Part of the MemberJunction Ecosystem
 
 | Tool | Focus | Role in Ecosystem |
 |---|---|---|
 | **`Loom`** | Data & World Simulation | Weaves causal, deterministic enterprise data and living operational history |
-| **`Skyway`** | Database Migrations | Dual-dialect migration engine managing schema DDL and versioning |
-| **`Forge`** | Application Generation | Generates MemberJunction Open Apps, metadata, and scaffolding |
-| **`Sonar`** | Data Health & Quality | Scans entities for anomalies, drift, and data consistency |
-| **`Caliber`** | Talent & Recruiting | Talent pipeline management and candidate evaluation |
-| **`Skip`** | AI Co-Pilot | Autonomous reasoning agent and conversational business partner |
+| **`Skyway`** | Database Migrations | TypeScript-native, multi-dialect migration engine (SQL Server & PostgreSQL) managing schema DDL, versioning, and transactional execution |
+| **`Forge`** | Database Administration IDE | AI-native SQL Server & database administration client for macOS and Windows — query, explore, visualize, and manage data |
+| **`Sonar`** | Engagement Scoring & Data Quality | Declarative engagement scoring, health monitoring, and anomaly detection across entities with explainable factor rubrics |
 
 ---
 
