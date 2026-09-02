@@ -5,7 +5,7 @@
 > *Loom weaves together narrative threads, causal factor dials, and relational records into an unbroken, living operational fabric.*
 
 [![MemberJunction Ecosystem](https://img.shields.io/badge/MemberJunction-Ecosystem-blue.svg)](https://github.com/MemberJunction/MJ)
-[![License](https://img.shields.io/badge/License-ISC-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-BUSL--1.1-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/Status-Active%20Development-amber.svg)]()
 
 ---
@@ -167,4 +167,4 @@ Loom includes an autonomous **Agent Skill** designed to run recurring weekly sim
 
 ## 📄 License
 
-Loom is open source software licensed under the [ISC License](LICENSE).
+Loom is source-available software licensed under the [Business Source License 1.1 (BUSL-1.1)](LICENSE).
