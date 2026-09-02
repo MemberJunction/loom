@@ -28,6 +28,9 @@ jobs:
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install Playwright Chromium
+        run: pnpm --filter @memberjunction/loom-agent-skill exec playwright install --with-deps chromium
+
       - name: Monorepo Build
         run: pnpm run build
 
