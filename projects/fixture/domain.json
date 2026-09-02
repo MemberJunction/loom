@@ -33,6 +33,7 @@
         "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
         "Name": { "name": "Name", "type": "string" },
         "CompanyID": { "name": "CompanyID", "type": "uuid", "nullable": true },
+        "Status": { "name": "Status", "type": "string" },
         "CreatedAt": { "name": "CreatedAt", "type": "date" }
       },
       "foreignKeys": {

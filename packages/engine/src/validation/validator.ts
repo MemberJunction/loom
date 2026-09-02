@@ -1,6 +1,5 @@
 import type { DomainConfig, FactorContract } from '@memberjunction/loom-contracts';
 import { compileFeature, type RelationalContext } from '../features/compiler.js';
-import { calibrateIntercept, sigmoid } from '../math/calibration.js';
 
 export interface GateResult {
   name: string;
@@ -74,7 +73,7 @@ export class Validator {
     // 2. Primary key uniqueness & non-null fields
     this.checkSchemaInvariants(domain, data, gates);
 
-    // 3. Factor contract tolerance gates (empirical verification)
+    // 3. Factor contract tolerance gates (pure empirical verification)
     this.checkFactorContracts(data, factors, relationalCtx, gates);
 
     const passedCount = gates.filter((g) => g.passed).length;
@@ -154,7 +153,9 @@ export class Validator {
   ): void {
     for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
       const records = data[entityName] ?? [];
-      const pkField = entityCfg.businessKey[0] ?? 'ID';
+      // Primary key field from entity field declarations (defaulting to 'ID')
+      const pkField = Object.values(entityCfg.fields).find((f) => f.isPrimaryKey)?.name ?? 'ID';
+
       const seenIds = new Set<string>();
       let duplicateIdCount = 0;
       let missingIdCount = 0;
@@ -218,41 +219,26 @@ export class Validator {
         continue;
       }
 
+      if (!factor.outcome) {
+        gates.push({
+          name: `Factor Gate: ${factor.id} (${factor.effect})`,
+          category: 'factor',
+          passed: false,
+          populationCount: n,
+          message: `Factor contract '${factor.id}' has no declared outcome feature; cannot evaluate against data`,
+          expected: factor.target,
+          actual: NaN,
+        });
+        continue;
+      }
+
       try {
-        let empiricalMean: number;
-
-        if (factor.outcome) {
-          // 1. If explicit outcome feature is declared, compute empirical share of outcome in data
-          const outcomeEval = compileFeature(factor.outcome);
-          let outcomeSum = 0;
-          for (const r of targetRecords) {
-            outcomeSum += outcomeEval(r, ctx);
-          }
-          empiricalMean = outcomeSum / n;
-        } else {
-          // 2. Otherwise evaluate explanatory arrows with calibrated intercept
-          const compiledArrows = Object.values(factor.arrows).map((arrow) => ({
-            beta: arrow.beta,
-            evaluator: compileFeature(arrow.feature),
-          }));
-
-          const rawScores = targetRecords.map((r) => {
-            let score = 0;
-            for (const arrow of compiledArrows) {
-              score += arrow.beta * arrow.evaluator(r, ctx);
-            }
-            return score;
-          });
-
-          // Calibrate intercept to evaluate if model distribution reproduces target
-          const b0 = calibrateIntercept(rawScores, factor.target);
-          let sumSigmoid = 0;
-          for (const s of rawScores) {
-            sumSigmoid += sigmoid(b0 + s);
-          }
-          empiricalMean = sumSigmoid / n;
+        const outcomeEval = compileFeature(factor.outcome);
+        let outcomeSum = 0;
+        for (const r of targetRecords) {
+          outcomeSum += outcomeEval(r, ctx);
         }
-
+        const empiricalMean = outcomeSum / n;
         const diff = Math.abs(empiricalMean - factor.target);
         const passed = diff <= factor.tolerance;
 

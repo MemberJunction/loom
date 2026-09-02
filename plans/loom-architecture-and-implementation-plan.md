@@ -227,29 +227,29 @@ sequenceDiagram
 ## 6. Implementation Roadmap & Sequencing
 
 ### Phase 1: Monorepo & Contracts Foundation
-- [ ] Initialize monorepo workspace configuration (`pnpm-workspace.yaml`, `package.json`, `turbo.json`, `tsconfig.json`).
-- [ ] Implement `@memberjunction/loom-contracts` with complete Zod schemas for domain configurations, factors, and rulesets.
-- [ ] Implement `projects/fixture` as the baseline CI project.
-- [ ] Setup GitHub Actions workflow running monorepo build, lint, and typecheck.
+- [x] Initialize monorepo workspace configuration (`pnpm-workspace.yaml`, `package.json`, `turbo.json`, `tsconfig.json`).
+- [x] Implement `@memberjunction/loom-contracts` with complete Zod schemas for domain configurations, factors, and rulesets.
+- [x] Implement `projects/fixture` as the baseline CI project.
+- [x] Setup GitHub Actions workflow running monorepo build, lint, and typecheck.
 
 ### Phase 2: Core Engine Rebuild (`@memberjunction/loom-engine`)
-- [ ] Implement `CausalGraphResolver` (topological dependency sorter).
-- [ ] Implement `FactorRunner` (latent dial generation and factor contract evaluation).
-- [ ] Implement `IdentityService` (deterministic `uuidv5` namespace registration).
-- [ ] Implement `BidirectionalValidator` (referential closure and factor tolerance evaluation).
-- [ ] Implement multi-target emitters (`metadata/` JSON tree and Skyway SQL).
+- [x] Implement `CausalGraphResolver` (topological dependency sorter).
+- [x] Implement `FactorEngine` (latent dial generation via Cholesky decomposition and factor contract evaluation).
+- [x] Implement `IdentityService` (deterministic `uuidv5` namespace registration).
+- [x] Implement `Validator` (referential closure and empirical factor tolerance evaluation).
+- [x] Implement multi-target emitters (`metadata/` JSON tree and Skyway SQL).
 
 ### Phase 3: The `loom` CLI (`@memberjunction/loom-cli`)
-- [ ] Implement `loom build` (full baseline generation).
-- [ ] Implement `loom validate` (comprehensive gate execution).
+- [x] Implement `loom build` (full baseline generation).
+- [x] Implement `loom validate` (comprehensive gate execution with Invariant 7).
 - [ ] Implement `loom inspect` (interactive graph and factor inspection).
-- [ ] Wire CLI into monorepo and verify end-to-end execution against `projects/fixture`.
+- [x] Wire CLI into monorepo and verify end-to-end execution against `projects/fixture`.
 
 ### Phase 4: Accumulation Engine & Delta Resolver
-- [ ] Implement stateful prior-state reader and continuity boundary tracker.
-- [ ] Implement `loom accumulate` CLI command.
-- [ ] Implement delta emitter producing versioned Skyway `spCreate` migrations.
-- [ ] Verify multi-cycle accumulation on `projects/fixture`.
+- [x] Implement stateful prior-state reader and continuity boundary tracker (`Accumulator`).
+- [x] Implement `loom accumulate` CLI command.
+- [x] Implement delta emitter producing versioned Skyway `spCreate` migrations.
+- [x] Verify multi-cycle accumulation on `projects/fixture`.
 
 ### Phase 5: More Cheese Migration to Loom
 - [ ] Define More Cheese domain manifest and factor ruleset in Loom.

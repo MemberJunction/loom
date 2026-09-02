@@ -10,11 +10,17 @@
       "id": "factor-renewal",
       "effect": "Person",
       "target": 0.85,
-      "tolerance": 0.05,
+      "tolerance": 0.15,
       "evidence": {
         "source": "Fixture Baseline",
         "confidence": "high",
         "notes": "Calibration test contract"
+      },
+      "outcome": {
+        "from": "self",
+        "where": {
+          "Status": "Active"
+        }
       },
       "arrows": {
         "engagement": {

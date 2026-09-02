@@ -14,7 +14,7 @@ export interface SkywayMigrationOptions {
 
 /**
  * Emits additive Skyway migrations with dual-dialect support (SQL Server & PostgreSQL).
- * Validates all emitted columns against domain entity field declarations.
+ * Validates all emitted columns strictly against domain entity field declarations.
  * Properly escapes JSON objects and strings, avoiding [object Object] leaks.
  */
 export async function emitSkywayMigration(options: SkywayMigrationOptions): Promise<string> {
@@ -48,11 +48,9 @@ export async function emitSkywayMigration(options: SkywayMigrationOptions): Prom
     const tableName = entityCfg.targetTable ?? entityName;
     const declaredFields = new Set(Object.keys(entityCfg.fields));
 
-    // Allow primary key and standard audit fields if present
+    // Allow primary key field
     declaredFields.add('ID');
     declaredFields.add('id');
-    declaredFields.add('CreatedAt');
-    declaredFields.add('UpdatedAt');
 
     const fullTableName = isPostgres
       ? `"${schemaName}"."${tableName}"`
@@ -63,7 +61,7 @@ export async function emitSkywayMigration(options: SkywayMigrationOptions): Prom
     for (const record of records) {
       const cols = Object.keys(record);
 
-      // Validate that all columns exist in domain configuration
+      // Strictly validate that all columns exist in domain configuration
       for (const col of cols) {
         if (!declaredFields.has(col)) {
           throw new Error(

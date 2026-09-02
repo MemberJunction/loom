@@ -17,10 +17,6 @@ describe('Loom E2E Fixture Pipeline', () => {
 
   afterAll(async () => {
     await fs.rm(tempOutputDir, { recursive: true, force: true });
-    await fs.rm(path.resolve(fixturePath, 'migrations'), {
-      recursive: true,
-      force: true,
-    });
   });
 
   it('builds full baseline, validates gates, accumulates delta, and re-validates', async () => {

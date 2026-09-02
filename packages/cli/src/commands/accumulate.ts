@@ -88,6 +88,11 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     }
   }
 
+  // Check seed continuity
+  if (priorCheckpoint && options.seed && parseInt(options.seed, 10) !== priorCheckpoint.seed) {
+    console.warn(`   ⚠️ Warning: seed ${options.seed} differs from checkpoint seed ${priorCheckpoint.seed}; maintaining checkpoint continuity`);
+  }
+
   // 4. Generate simulated delta additions strictly conforming to domain fields
   const identityService = new IdentityService();
   identityService.RegisterNamespace(loaded.domain.name, loaded.domain.namespace);
@@ -96,17 +101,22 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
 
   for (const [entityName, existingList] of Object.entries(priorRecords)) {
     const list = [...existingList];
+    const entityCfg = loaded.domain.entities[entityName];
     const newItemsCount = 2;
     const startIdx = list.length + 1;
 
     for (let i = startIdx; i < startIdx + newItemsCount; i++) {
       const bizKey = `${entityName}-${i}`;
       const id = identityService.MintId(loaded.domain.name, entityName, bizKey);
-      list.push({
+      const row: Record<string, unknown> = {
         ID: id,
         Name: `${entityName} ${i} (Cycle ${cycleIndex})`,
         CreatedAt: asOfDate,
-      });
+      };
+      if (entityCfg?.fields['Status']) {
+        row['Status'] = 'Active';
+      }
+      list.push(row);
     }
     currentRecords[entityName] = list;
   }

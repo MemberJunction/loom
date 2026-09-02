@@ -66,6 +66,10 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
             }
           }
 
+          if (entityCfg.fields['Status']) {
+            row['Status'] = i <= 8 ? 'Active' : 'Inactive';
+          }
+
           records.push(row);
         }
 

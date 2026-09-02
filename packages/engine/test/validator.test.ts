@@ -63,7 +63,7 @@ describe('Validator', () => {
   it('fails foreign key closure when a reference is dangling', () => {
     const data = {
       Organization: [{ ID: 'org-1' }],
-      Person: [{ ID: 'p-1', CompanyID: 'org-nonexistent' }],
+      Person: [{ ID: 'p-1', CompanyID: 'org-nonexistent', Status: 'Active' }],
     };
 
     const report = validator.Validate(domain, data, []);
@@ -111,42 +111,37 @@ describe('Validator', () => {
     };
 
     const report = validator.Validate(domain, data, [factor]);
-    const factorGate = report.gates.find((g) => g.id === factor.id || g.name.includes(factor.id));
+    const factorGate = report.gates.find((g) => g.name.includes(factor.id));
     expect(factorGate?.passed).toBe(true);
     expect(factorGate?.actual).toBe(0.75);
     expect(factorGate?.populationCount).toBe(4);
   });
 
-  it('evaluates relational arrows across entities without throwing', () => {
+  it('fails factor gate when outcome fails tolerance', () => {
     const factor: FactorContract = {
-      id: 'f-relational',
+      id: 'f-renewal-fail',
       effect: 'Person',
-      target: 0.5,
-      tolerance: 0.1,
-      evidence: { source: 'test', confidence: 'high' },
-      arrows: {
-        orgEmployees: {
-          name: 'orgEmployees',
-          beta: 0.01,
-          feature: {
-            from: 'Organization',
-            path: ['CompanyID:Organization', 'Employees'],
-          },
-        },
+      target: 0.90, // Target 90%
+      tolerance: 0.05,
+      evidence: { source: 'historical', confidence: 'high' },
+      outcome: {
+        from: 'self',
+        where: { Status: 'Renewed' },
       },
+      arrows: {},
     };
 
     const data = {
-      Organization: [{ ID: 'org-1', Employees: 50 }],
+      Organization: [],
       Person: [
-        { ID: 'p-1', CompanyID: 'org-1' },
-        { ID: 'p-2', CompanyID: 'org-1' },
-      ],
+        { ID: 'p-1', Status: 'Renewed' },
+        { ID: 'p-2', Status: 'Lapsed' },
+      ], // 1/2 = 50% vs target 90%
     };
 
     const report = validator.Validate(domain, data, [factor]);
     const factorGate = report.gates.find((g) => g.name.includes(factor.id));
-    expect(factorGate?.passed).toBe(true);
-    expect(factorGate?.populationCount).toBe(2);
+    expect(factorGate?.passed).toBe(false);
+    expect(factorGate?.actual).toBe(0.5);
   });
 });
