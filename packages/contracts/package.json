@@ -1,0 +1,23 @@
+{
+  "name": "@memberjunction/loom-contracts",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Strict Zod schemas and TypeScript contracts for Loom simulation configurations, factors, and accumulation state",
+  "license": "BUSL-1.1",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@memberjunction/core": "^5.51.2",
+    "@memberjunction/global": "^5.51.2",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.3"
+  }
+}

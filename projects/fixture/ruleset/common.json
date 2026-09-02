@@ -1,0 +1,32 @@
+{
+  "name": "common",
+  "domain": "fixture",
+  "catalog": {},
+  "params": {
+    "targetRenewalRate": 0.85
+  },
+  "effects": {
+    "factor-renewal": {
+      "id": "factor-renewal",
+      "effect": "Person",
+      "target": 0.85,
+      "tolerance": 0.05,
+      "evidence": {
+        "source": "Fixture Baseline",
+        "confidence": "high",
+        "notes": "Calibration test contract"
+      },
+      "arrows": {
+        "engagement": {
+          "name": "engagement",
+          "beta": 1.5,
+          "feature": {
+            "from": "self",
+            "field": "Name"
+          }
+        }
+      }
+    }
+  },
+  "mixes": {}
+}
