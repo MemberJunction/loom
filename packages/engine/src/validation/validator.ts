@@ -1,6 +1,6 @@
 import type { DomainConfig, FactorContract } from '@memberjunction/loom-contracts';
-import { compileFeature } from '../features/compiler.js';
-import { sigmoid } from '../math/calibration.js';
+import { compileFeature, type RelationalContext } from '../features/compiler.js';
+import { calibrateIntercept, sigmoid } from '../math/calibration.js';
 
 export interface GateResult {
   name: string;
@@ -34,6 +34,40 @@ export class Validator {
   ): ValidationReport {
     const gates: GateResult[] = [];
 
+    // Construct relational context from available in-memory data
+    const relationalCtx: RelationalContext = {
+      getEntity: (entityName, id) => {
+        const records = data[entityName];
+        if (!records) return undefined;
+        const norm = id.toLowerCase();
+        return records.find((r) => {
+          const rId = r['ID'] ?? r['id'];
+          return rId && String(rId).toLowerCase() === norm;
+        });
+      },
+      getChildren: (parentEntity, parentId, childEntity, foreignKeyField) => {
+        const records = data[childEntity];
+        if (!records) return [];
+        const parentNorm = parentId.toLowerCase();
+        return records.filter((r) => {
+          if (foreignKeyField) {
+            const val = r[foreignKeyField];
+            return val && String(val).toLowerCase() === parentNorm;
+          }
+          const entityCfg = domain.entities[childEntity];
+          if (entityCfg) {
+            for (const fk of Object.values(entityCfg.foreignKeys)) {
+              if (fk.targetEntity === parentEntity || !parentEntity) {
+                const val = r[fk.fieldName];
+                if (val && String(val).toLowerCase() === parentNorm) return true;
+              }
+            }
+          }
+          return false;
+        });
+      },
+    };
+
     // 1. Referential integrity gates
     this.checkReferentialClosure(domain, data, gates);
 
@@ -41,7 +75,7 @@ export class Validator {
     this.checkSchemaInvariants(domain, data, gates);
 
     // 3. Factor contract tolerance gates (empirical verification)
-    this.checkFactorContracts(data, factors, gates);
+    this.checkFactorContracts(data, factors, relationalCtx, gates);
 
     const passedCount = gates.filter((g) => g.passed).length;
     const failedCount = gates.length - passedCount;
@@ -55,13 +89,6 @@ export class Validator {
       totalPopulationExamined,
       gates,
     };
-  }
-  public validate(
-    domain: DomainConfig,
-    data: Record<string, readonly Record<string, unknown>[]>,
-    factors: readonly FactorContract[] = []
-  ): ValidationReport {
-    return this.Validate(domain, data, factors);
   }
 
   private checkReferentialClosure(
@@ -79,7 +106,6 @@ export class Validator {
         }
 
         const targetRecords = data[fk.targetEntity] ?? [];
-        // Normalized case-insensitive set of valid target IDs
         const targetIds = new Set(
           targetRecords.map((r) => {
             const raw = r[fk.targetField];
@@ -101,7 +127,6 @@ export class Validator {
               danglingCount++;
             }
           } else if (!isNullable) {
-            // Null in non-nullable field
             danglingCount++;
           }
         }
@@ -127,33 +152,45 @@ export class Validator {
     data: Record<string, readonly Record<string, unknown>[]>,
     gates: GateResult[]
   ): void {
-    for (const entityName of Object.keys(domain.entities)) {
+    for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
       const records = data[entityName] ?? [];
+      const pkField = entityCfg.businessKey[0] ?? 'ID';
       const seenIds = new Set<string>();
       let duplicateIdCount = 0;
+      let missingIdCount = 0;
 
       for (const row of records) {
-        const idVal = row['ID'] ?? row['id'];
-        if (idVal !== undefined && idVal !== null) {
-          const normId = typeof idVal === 'string' ? idVal.toLowerCase() : String(idVal);
-          if (seenIds.has(normId)) {
-            duplicateIdCount++;
-          }
-          seenIds.add(normId);
+        const idVal = row[pkField] ?? row['ID'] ?? row['id'];
+        if (idVal === undefined || idVal === null || idVal === '') {
+          missingIdCount++;
+          continue;
         }
+
+        const normId = typeof idVal === 'string' ? idVal.toLowerCase() : String(idVal);
+        if (seenIds.has(normId)) {
+          duplicateIdCount++;
+        }
+        seenIds.add(normId);
+      }
+
+      const passed = duplicateIdCount === 0 && missingIdCount === 0;
+      let message: string;
+      if (passed) {
+        message = `All ${records.length} primary keys are present and strictly unique`;
+      } else if (missingIdCount > 0) {
+        message = `Found ${missingIdCount} record(s) missing primary key '${pkField}' (examined ${records.length})`;
+      } else {
+        message = `Found ${duplicateIdCount} duplicate primary keys in ${records.length} records`;
       }
 
       gates.push({
-        name: `PK Uniqueness: ${entityName}.ID`,
+        name: `PK Uniqueness: ${entityName}.${pkField}`,
         category: 'schema',
-        passed: duplicateIdCount === 0,
+        passed,
         populationCount: records.length,
-        message:
-          duplicateIdCount === 0
-            ? `All ${records.length} primary keys are strictly unique`
-            : `Found ${duplicateIdCount} duplicate primary keys in ${records.length} records`,
+        message,
         expected: 0,
-        actual: duplicateIdCount,
+        actual: duplicateIdCount + missingIdCount,
       });
     }
   }
@@ -161,6 +198,7 @@ export class Validator {
   private checkFactorContracts(
     data: Record<string, readonly Record<string, unknown>[]>,
     factors: readonly FactorContract[],
+    ctx: RelationalContext,
     gates: GateResult[]
   ): void {
     for (const factor of factors) {
@@ -180,36 +218,66 @@ export class Validator {
         continue;
       }
 
-      // Compile arrows
-      const compiledArrows = Object.values(factor.arrows).map((arrow) => ({
-        beta: arrow.beta,
-        evaluator: compileFeature(arrow.feature),
-      }));
+      try {
+        let empiricalMean: number;
 
-      let sumScore = 0;
-      for (const record of targetRecords) {
-        let recordScore = 0;
-        for (const arrow of compiledArrows) {
-          recordScore += arrow.beta * arrow.evaluator(record);
+        if (factor.outcome) {
+          // 1. If explicit outcome feature is declared, compute empirical share of outcome in data
+          const outcomeEval = compileFeature(factor.outcome);
+          let outcomeSum = 0;
+          for (const r of targetRecords) {
+            outcomeSum += outcomeEval(r, ctx);
+          }
+          empiricalMean = outcomeSum / n;
+        } else {
+          // 2. Otherwise evaluate explanatory arrows with calibrated intercept
+          const compiledArrows = Object.values(factor.arrows).map((arrow) => ({
+            beta: arrow.beta,
+            evaluator: compileFeature(arrow.feature),
+          }));
+
+          const rawScores = targetRecords.map((r) => {
+            let score = 0;
+            for (const arrow of compiledArrows) {
+              score += arrow.beta * arrow.evaluator(r, ctx);
+            }
+            return score;
+          });
+
+          // Calibrate intercept to evaluate if model distribution reproduces target
+          const b0 = calibrateIntercept(rawScores, factor.target);
+          let sumSigmoid = 0;
+          for (const s of rawScores) {
+            sumSigmoid += sigmoid(b0 + s);
+          }
+          empiricalMean = sumSigmoid / n;
         }
-        sumScore += sigmoid(recordScore);
+
+        const diff = Math.abs(empiricalMean - factor.target);
+        const passed = diff <= factor.tolerance;
+
+        gates.push({
+          name: `Factor Gate: ${factor.id} (${factor.effect})`,
+          category: 'factor',
+          passed,
+          populationCount: n,
+          message: passed
+            ? `Adheres to target ${factor.target} (observed: ${empiricalMean.toFixed(4)}, diff: ${diff.toFixed(4)} <= ${factor.tolerance})`
+            : `Tolerance breach: target ${factor.target} +/- ${factor.tolerance} (observed: ${empiricalMean.toFixed(4)}, diff: ${diff.toFixed(4)})`,
+          expected: factor.target,
+          actual: Number(empiricalMean.toFixed(4)),
+        });
+      } catch (err) {
+        gates.push({
+          name: `Factor Gate: ${factor.id} (${factor.effect})`,
+          category: 'factor',
+          passed: false,
+          populationCount: n,
+          message: `Factor evaluation error: ${err instanceof Error ? err.message : String(err)}`,
+          expected: factor.target,
+          actual: NaN,
+        });
       }
-
-      const empiricalMean = sumScore / n;
-      const diff = Math.abs(empiricalMean - factor.target);
-      const passed = diff <= factor.tolerance;
-
-      gates.push({
-        name: `Factor Gate: ${factor.id} (${factor.effect})`,
-        category: 'factor',
-        passed,
-        populationCount: n,
-        message: passed
-          ? `Adheres to target ${factor.target} (observed: ${empiricalMean.toFixed(4)}, diff: ${diff.toFixed(4)} <= ${factor.tolerance})`
-          : `Tolerance breach: target ${factor.target} +/- ${factor.tolerance} (observed: ${empiricalMean.toFixed(4)}, diff: ${diff.toFixed(4)})`,
-        expected: factor.target,
-        actual: Number(empiricalMean.toFixed(4)),
-      });
     }
   }
 }

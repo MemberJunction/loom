@@ -14,6 +14,7 @@ export interface SkywayMigrationOptions {
 
 /**
  * Emits additive Skyway migrations with dual-dialect support (SQL Server & PostgreSQL).
+ * Validates all emitted columns against domain entity field declarations.
  * Properly escapes JSON objects and strings, avoiding [object Object] leaks.
  */
 export async function emitSkywayMigration(options: SkywayMigrationOptions): Promise<string> {
@@ -39,8 +40,19 @@ export async function emitSkywayMigration(options: SkywayMigrationOptions): Prom
   for (const [entityName, records] of Object.entries(options.data)) {
     if (records.length === 0) continue;
     const entityCfg = options.domain.entities[entityName];
-    const schemaName = entityCfg?.schema ?? 'dbo';
-    const tableName = entityCfg?.targetTable ?? entityName;
+    if (!entityCfg) {
+      throw new Error(`emitSkywayMigration: entity '${entityName}' is not defined in domain configuration`);
+    }
+
+    const schemaName = entityCfg.schema ?? 'dbo';
+    const tableName = entityCfg.targetTable ?? entityName;
+    const declaredFields = new Set(Object.keys(entityCfg.fields));
+
+    // Allow primary key and standard audit fields if present
+    declaredFields.add('ID');
+    declaredFields.add('id');
+    declaredFields.add('CreatedAt');
+    declaredFields.add('UpdatedAt');
 
     const fullTableName = isPostgres
       ? `"${schemaName}"."${tableName}"`
@@ -50,6 +62,16 @@ export async function emitSkywayMigration(options: SkywayMigrationOptions): Prom
 
     for (const record of records) {
       const cols = Object.keys(record);
+
+      // Validate that all columns exist in domain configuration
+      for (const col of cols) {
+        if (!declaredFields.has(col)) {
+          throw new Error(
+            `emitSkywayMigration: undeclared column '${col}' in entity '${entityName}'. Emitted columns must be declared in domain.json.`
+          );
+        }
+      }
+
       const colList = isPostgres
         ? cols.map((c) => `"${c}"`).join(', ')
         : cols.map((c) => `[${c}]`).join(', ');
@@ -59,14 +81,16 @@ export async function emitSkywayMigration(options: SkywayMigrationOptions): Prom
         .join(', ');
 
       if (options.useSpCreate) {
-        // Procedure-based insertion: spCreate<EntityName>
-        const spName = isPostgres
-          ? `"${schemaName}"."spCreate${tableName}"`
-          : `[${schemaName}].[spCreate${tableName}]`;
-        const paramList = cols
-          .map((c) => `@${c} = ${formatSqlValue(record[c], isPostgres)}`)
-          .join(', ');
-        lines.push(`EXEC ${spName} ${paramList};`);
+        if (isPostgres) {
+          // PostgreSQL procedure call: CALL "schema"."spCreate"(...)
+          lines.push(`CALL "${schemaName}"."spCreate${tableName}"(${valList});`);
+        } else {
+          // SQL Server stored procedure call: EXEC [schema].[spCreate...] @col = val
+          const paramList = cols
+            .map((c) => `@${c} = ${formatSqlValue(record[c], isPostgres)}`)
+            .join(', ');
+          lines.push(`EXEC [${schemaName}].[spCreate${tableName}] ${paramList};`);
+        }
       } else {
         // Direct transactional SQL insert
         lines.push(`INSERT INTO ${fullTableName} (${colList}) VALUES (${valList});`);
@@ -88,7 +112,6 @@ function formatSqlValue(val: unknown, isPostgres: boolean): string {
   if (typeof val === 'boolean') return isPostgres ? (val ? 'TRUE' : 'FALSE') : val ? '1' : '0';
 
   if (typeof val === 'object') {
-    // Serialize nested objects/arrays as JSON, never [object Object]
     const jsonStr = JSON.stringify(val).replace(/'/g, "''");
     return `'${jsonStr}'`;
   }

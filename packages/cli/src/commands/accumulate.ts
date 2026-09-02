@@ -6,7 +6,6 @@ import {
   IdentityService,
   emitMetadata,
   emitSkywayMigration,
-  createRng,
 } from '@memberjunction/loom-engine';
 import {
   SimulationCheckpointSchema,
@@ -54,12 +53,11 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
   if (options.asOf) {
     asOfDate = options.asOf;
   } else if (priorCheckpoint?.continuity.asOfDate) {
-    // Advance prior date by weeks * 7 days
     const priorD = new Date(priorCheckpoint.continuity.asOfDate);
     priorD.setUTCDate(priorD.getUTCDate() + weeks * 7);
     asOfDate = priorD.toISOString().slice(0, 10);
   } else {
-    asOfDate = '2026-09-02'; // Stable deterministic baseline
+    asOfDate = '2026-09-02';
   }
 
   console.log(`🧵 Loom Accumulate: Advancing simulation for '${loaded.domain.name}'`);
@@ -90,32 +88,30 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     }
   }
 
-  // 4. Generate simulated delta additions using the specified seed
+  // 4. Generate simulated delta additions strictly conforming to domain fields
   const identityService = new IdentityService();
-  identityService.registerNamespace(loaded.domain.name, loaded.domain.namespace);
-  const rng = createRng(seed, `accumulate:cycle:${cycleIndex}`);
+  identityService.RegisterNamespace(loaded.domain.name, loaded.domain.namespace);
 
   const currentRecords: Record<string, Record<string, unknown>[]> = {};
 
   for (const [entityName, existingList] of Object.entries(priorRecords)) {
     const list = [...existingList];
-    const newItemsCount = 2; // Fixed delta per cycle for testing
+    const newItemsCount = 2;
     const startIdx = list.length + 1;
 
     for (let i = startIdx; i < startIdx + newItemsCount; i++) {
       const bizKey = `${entityName}-${i}`;
-      const id = identityService.mintId(loaded.domain.name, entityName, bizKey);
+      const id = identityService.MintId(loaded.domain.name, entityName, bizKey);
       list.push({
         ID: id,
         Name: `${entityName} ${i} (Cycle ${cycleIndex})`,
         CreatedAt: asOfDate,
-        RollValue: rng.int(10, 100),
       });
     }
     currentRecords[entityName] = list;
   }
 
-  // 5. Compute pure delta using Accumulator
+  // 5. Compute pure delta using Accumulator (enforces no deletions by default)
   const accumulator = new Accumulator();
   const diff = accumulator.ComputeDelta(
     loaded.domain,
@@ -137,8 +133,8 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     data: currentRecords,
   });
 
-  // 7. Emit additive Skyway migration for new delta records with deterministic version
-  const migrationVersion = `${String(cycleIndex).padStart(4, '0')}_${asOfDate.replace(/-/g, '')}`;
+  // 7. Emit additive Skyway migration with sortable timestamp version
+  const migrationVersion = `${asOfDate.replace(/-/g, '')}${String(cycleIndex).padStart(4, '0')}`;
   const migrationPath = await emitSkywayMigration({
     outputDir: migrationsDir,
     version: migrationVersion,

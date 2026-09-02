@@ -20,13 +20,17 @@ export interface RowTemplate {
   row: Record<string, FieldSpec>;
 }
 
+export type SequenceState = Record<string, number>;
+
 /**
- * Evaluates a single field specification against the scope and optional PRNG stream.
+ * Evaluates a single field specification against a local scope, optional PRNG stream,
+ * and sequence tracking state.
  */
 function evalField(
   fs: FieldSpec,
   scope: Record<string, unknown>,
-  rng?: RngStream
+  rng?: RngStream,
+  seqState?: SequenceState
 ): unknown {
   if (fs === null || typeof fs !== 'object') {
     return fs;
@@ -55,12 +59,11 @@ function evalField(
   }
 
   if ('seq' in fs) {
-    const key = `__seq_${fs.seq}`;
-    const current = typeof scope[key] === 'number'
-      ? (scope[key] as number) + 1
-      : (typeof scope[fs.seq] === 'number' ? (scope[fs.seq] as number) + 1 : 1);
-    scope[key] = current;
-    scope[fs.seq] = current;
+    if (!seqState) {
+      throw new Error(`evalField: sequence counter '${fs.seq}' requires a SequenceState`);
+    }
+    const current = (seqState[fs.seq] ?? 0) + 1;
+    seqState[fs.seq] = current;
     return current;
   }
 
@@ -128,23 +131,28 @@ function resolveDotPath(scope: Record<string, unknown>, path: string): unknown {
 
 /**
  * Renders one entity record from a declarative RowTemplate.
+ * Never mutates the caller's scope object.
  */
 export function renderRow(
   template: RowTemplate,
   scope: Record<string, unknown>,
-  rng?: RngStream
+  rng?: RngStream,
+  seqState?: SequenceState
 ): Record<string, unknown> {
+  // Pure local scope for let-bindings — caller scope is never mutated
+  const localScope: Record<string, unknown> = { ...scope };
+
   // 1. Evaluate pre-bindings in `let`
   if (template.let) {
     for (const [key, spec] of Object.entries(template.let)) {
-      scope[key] = evalField(spec, scope, rng);
+      localScope[key] = evalField(spec, localScope, rng, seqState);
     }
   }
 
   // 2. Evaluate row fields
   const output: Record<string, unknown> = {};
   for (const [fieldName, spec] of Object.entries(template.row)) {
-    output[fieldName] = evalField(spec, scope, rng);
+    output[fieldName] = evalField(spec, localScope, rng, seqState);
   }
 
   return output;

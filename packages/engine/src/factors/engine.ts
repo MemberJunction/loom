@@ -16,9 +16,6 @@ export class FactorEngine {
   public RegisterDial(config: LatentDialConfig): void {
     this.dialConfigs.set(config.name, config);
   }
-  public registerDial(config: LatentDialConfig): void {
-    this.RegisterDial(config);
-  }
 
   /**
    * Initializes latent dials for an entity record using seeded PRNG.
@@ -42,7 +39,6 @@ export class FactorEngine {
       for (let j = 0; j < i; j++) {
         const nameJ = dialNames[j]!;
         const corr = cfgI.correlations[nameJ] ?? this.dialConfigs.get(nameJ)?.correlations[dialNames[i]!] ?? 0;
-        // Clamp to [-0.999, 0.999] for numerical stability
         const safeCorr = Math.max(-0.999, Math.min(0.999, corr));
         R[i]![j] = safeCorr;
         R[j]![i] = safeCorr;
@@ -88,9 +84,6 @@ export class FactorEngine {
 
     return { entityId, dials };
   }
-  public initializeProfile(rng: RngStream, entityId: string): LatentProfile {
-    return this.InitializeProfile(rng, entityId);
-  }
 
   /**
    * Advances an entity's latent dials across a simulation period via random walk.
@@ -114,13 +107,6 @@ export class FactorEngine {
       dials: updatedDials,
     };
   }
-  public advanceProfile(
-    rng: RngStream,
-    profile: LatentProfile,
-    elapsedYears = 1
-  ): LatentProfile {
-    return this.AdvanceProfile(rng, profile, elapsedYears);
-  }
 
   /**
    * Computes the linear logit score for an entity given a factor contract
@@ -136,11 +122,5 @@ export class FactorEngine {
       score += arrow.beta * val;
     }
     return score;
-  }
-  public computeScore(
-    contract: FactorContract,
-    featureValues: Record<string, number>
-  ): number {
-    return this.ComputeScore(contract, featureValues);
   }
 }

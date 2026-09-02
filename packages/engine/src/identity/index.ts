@@ -8,12 +8,12 @@ export class IdentityService {
   private namespaces = new Map<string, string>();
 
   /** Register a domain with its permanent UUID namespace */
-  public registerNamespace(domain: string, namespaceUuid: string): void {
+  public RegisterNamespace(domain: string, namespaceUuid: string): void {
     this.namespaces.set(domain, namespaceUuid);
   }
 
   /** Retrieve the registered namespace for a domain */
-  public getNamespace(domain: string): string {
+  public GetNamespace(domain: string): string {
     const ns = this.namespaces.get(domain);
     if (!ns) {
       throw new Error(`IdentityService: no UUID namespace registered for domain '${domain}'`);
@@ -25,15 +25,15 @@ export class IdentityService {
    * Mints a deterministic UUIDv5 for an entity record.
    * Format of name: "<EntityName>:<BusinessKey>"
    */
-  public mintId(domain: string, entity: string, businessKey: string | readonly string[]): string {
-    const ns = this.getNamespace(domain);
-    return IdentityService.deterministicId(ns, entity, businessKey);
+  public MintId(domain: string, entity: string, businessKey: string | readonly string[]): string {
+    const ns = this.GetNamespace(domain);
+    return IdentityService.DeterministicId(ns, entity, businessKey);
   }
 
   /**
    * Static deterministic ID generator for a given namespace UUID.
    */
-  public static deterministicId(
+  public static DeterministicId(
     namespaceUuid: string,
     entity: string,
     businessKey: string | readonly string[]

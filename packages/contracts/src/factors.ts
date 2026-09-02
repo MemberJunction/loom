@@ -33,6 +33,7 @@ export const FactorContractSchema = z.object({
   target: z.number(),
   tolerance: z.number().positive(),
   evidence: FactorEvidenceSchema,
+  outcome: FeatureQuerySchema.optional(), // Declared feature measuring the realized outcome
   arrows: z.record(z.string(), FactorArrowSchema).default({}),
   description: z.string().optional(),
 });
@@ -43,7 +44,7 @@ export const LatentDialConfigSchema = z.object({
   mean: z.number().default(0),
   stdDev: z.number().positive().default(1),
   annualWanderStdDev: z.number().default(0.15),
-  correlations: z.record(z.string(), z.number().min(-1).max(1)).default({}),
+  correlations: z.record(z.string(), z.number()).default({}),
   description: z.string().optional(),
 });
 export type LatentDialConfig = z.infer<typeof LatentDialConfigSchema>;

@@ -33,7 +33,7 @@ export async function runWeeklySimulationCycle(
 ): Promise<WeeklyCycleResult> {
   // Step 1: Accumulate deltas
   const accumulator = new Accumulator();
-  const diff = accumulator.computeDelta(
+  const diff = accumulator.ComputeDelta(
     options.domain,
     options.cycleIndex,
     options.asOfDate,
@@ -43,7 +43,7 @@ export async function runWeeklySimulationCycle(
 
   // Step 2: Validate deterministic gates
   const validator = new Validator();
-  const validation = validator.validate(
+  const validation = validator.Validate(
     options.domain,
     options.currentState,
     options.factors ?? []

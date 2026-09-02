@@ -22,7 +22,7 @@ export interface SimulationNode {
 export class CausalGraphResolver {
   private nodes = new Map<string, SimulationNode>();
 
-  public registerNode(node: SimulationNode): void {
+  public RegisterNode(node: SimulationNode): void {
     if (this.nodes.has(node.id)) {
       throw new Error(`CausalGraphResolver: node '${node.id}' is already registered`);
     }
@@ -34,7 +34,7 @@ export class CausalGraphResolver {
    * Ensures that for every node, all produced entities it consumes
    * are provided by an earlier node in the sequence.
    */
-  public resolveOrder(): SimulationNode[] {
+  public ResolveOrder(): SimulationNode[] {
     const nodeArray = Array.from(this.nodes.values());
     const entityProducers = new Map<string, string>(); // entityName -> nodeId
 
@@ -60,24 +60,28 @@ export class CausalGraphResolver {
     }
 
     for (const node of nodeArray) {
-      for (const consumed of node.consumes) {
-        const producerId = entityProducers.get(consumed);
-        if (!producerId) {
+      for (const consumedEntity of node.consumes) {
+        const producerNodeId = entityProducers.get(consumedEntity);
+        if (!producerNodeId) {
           throw new Error(
-            `CausalGraphResolver: node '${node.id}' consumes '${consumed}', but no node produces it`
+            `CausalGraphResolver: node '${node.id}' consumes entity '${consumedEntity}', but no registered node produces it`
           );
         }
-        if (producerId !== node.id) {
-          const dependents = adj.get(producerId)!;
-          if (!dependents.has(node.id)) {
-            dependents.add(node.id);
-            inDegree.set(node.id, (inDegree.get(node.id) ?? 0) + 1);
-          }
+        if (producerNodeId === node.id) {
+          throw new Error(
+            `CausalGraphResolver: node '${node.id}' cannot consume an entity it produces (self-dependency on '${consumedEntity}')`
+          );
+        }
+
+        const dependents = adj.get(producerNodeId)!;
+        if (!dependents.has(node.id)) {
+          dependents.add(node.id);
+          inDegree.set(node.id, inDegree.get(node.id)! + 1);
         }
       }
     }
 
-    // Kahn's algorithm
+    // Kahn's algorithm for topological sorting
     const queue: string[] = [];
     for (const [nodeId, deg] of inDegree.entries()) {
       if (deg === 0) {
@@ -86,24 +90,29 @@ export class CausalGraphResolver {
     }
 
     const order: SimulationNode[] = [];
+    const nodeMap = new Map(nodeArray.map((n) => [n.id, n]));
+
     while (queue.length > 0) {
       const currentId = queue.shift()!;
-      const node = this.nodes.get(currentId)!;
-      order.push(node);
+      order.push(nodeMap.get(currentId)!);
 
-      for (const dependentId of adj.get(currentId)!) {
-        const currentDeg = inDegree.get(dependentId)! - 1;
-        inDegree.set(dependentId, currentDeg);
-        if (currentDeg === 0) {
-          queue.push(dependentId);
+      const neighbors = adj.get(currentId) ?? new Set();
+      for (const neighborId of neighbors) {
+        const newDeg = inDegree.get(neighborId)! - 1;
+        inDegree.set(neighborId, newDeg);
+        if (newDeg === 0) {
+          queue.push(neighborId);
         }
       }
     }
 
     if (order.length !== nodeArray.length) {
-      const remaining = nodeArray.filter(n => (inDegree.get(n.id) ?? 0) > 0).map(n => n.id);
+      const remainingNodes = nodeArray
+        .filter((n) => !order.includes(n))
+        .map((n) => n.id)
+        .join(', ');
       throw new Error(
-        `CausalGraphResolver: cyclic dependency detected among nodes: [${remaining.join(', ')}]`
+        `CausalGraphResolver: cycle detected in simulation dependency graph. Unresolvable nodes: [${remainingNodes}]`
       );
     }
 

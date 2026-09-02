@@ -7,13 +7,17 @@ export interface AccumulationDiffResult {
   deletedRecordCounts: Record<string, number>;
 }
 
+export interface AccumulatorOptions {
+  allowDeletions?: boolean;
+}
+
 /**
  * Computes stateful deltas between a committed prior state and the current simulation state.
  * Enforces:
  * 1. Every row must have a valid non-empty primary key (ID).
- * 2. Existing prior IDs are never reassigned to another entity or mutated.
- * 3. Immutable entity rows cannot modify previously committed fields.
- * 4. Tracks status transitions and deletions explicitly.
+ * 2. Existing prior IDs are never reassigned to another entity or deleted (unless allowDeletions is set).
+ * 3. Immutable entity rows cannot modify previously committed fields (with deep object comparison).
+ * 4. Tracks status transitions and new records explicitly.
  */
 export class Accumulator {
   public ComputeDelta(
@@ -21,7 +25,8 @@ export class Accumulator {
     cycleIndex: number,
     asOfDate: string,
     priorState: Record<string, readonly Record<string, unknown>[]>,
-    currentState: Record<string, readonly Record<string, unknown>[]>
+    currentState: Record<string, readonly Record<string, unknown>[]>,
+    options: AccumulatorOptions = {}
   ): AccumulationDiffResult {
     const newRecords: Record<string, Record<string, unknown>[]> = {};
     const statusTransitions: DeltaRecords['statusTransitions'] = [];
@@ -74,13 +79,20 @@ export class Accumulator {
           newCount++;
         } else {
           // Record was previously committed.
-          // If entity is immutable, verify that fields did not mutate.
+          // If entity is immutable, verify that fields did not mutate (deep comparison).
           if (entityCfg?.isImmutable) {
             for (const [field, val] of Object.entries(curr)) {
-              if (existing[field] !== undefined && existing[field] !== val) {
-                throw new Error(
-                  `Accumulator: immutable record mutation in entity '${entityName}' (ID: ${id}) on field '${field}'`
-                );
+              if (existing[field] !== undefined) {
+                const isDifferent =
+                  typeof existing[field] === 'object' || typeof val === 'object'
+                    ? JSON.stringify(existing[field]) !== JSON.stringify(val)
+                    : existing[field] !== val;
+
+                if (isDifferent) {
+                  throw new Error(
+                    `Accumulator: immutable record mutation in entity '${entityName}' (ID: ${id}) on field '${field}'`
+                  );
+                }
               }
             }
           }
@@ -107,6 +119,12 @@ export class Accumulator {
         }
       }
 
+      if (deletedCount > 0 && !options.allowDeletions) {
+        throw new Error(
+          `Accumulator: invariant violation — ${deletedCount} record(s) deleted from prior state in entity '${entityName}'. Existing records cannot be deleted from accumulated simulation state.`
+        );
+      }
+
       newRecords[entityName] = entityNewList;
       newRecordCounts[entityName] = newCount;
       modifiedRecordCounts[entityName] = modCount;
@@ -126,16 +144,6 @@ export class Accumulator {
       modifiedRecordCounts,
       deletedRecordCounts,
     };
-  }
-
-  public computeDelta(
-    domain: DomainConfig,
-    cycleIndex: number,
-    asOfDate: string,
-    priorState: Record<string, readonly Record<string, unknown>[]>,
-    currentState: Record<string, readonly Record<string, unknown>[]>
-  ): AccumulationDiffResult {
-    return this.ComputeDelta(domain, cycleIndex, asOfDate, priorState, currentState);
   }
 
   private extractId(record: Record<string, unknown>, entityName: string): string {

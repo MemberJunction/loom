@@ -59,16 +59,22 @@ export const DomainConfigSchema = z.object({
 });
 export type DomainConfig = z.infer<typeof DomainConfigSchema>;
 
+export interface CreateDomainConfigOptions {
+  defaultPack?: string;
+  businessKeyMap?: Record<string, string[]>;
+}
+
 /**
  * Constructs a strongly-typed DomainConfig directly from MemberJunction EntityInfo instances.
- * This directly binds Loom simulation models to live MemberJunction metadata.
+ * Requires explicit or resolvable business keys; never fabricates fictitious field names.
  */
 export function createDomainConfigFromMJEntities(
   entities: readonly EntityInfo[],
   namespace: string,
   domainName: string,
-  defaultPack = 'common'
+  options: CreateDomainConfigOptions = {}
 ): DomainConfig {
+  const defaultPack = options.defaultPack ?? 'common';
   const entityConfigs: Record<string, EntityConfig> = {};
   const packs: Record<string, PackConfig> = {
     [defaultPack]: { name: defaultPack, dependsOn: [] },
@@ -93,13 +99,11 @@ export function createDomainConfigFromMJEntities(
         valueListType: field.ValueListType ?? undefined,
       };
 
-      // Identify non-PK business key candidates (e.g. Code, Name, Email, ExternalID)
       if (!isPk && (field.Name.endsWith('Code') || field.Name.endsWith('Number') || field.Name === 'Name' || field.Name.endsWith('Key'))) {
         candidateBusinessKeys.push(field.Name);
       }
 
       if (field.RelatedEntity && field.RelatedEntityFieldName) {
-        // Disambiguate foreign key key by fieldName so multiple FKs to same entity don't collide
         const fkKey = `FK_${entity.Name}_${field.Name}_${field.RelatedEntity}`;
         foreignKeys[fkKey] = {
           fieldName: field.Name,
@@ -110,10 +114,16 @@ export function createDomainConfigFromMJEntities(
       }
     }
 
-    // Never default businessKey to ['ID'], as that causes circular dependency during deterministic minting
-    const businessKey = candidateBusinessKeys.length > 0
-      ? [candidateBusinessKeys[0]!]
-      : ['NaturalKey'];
+    let businessKey: string[];
+    if (options.businessKeyMap?.[entity.Name]) {
+      businessKey = options.businessKeyMap[entity.Name]!;
+    } else if (candidateBusinessKeys.length > 0) {
+      businessKey = [candidateBusinessKeys[0]!];
+    } else {
+      throw new Error(
+        `createDomainConfigFromMJEntities: Entity '${entity.Name}' does not have a detectable business key field. Please specify businessKeyMap['${entity.Name}'] in options.`
+      );
+    }
 
     entityConfigs[entity.Name] = {
       name: entity.Name,

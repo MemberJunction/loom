@@ -1,13 +1,15 @@
+import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { loadProject } from '../project.js';
 import {
   CausalGraphResolver,
   IdentityService,
+  createRng,
   emitMetadata,
   emitSkywayMigration,
   type SimulationNode,
-  createRng,
 } from '@memberjunction/loom-engine';
+import type { SimulationCheckpoint } from '@memberjunction/loom-contracts';
 
 export interface BuildCommandOptions {
   project: string;
@@ -19,7 +21,7 @@ export interface BuildCommandOptions {
 export async function executeBuild(options: BuildCommandOptions): Promise<void> {
   const loaded = await loadProject(options.project);
   const seed = options.seed ? parseInt(options.seed, 10) : 42;
-  const releaseDate = options.release ?? new Date().toISOString().slice(0, 10);
+  const releaseDate = options.release ?? '2026-09-02';
   const outputDir = options.output
     ? path.resolve(process.cwd(), options.output)
     : path.resolve(loaded.projectDir, loaded.manifest.output.metadataDir);
@@ -30,7 +32,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
   console.log(`   Entities: ${Object.keys(loaded.domain.entities).join(', ')}`);
 
   const identityService = new IdentityService();
-  identityService.registerNamespace(loaded.domain.name, loaded.domain.namespace);
+  identityService.RegisterNamespace(loaded.domain.name, loaded.domain.namespace);
 
   const resolver = new CausalGraphResolver();
 
@@ -43,12 +45,12 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
       description: `Generates ${entityName} records`,
       execute: async (ctx) => {
         const rng = createRng(ctx.seed, `entity:${entityName}`);
-        const count = 10; // Default baseline test batch
+        const count = 10;
         const records: Record<string, unknown>[] = [];
 
         for (let i = 1; i <= count; i++) {
           const bizKey = `${entityName}-${i}`;
-          const id = identityService.mintId(loaded.domain.name, entityName, bizKey);
+          const id = identityService.MintId(loaded.domain.name, entityName, bizKey);
           const row: Record<string, unknown> = {
             ID: id,
             Name: `${entityName} ${i}`,
@@ -59,8 +61,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
           for (const fk of Object.values(entityCfg.foreignKeys)) {
             const parentList = ctx.generatedData.get(fk.targetEntity) ?? [];
             if (parentList.length > 0) {
-              const parent = rng.pick(parentList);
-              row[fk.fieldName] = parent[fk.targetField] ?? parent['ID'];
+              const pickedParent = rng.pick(parentList);
+              row[fk.fieldName] = pickedParent['ID'] ?? pickedParent['id'];
             }
           }
 
@@ -70,10 +72,11 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         return { [entityName]: records };
       },
     };
-    resolver.registerNode(node);
+
+    resolver.RegisterNode(node);
   }
 
-  const executionOrder = resolver.resolveOrder();
+  const executionOrder = resolver.ResolveOrder();
   console.log(`   Execution DAG: ${executionOrder.map((n) => n.id).join(' -> ')}`);
 
   const generatedData = new Map<string, Record<string, unknown>[]>();
@@ -100,8 +103,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
   });
   console.log(`   ✓ Emitted ${writtenMetadata.length} metadata files to ${outputDir}`);
 
-  // Emit baseline Skyway migration
-  const migrationVersion = `0000_${releaseDate.replace(/-/g, '')}`;
+  // Emit baseline Skyway migration with timestamp version
+  const migrationVersion = `${releaseDate.replace(/-/g, '')}0000`;
   const migrationPath = await emitSkywayMigration({
     outputDir: migrationsDir,
     version: migrationVersion,
@@ -110,5 +113,34 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
     data: allRecords,
   });
   console.log(`   ✓ Emitted Skyway migration: ${path.basename(migrationPath)}`);
+
+  // Write initial simulation checkpoint.json
+  const totalRecordCounts: Record<string, number> = {};
+  for (const [e, rows] of Object.entries(allRecords)) {
+    totalRecordCounts[e] = rows.length;
+  }
+
+  const initialCheckpoint: SimulationCheckpoint = {
+    domain: loaded.domain.name,
+    seed,
+    releaseDate,
+    cycleIndex: 0,
+    continuity: {
+      asOfDate: releaseDate,
+      cycleIndex: 0,
+      activeEntityIds: {},
+      latentStates: {},
+      activeLifecycleStates: {},
+      metadata: { initializedAt: releaseDate },
+    },
+    committedRecordCounts: totalRecordCounts,
+  };
+
+  await fs.writeFile(
+    path.join(outputDir, 'checkpoint.json'),
+    JSON.stringify(initialCheckpoint, null, 2),
+    'utf8'
+  );
+  console.log(`   ✓ Saved initial checkpoint to ${path.join(outputDir, 'checkpoint.json')}`);
   console.log(`✨ Build complete successfully.`);
 }

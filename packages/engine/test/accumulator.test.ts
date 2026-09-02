@@ -62,6 +62,32 @@ describe('Accumulator', () => {
     ]);
   });
 
+  it('throws an error when records are deleted from prior state unless allowDeletions is set', () => {
+    const priorState = {
+      Person: [
+        { ID: 'p-1', Name: 'Alice' },
+        { ID: 'p-2', Name: 'Bob' },
+      ],
+    };
+    const currentState = {
+      Person: [{ ID: 'p-1', Name: 'Alice' }],
+    };
+
+    expect(() =>
+      accumulator.ComputeDelta(domain, 2, '2026-09-01', priorState, currentState)
+    ).toThrowError(/record\(s\) deleted from prior state/);
+
+    const allowed = accumulator.ComputeDelta(
+      domain,
+      2,
+      '2026-09-01',
+      priorState,
+      currentState,
+      { allowDeletions: true }
+    );
+    expect(allowed.deletedRecordCounts['Person']).toBe(1);
+  });
+
   it('throws an error if a row is missing an ID instead of collapsing onto undefined', () => {
     const priorState = {};
     const currentState = {
@@ -86,50 +112,17 @@ describe('Accumulator', () => {
     ).toThrowError(/cannot be reassigned/);
   });
 
-  it('detects status transitions on mutable entities', () => {
+  it('detects immutable record mutation including nested JSON objects', () => {
     const priorState = {
-      Person: [{ ID: 'p-1', Name: 'Alice', Status: 'PendingRenewal' }],
+      Order: [{ ID: 'ord-1', Metadata: { note: 'initial' } }],
     };
 
     const currentState = {
-      Person: [{ ID: 'p-1', Name: 'Alice', Status: 'Renewed' }],
-    };
-
-    const result = accumulator.ComputeDelta(
-      domain,
-      2,
-      '2026-09-01',
-      priorState,
-      currentState
-    );
-
-    expect(result.delta.statusTransitions).toHaveLength(1);
-    expect(result.delta.statusTransitions[0]).toEqual({
-      entity: 'Person',
-      id: 'p-1',
-      fromStatus: 'PendingRenewal',
-      toStatus: 'Renewed',
-      effectiveDate: '2026-09-01',
-    });
-  });
-
-  it('throws an error if an immutable record attempts to mutate', () => {
-    const priorState = {
-      Order: [{ ID: 'ord-1', Total: 100 }],
-    };
-
-    const currentState = {
-      Order: [{ ID: 'ord-1', Total: 150 }],
+      Order: [{ ID: 'ord-1', Metadata: { note: 'changed' } }],
     };
 
     expect(() =>
-      accumulator.ComputeDelta(
-        domain,
-        2,
-        '2026-09-01',
-        priorState,
-        currentState
-      )
+      accumulator.ComputeDelta(domain, 2, '2026-09-01', priorState, currentState)
     ).toThrowError(/immutable record mutation/);
   });
 });

@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { renderRow, type RowTemplate } from '../src/templates/evaluator.js';
+import { renderRow, type RowTemplate, type SequenceState } from '../src/templates/evaluator.js';
 import { createRng } from '../src/math/rng.js';
 
 describe('renderRow template evaluator', () => {
-  it('evaluates constant, dot-path from, optional from, and formatted strings', () => {
+  it('evaluates constant, dot-path from, optional from, and formatted strings without mutating caller scope', () => {
     const template: RowTemplate = {
       let: {
         fullName: { fmt: '{user.firstName} {user.lastName}' },
@@ -23,23 +23,31 @@ describe('renderRow template evaluator', () => {
     expect(row['id']).toBe('fixed-123');
     expect(row['name']).toBe('Alice Smith');
     expect(row['email']).toBeNull();
+
+    // Verify caller scope was NOT mutated with let-binding
+    expect((scope as Record<string, unknown>)['fullName']).toBeUndefined();
   });
 
-  it('increments sequence numbers across row renders', () => {
+  it('increments sequence numbers using explicit sequenceState without touching caller scope', () => {
     const template: RowTemplate = {
       row: {
         itemNo: { seq: 'lineItemSeq' },
       },
     };
 
-    const scope = { lineItemSeq: 0 };
-    const row1 = renderRow(template, scope);
-    const row2 = renderRow(template, scope);
-    const row3 = renderRow(template, scope);
+    const scope = { otherData: 'value' };
+    const seqState: SequenceState = {};
+
+    const row1 = renderRow(template, scope, undefined, seqState);
+    const row2 = renderRow(template, scope, undefined, seqState);
+    const row3 = renderRow(template, scope, undefined, seqState);
 
     expect(row1['itemNo']).toBe(1);
     expect(row2['itemNo']).toBe(2);
     expect(row3['itemNo']).toBe(3);
+
+    // Verify caller scope was never mutated
+    expect((scope as Record<string, unknown>)['lineItemSeq']).toBeUndefined();
   });
 
   it('throws an error if a chance path cannot be resolved', () => {

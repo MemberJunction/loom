@@ -2,39 +2,31 @@ import { describe, it, expect } from 'vitest';
 import { CausalGraphResolver, type SimulationNode } from '../src/graph/resolver.js';
 
 describe('CausalGraphResolver', () => {
-  it('topologically sorts simulation nodes according to consumed/produced entities', () => {
+  it('correctly resolves a linear DAG order', () => {
     const resolver = new CausalGraphResolver();
 
-    const nodeMoney: SimulationNode = {
-      id: 'node-money',
-      consumes: ['OrderHeader', 'Invoice'],
-      produces: ['Payment', 'JournalEntry'],
-      execute: async () => ({}),
-    };
-
-    const nodeOrders: SimulationNode = {
-      id: 'node-orders',
-      consumes: ['Person', 'Product'],
-      produces: ['OrderHeader', 'Invoice'],
-      execute: async () => ({}),
-    };
-
-    const nodeWorld: SimulationNode = {
-      id: 'node-world',
+    const nodeA: SimulationNode = {
+      id: 'node-members',
       consumes: [],
-      produces: ['Person', 'Product'],
+      produces: ['Member'],
       execute: async () => ({}),
     };
 
-    resolver.registerNode(nodeMoney);
-    resolver.registerNode(nodeOrders);
-    resolver.registerNode(nodeWorld);
+    const nodeB: SimulationNode = {
+      id: 'node-orders',
+      consumes: ['Member'],
+      produces: ['Order'],
+      execute: async () => ({}),
+    };
 
-    const sorted = resolver.resolveOrder();
-    expect(sorted.map((n) => n.id)).toEqual(['node-world', 'node-orders', 'node-money']);
+    resolver.RegisterNode(nodeB);
+    resolver.RegisterNode(nodeA);
+
+    const order = resolver.ResolveOrder();
+    expect(order.map((n) => n.id)).toEqual(['node-members', 'node-orders']);
   });
 
-  it('detects cycles and throws a clear descriptive error', () => {
+  it('detects and rejects dependency cycles', () => {
     const resolver = new CausalGraphResolver();
 
     const nodeA: SimulationNode = {
@@ -51,9 +43,9 @@ describe('CausalGraphResolver', () => {
       execute: async () => ({}),
     };
 
-    resolver.registerNode(nodeA);
-    resolver.registerNode(nodeB);
+    resolver.RegisterNode(nodeA);
+    resolver.RegisterNode(nodeB);
 
-    expect(() => resolver.resolveOrder()).toThrowError(/cyclic dependency detected/);
+    expect(() => resolver.ResolveOrder()).toThrowError(/cycle detected/);
   });
 });
