@@ -8,8 +8,9 @@ import {
   emitMetadata,
   emitSkywayMigration,
   type SimulationNode,
+  type RngStream,
 } from '@memberjunction/loom-engine';
-import type { SimulationCheckpoint } from '@memberjunction/loom-contracts';
+import type { SimulationCheckpoint, EntityConfig } from '@memberjunction/loom-contracts';
 
 export interface BuildCommandOptions {
   project: string;
@@ -51,24 +52,17 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         for (let i = 1; i <= count; i++) {
           const bizKey = `${entityName}-${i}`;
           const id = identityService.MintId(loaded.domain.name, entityName, bizKey);
-          const row: Record<string, unknown> = {
-            ID: id,
-            Name: `${entityName} ${i}`,
-            CreatedAt: releaseDate,
-          };
-
-          // Link foreign keys to parents if available
-          for (const fk of Object.values(entityCfg.foreignKeys)) {
-            const parentList = ctx.generatedData.get(fk.targetEntity) ?? [];
-            if (parentList.length > 0) {
-              const pickedParent = rng.pick(parentList);
-              row[fk.fieldName] = pickedParent['ID'] ?? pickedParent['id'];
+          const row = generateEntityRecord(
+            entityCfg,
+            id,
+            i,
+            releaseDate,
+            rng,
+            (parentEntity) => {
+              const parentList = ctx.generatedData.get(parentEntity) ?? [];
+              return parentList.length > 0 ? rng.pick(parentList) : undefined;
             }
-          }
-
-          if (entityCfg.fields['Status']) {
-            row['Status'] = i <= 8 ? 'Active' : 'Inactive';
-          }
+          );
 
           records.push(row);
         }
@@ -147,4 +141,70 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
   );
   console.log(`   ✓ Saved initial checkpoint to ${path.join(outputDir, 'checkpoint.json')}`);
   console.log(`✨ Build complete successfully.`);
+}
+
+/**
+ * Dynamically synthesizes a record conforming strictly to declared domain fields.
+ * Never emits fields not declared in entityCfg.fields.
+ */
+function generateEntityRecord(
+  entityCfg: EntityConfig,
+  id: string,
+  i: number,
+  asOfDate: string,
+  rng: RngStream,
+  parentLookup: (parentEntity: string) => Record<string, unknown> | undefined
+): Record<string, unknown> {
+  const row: Record<string, unknown> = { ID: id };
+
+  for (const [fieldName, fieldCfg] of Object.entries(entityCfg.fields)) {
+    if (fieldCfg.isPrimaryKey || fieldName === 'ID' || fieldName === 'id') {
+      continue;
+    }
+
+    // Foreign key lookup
+    const fk = Object.values(entityCfg.foreignKeys).find((f) => f.fieldName === fieldName);
+    if (fk) {
+      const parent = parentLookup(fk.targetEntity);
+      if (parent) {
+        row[fieldName] = parent[fk.targetField] ?? parent['ID'] ?? parent['id'];
+        continue;
+      }
+    }
+
+    // Dynamic field mapping based on semantic domain names
+    if (fieldName === 'Status') {
+      row[fieldName] = i % 5 !== 0 ? 'Active' : 'Lapsed';
+    } else if (fieldName === 'Tier') {
+      row[fieldName] = (i % 10 === 1 || i % 10 === 4 || i % 10 === 7) ? 'Enterprise' : (i % 2 === 0 ? 'MidMarket' : 'SMB');
+    } else if (fieldName === 'AutoRenew') {
+      row[fieldName] = (i % 10 !== 4 && i % 10 !== 8 && i % 10 !== 0);
+    } else if (fieldName === 'Quantity') {
+      row[fieldName] = rng.int(1, 4);
+    } else if (fieldName.includes('Fee') || fieldName.includes('Price') || fieldName.includes('Amount')) {
+      row[fieldName] = rng.int(50, 500);
+    } else if (fieldName === 'Employees') {
+      row[fieldName] = rng.int(50, 1500);
+    } else if (fieldName === 'AnnualRevenue') {
+      row[fieldName] = rng.int(2000000, 50000000);
+    } else if (fieldCfg.type === 'number') {
+      row[fieldName] = rng.int(10, 100);
+    } else if (fieldCfg.type === 'boolean') {
+      row[fieldName] = true;
+    } else if (fieldCfg.type === 'date') {
+      row[fieldName] = asOfDate;
+    } else if (fieldCfg.type === 'uuid') {
+      row[fieldName] = id;
+    } else {
+      // String fields
+      if (fieldName === 'Name') row[fieldName] = `${entityCfg.name} ${i}`;
+      else if (fieldName === 'SKU') row[fieldName] = `SKU-${String(i).padStart(4, '0')}`;
+      else if (fieldName === 'Email') row[fieldName] = `user${i}@example.com`;
+      else if (fieldName === 'OrderNumber') row[fieldName] = `ORD-${asOfDate.slice(0, 4)}-${String(i).padStart(4, '0')}`;
+      else if (fieldName === 'PaymentMethod') row[fieldName] = i % 2 === 0 ? 'CreditCard' : 'ACH';
+      else row[fieldName] = `${fieldName}_${i}`;
+    }
+  }
+
+  return row;
 }

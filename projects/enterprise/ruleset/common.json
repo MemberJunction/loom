@@ -1,0 +1,97 @@
+{
+  "name": "common",
+  "domain": "enterprise",
+  "catalog": {
+    "dials": {
+      "theta_engagement": {
+        "name": "theta_engagement",
+        "mean": 0,
+        "stdDev": 1.0,
+        "annualWanderStdDev": 0.12,
+        "correlations": {
+          "phi_affluence": 0.45
+        }
+      },
+      "phi_affluence": {
+        "name": "phi_affluence",
+        "mean": 0,
+        "stdDev": 1.0,
+        "annualWanderStdDev": 0.08,
+        "correlations": {
+          "theta_engagement": 0.45
+        }
+      }
+    }
+  },
+  "params": {
+    "baseRenewalTarget": 0.80,
+    "autoRenewTarget": 0.70,
+    "enterpriseTierTarget": 0.30
+  },
+  "effects": {
+    "factor-membership-renewal": {
+      "id": "factor-membership-renewal",
+      "effect": "Member",
+      "target": 0.80,
+      "tolerance": 0.10,
+      "evidence": {
+        "source": "Enterprise B2B Benchmark",
+        "confidence": "high",
+        "notes": "Annual member renewal target"
+      },
+      "outcome": {
+        "from": "self",
+        "where": {
+          "Status": "Active"
+        }
+      },
+      "arrows": {
+        "engagement": {
+          "name": "engagement",
+          "beta": 1.2,
+          "feature": {
+            "from": "self",
+            "field": "Title"
+          }
+        }
+      }
+    },
+    "factor-subscription-autorenew": {
+      "id": "factor-subscription-autorenew",
+      "effect": "Subscription",
+      "target": 0.70,
+      "tolerance": 0.10,
+      "evidence": {
+        "source": "SaaS Metric Survey 2026",
+        "confidence": "high",
+        "notes": "Subscription auto-renewal contract"
+      },
+      "outcome": {
+        "from": "self",
+        "where": {
+          "AutoRenew": true
+        }
+      },
+      "arrows": {}
+    },
+    "factor-enterprise-tier": {
+      "id": "factor-enterprise-tier",
+      "effect": "Company",
+      "target": 0.30,
+      "tolerance": 0.15,
+      "evidence": {
+        "source": "Enterprise B2B Distribution",
+        "confidence": "medium",
+        "notes": "Enterprise tier proportion"
+      },
+      "outcome": {
+        "from": "self",
+        "where": {
+          "Tier": "Enterprise"
+        }
+      },
+      "arrows": {}
+    }
+  },
+  "mixes": {}
+}

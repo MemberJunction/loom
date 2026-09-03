@@ -109,6 +109,8 @@ importers:
         specifier: ^4.0.18
         version: 4.1.11(@types/node@22.20.1)(vite@8.2.2(@types/node@22.20.1))
 
+  projects/enterprise: {}
+
   projects/fixture: {}
 
 packages:

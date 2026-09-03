@@ -14,8 +14,10 @@ export interface SkywayMigrationOptions {
 
 /**
  * Emits additive Skyway migrations with dual-dialect support (SQL Server & PostgreSQL).
- * Validates all emitted columns strictly against domain entity field declarations.
- * Properly escapes JSON objects and strings, avoiding [object Object] leaks.
+ * 1. Topologically sorts entities (parents before children) so foreign keys never fail at apply-time.
+ * 2. Validates all emitted columns strictly against domain entity field declarations.
+ * 3. Escapes JSON objects and strings cleanly, avoiding [object Object] leaks.
+ * 4. Deterministically sorts records by primary key for 100% byte-for-byte idempotency.
  */
 export async function emitSkywayMigration(options: SkywayMigrationOptions): Promise<string> {
   await fs.mkdir(options.outputDir, { recursive: true });
@@ -37,8 +39,14 @@ export async function emitSkywayMigration(options: SkywayMigrationOptions): Prom
     ``,
   ];
 
-  for (const [entityName, records] of Object.entries(options.data)) {
-    if (records.length === 0) continue;
+  // Topologically sort entity emission order: parents before children
+  const entityNames = Object.keys(options.data);
+  const orderedEntities = sortEntitiesTopologically(entityNames, options.domain);
+
+  for (const entityName of orderedEntities) {
+    const rawRecords = options.data[entityName] ?? [];
+    if (rawRecords.length === 0) continue;
+
     const entityCfg = options.domain.entities[entityName];
     if (!entityCfg) {
       throw new Error(`emitSkywayMigration: entity '${entityName}' is not defined in domain configuration`);
@@ -55,6 +63,13 @@ export async function emitSkywayMigration(options: SkywayMigrationOptions): Prom
     const fullTableName = isPostgres
       ? `"${schemaName}"."${tableName}"`
       : `[${schemaName}].[${tableName}]`;
+
+    // Sort records deterministically by primary key (ID)
+    const records = [...rawRecords].sort((a, b) => {
+      const idA = String(a['ID'] ?? a['id'] ?? '');
+      const idB = String(b['ID'] ?? b['id'] ?? '');
+      return idA.localeCompare(idB);
+    });
 
     lines.push(`-- Entity: ${entityName} (${records.length} records)`);
 
@@ -102,6 +117,59 @@ export async function emitSkywayMigration(options: SkywayMigrationOptions): Prom
 
   await fs.writeFile(filePath, lines.join('\n'), 'utf8');
   return filePath;
+}
+
+/**
+ * Sorts entities in topological DAG order where parent tables precede child tables.
+ */
+function sortEntitiesTopologically(entityNames: readonly string[], domain: DomainConfig): string[] {
+  const set = new Set(entityNames);
+  const inDegree = new Map<string, number>();
+  const adj = new Map<string, Set<string>>();
+
+  for (const name of entityNames) {
+    inDegree.set(name, 0);
+    adj.set(name, new Set());
+  }
+
+  for (const name of entityNames) {
+    const cfg = domain.entities[name];
+    if (!cfg) continue;
+    for (const fk of Object.values(cfg.foreignKeys)) {
+      const parent = fk.targetEntity;
+      if (set.has(parent) && parent !== name) {
+        // parent -> name (parent must precede child)
+        const children = adj.get(parent)!;
+        if (!children.has(name)) {
+          children.add(name);
+          inDegree.set(name, inDegree.get(name)! + 1);
+        }
+      }
+    }
+  }
+
+  const queue: string[] = [];
+  for (const [name, deg] of inDegree.entries()) {
+    if (deg === 0) queue.push(name);
+  }
+
+  const sorted: string[] = [];
+  while (queue.length > 0) {
+    const curr = queue.shift()!;
+    sorted.push(curr);
+    for (const child of adj.get(curr) ?? []) {
+      const newDeg = inDegree.get(child)! - 1;
+      inDegree.set(child, newDeg);
+      if (newDeg === 0) queue.push(child);
+    }
+  }
+
+  // If any cycles or disconnected entities remain, append them
+  for (const name of entityNames) {
+    if (!sorted.includes(name)) sorted.push(name);
+  }
+
+  return sorted;
 }
 
 function formatSqlValue(val: unknown, isPostgres: boolean): string {
