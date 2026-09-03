@@ -8,6 +8,7 @@ import {
   emitMetadata,
   emitSkywayMigration,
   FactorEngine,
+  StateLadderEngine,
 } from '@memberjunction/loom-engine';
 import {
   SimulationCheckpointSchema,
@@ -25,14 +26,15 @@ export interface AccumulateCommandOptions {
   migrationsOutput?: string;
 }
 
-function isEnoent(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && 'code' in err && (err as { code: string }).code === 'ENOENT';
+function advanceDateByWeeks(baseDateStr: string, weeks: number): string {
+  const d = new Date(baseDateStr);
+  d.setUTCDate(d.getUTCDate() + weeks * 7);
+  return d.toISOString().slice(0, 10);
 }
 
 export async function executeAccumulate(options: AccumulateCommandOptions): Promise<void> {
   const loaded = await loadProject(options.project);
-  const weeks = options.weeks ? parseInt(options.weeks, 10) : 1;
-  const seed = options.seed ? parseInt(options.seed, 10) : 42;
+  const weeksToAdd = options.weeks ? parseInt(options.weeks, 10) : 1;
   const priorDir = path.resolve(process.cwd(), options.priorState);
   const outputDir = options.output
     ? path.resolve(process.cwd(), options.output)
@@ -41,57 +43,47 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     ? path.resolve(process.cwd(), options.migrationsOutput)
     : path.resolve(loaded.projectDir, loaded.manifest.output.migrationsDir);
 
-  // 1. Read prior checkpoint if available
-  let priorCheckpoint: SimulationCheckpoint | null = null;
+  // 1. Read prior checkpoint.json
   const checkpointPath = path.join(priorDir, 'checkpoint.json');
+  let priorCheckpoint: SimulationCheckpoint | null = null;
   try {
     const raw = await fs.readFile(checkpointPath, 'utf8');
     priorCheckpoint = SimulationCheckpointSchema.parse(JSON.parse(raw));
-  } catch (err) {
-    if (!isEnoent(err)) {
-      throw new Error(`Failed to parse checkpoint at '${checkpointPath}': ${err instanceof Error ? err.message : String(err)}`);
-    }
+  } catch {
+    console.log(`   ℹ️ No prior checkpoint.json found in ${priorDir}; starting fresh accumulation cycle.`);
   }
 
-  // 2. Compute deterministic cycle index and asOfDate
   const cycleIndex = (priorCheckpoint?.cycleIndex ?? 0) + 1;
-  let asOfDate: string;
-  if (options.asOf) {
-    asOfDate = options.asOf;
-  } else if (priorCheckpoint?.continuity.asOfDate) {
-    const priorD = new Date(priorCheckpoint.continuity.asOfDate);
-    priorD.setUTCDate(priorD.getUTCDate() + weeks * 7);
-    asOfDate = priorD.toISOString().slice(0, 10);
-  } else {
-    asOfDate = '2026-09-02';
-  }
+  const asOfDate =
+    options.asOf ??
+    (priorCheckpoint
+      ? advanceDateByWeeks(priorCheckpoint.releaseDate, weeksToAdd)
+      : (((loaded.manifest as Record<string, unknown>).releaseDate as string) ?? '2026-09-02'));
+  const seed = options.seed
+    ? parseInt(options.seed, 10)
+    : priorCheckpoint?.seed ?? 42;
 
   console.log(`🧵 Loom Accumulate: Advancing simulation for '${loaded.domain.name}'`);
-  console.log(`   Cycle: ${cycleIndex} (+${weeks} week(s)) | As-Of: ${asOfDate} | Seed: ${seed}`);
+  console.log(`   Cycle: ${cycleIndex} (+${weeksToAdd} week(s)) | As-Of: ${asOfDate} | Seed: ${seed}`);
   console.log(`   Prior State: ${priorDir}`);
 
-  // 3. Read prior state records from disk
+  // 2. Read existing entity records from priorState
   const priorRecords: Record<string, Record<string, unknown>[]> = {};
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
     const filePath = path.join(priorDir, entityCfg.pack, `${entityName}.json`);
     try {
       const content = await fs.readFile(filePath, 'utf8');
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(content);
-      } catch (jsonErr) {
-        throw new Error(`Invalid JSON in metadata file '${filePath}': ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`);
-      }
-      if (!Array.isArray(parsed)) {
-        throw new Error(`Metadata file '${filePath}' must contain an array of records`);
-      }
-      priorRecords[entityName] = parsed as Record<string, unknown>[];
-    } catch (err) {
-      if (!isEnoent(err)) {
-        throw err;
-      }
+      priorRecords[entityName] = JSON.parse(content);
+    } catch {
       priorRecords[entityName] = [];
     }
+  }
+
+  // 3. Continuity check
+  if (priorCheckpoint && priorCheckpoint.domain !== loaded.domain.name) {
+    throw new Error(
+      `Accumulate: checkpoint domain '${priorCheckpoint.domain}' does not match project domain '${loaded.domain.name}'`
+    );
   }
 
   // Check seed continuity
@@ -112,11 +104,26 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     updatedLatentStates[id] = advanced.dials;
   }
 
-  // 5. Generate simulated delta additions strictly conforming to ruleset intake
-  const identityService = new IdentityService();
-  identityService.RegisterNamespace(loaded.domain.name, loaded.domain.namespace);
+  // 5. Rehydrate StateLadderEngine from continuity and step ladders (R3-4)
+  const ladderEngine = new StateLadderEngine(loaded.laddersManifest?.ladders ?? []);
+  const priorLifecycles = priorCheckpoint?.continuity.activeLifecycleStates ?? {};
+  for (const [entityId, entries] of Object.entries(priorLifecycles)) {
+    for (const entry of entries as Array<{ ladder: string; currentState: string; enteredCycle: number; tenure?: number }>) {
+      ladderEngine.ForceTransition(entry.ladder, entityId, entry.currentState, entry.enteredCycle);
+      const st = ladderEngine.GetEntityState(entry.ladder, entityId);
+      if (st) {
+        st.tenureInCurrentState = entry.tenure ?? 0;
+      }
+    }
+  }
 
+  // Initialize currentRecords from priorRecords
   const currentRecords: Record<string, Record<string, unknown>[]> = {};
+  for (const [entityName, existingList] of Object.entries(priorRecords)) {
+    currentRecords[entityName] = existingList.map((r) => ({ ...r }));
+  }
+
+  const updatedLifecycleStates: Record<string, Array<Record<string, unknown>>> = {};
   const statusTransitions: Array<{
     entity: string;
     id: string;
@@ -125,8 +132,71 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     effectiveDate: string;
   }> = [];
 
-  for (const [entityName, existingList] of Object.entries(priorRecords)) {
-    const list = existingList.map((r) => ({ ...r }));
+  for (const ladder of ladderEngine.GetAllLadders()) {
+    const targetRecords = currentRecords[ladder.entity] ?? [];
+    for (const row of targetRecords) {
+      const entityId = String(row['ID'] ?? row['id']);
+      const curState = ladderEngine.GetEntityState(ladder.ladderKey, entityId);
+      if (curState) {
+        const dials = updatedLatentStates[entityId] ?? {};
+        const stepResult = ladderEngine.StepEntity(ladder.ladderKey, entityId, {
+          cycle: cycleIndex,
+          cyclesSinceBirth: cycleIndex - curState.enteredCycle,
+          latentDials: dials,
+        });
+
+        const stateAfter = ladderEngine.GetEntityState(ladder.ladderKey, entityId);
+        if (stateAfter) {
+          if (!updatedLifecycleStates[entityId]) updatedLifecycleStates[entityId] = [];
+          updatedLifecycleStates[entityId].push({
+            ladder: ladder.ladderKey,
+            currentState: stateAfter.currentState,
+            enteredCycle: stateAfter.enteredCycle,
+            tenure: stateAfter.tenureInCurrentState,
+          });
+        }
+
+        if (stepResult.transitioned && stepResult.newState) {
+          const targetEntity = ladder.binding.mode === 'childEntity' ? ladder.binding.childEntity : ladder.entity;
+          const stateField = ladder.binding.mode === 'childEntity' ? ladder.binding.stateField : ladder.binding.field;
+
+          if (ladder.binding.mode === 'childEntity') {
+            const childRecords = currentRecords[ladder.binding.childEntity] ?? [];
+            for (const childRow of childRecords) {
+              if (String(childRow[ladder.binding.foreignKey]) === entityId) {
+                const prevVal = String(childRow[stateField] ?? curState.currentState);
+                childRow[stateField] = stepResult.newState;
+                statusTransitions.push({
+                  entity: targetEntity,
+                  id: String(childRow['ID'] ?? childRow['id']),
+                  fromStatus: prevVal,
+                  toStatus: stepResult.newState,
+                  effectiveDate: asOfDate,
+                });
+              }
+            }
+          } else {
+            if (stateField && row[stateField] !== undefined) {
+              row[stateField] = stepResult.newState;
+            }
+            statusTransitions.push({
+              entity: targetEntity,
+              id: entityId,
+              fromStatus: curState.currentState,
+              toStatus: stepResult.newState,
+              effectiveDate: asOfDate,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // 6. Generate simulated delta additions strictly conforming to ruleset intake
+  const identityService = new IdentityService();
+  identityService.RegisterNamespace(loaded.domain.name, loaded.domain.namespace);
+
+  for (const [entityName, list] of Object.entries(currentRecords)) {
     const entityCfg = loaded.domain.entities[entityName];
     if (!entityCfg) continue;
 
@@ -159,10 +229,11 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       });
       list.push(row);
     }
+
     currentRecords[entityName] = list;
   }
 
-  // 6. Compute pure delta using Accumulator (enforces no deletions by default)
+  // 7. Compute pure delta using Accumulator (enforces no deletions byte-for-byte)
   const accumulator = new Accumulator();
   const diff = accumulator.ComputeDelta(
     loaded.domain,
@@ -173,18 +244,21 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
   );
 
   console.log(`   Delta Summary:`);
-  for (const [entity, count] of Object.entries(diff.newRecordCounts)) {
-    console.log(`     • ${entity}: +${count} new record(s)`);
+  for (const [entity, rows] of Object.entries(diff.delta.generatedRecords)) {
+    console.log(`     • ${entity}: +${rows.length} new record(s)`);
+  }
+  if (statusTransitions.length > 0) {
+    console.log(`     • Status Transitions: ${statusTransitions.length} transition(s)`);
   }
 
-  // 7. Update metadata tree
+  // 8. Update metadata directory
   await emitMetadata({
     outputDir,
     domain: loaded.domain,
     data: currentRecords,
   });
 
-  // 8. Emit additive Skyway migration with sortable timestamp version and status transitions
+  // 9. Emit additive Skyway delta migration with status transitions
   const migrationVersion = `${asOfDate.replace(/-/g, '')}${String(cycleIndex).padStart(4, '0')}`;
   const migrationPath = await emitSkywayMigration({
     outputDir: migrationsDir,
@@ -195,7 +269,7 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     statusTransitions,
   });
 
-  // 9. Write updated checkpoint.json with populated continuity
+  // 10. Update simulation checkpoint.json with advanced continuity
   const totalRecordCounts: Record<string, number> = {};
   const activeEntityIds: Record<string, string[]> = {};
 
@@ -214,7 +288,7 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       cycleIndex,
       activeEntityIds,
       latentStates: updatedLatentStates,
-      activeLifecycleStates: priorCheckpoint?.continuity.activeLifecycleStates ?? {},
+      activeLifecycleStates: updatedLifecycleStates,
       metadata: { lastAccumulatedAt: asOfDate },
     },
     committedRecordCounts: totalRecordCounts,

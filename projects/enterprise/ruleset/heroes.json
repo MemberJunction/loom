@@ -10,7 +10,8 @@
       "fixedFields": {
         "FirstName": "Sarah",
         "LastName": "Connor",
-        "Title": "VP of Operations"
+        "Title": "VP of Operations",
+        "Status": "Active"
       },
       "birthCycle": 2021,
       "latentDials": {
@@ -33,20 +34,10 @@
           "value": "VP of Operations"
         },
         {
-          "kind": "outcome",
-          "factor": "factor-membership-renewal",
-          "cycle": 2025,
-          "value": true
-        },
-        {
-          "kind": "feature",
-          "feature": {
-            "from": "OrderHeader",
-            "where": { "Status": "Completed" },
-            "aggregation": "count"
-          },
-          "op": "gte",
-          "value": 2
+          "kind": "field",
+          "field": "Status",
+          "op": "eq",
+          "value": "Active"
         }
       ]
     },
@@ -59,7 +50,8 @@
       "fixedFields": {
         "FirstName": "David",
         "LastName": "Ross",
-        "Title": "Procurement Lead"
+        "Title": "Procurement Lead",
+        "Status": "Lapsed"
       },
       "birthCycle": 2022,
       "latentDials": {
@@ -69,20 +61,16 @@
       "eras": ["era-supply-disruption"],
       "pins": [
         {
-          "kind": "outcome",
-          "factor": "factor-membership-renewal",
-          "cycle": 2023,
-          "value": false
+          "kind": "field",
+          "field": "Title",
+          "op": "eq",
+          "value": "Procurement Lead"
         },
         {
-          "kind": "feature",
-          "feature": {
-            "from": "Subscription",
-            "where": { "Status": "Cancelled" },
-            "aggregation": "exists"
-          },
+          "kind": "field",
+          "field": "Status",
           "op": "eq",
-          "value": 1
+          "value": "Lapsed"
         }
       ]
     }

@@ -97,6 +97,7 @@ describe('Loom Enterprise Integration Test Suite', () => {
 
     // Run 12 weekly accumulation cycles
     const totalCycles = 12;
+    let cycle1Lifecycles: unknown = null;
     for (let cycle = 1; cycle <= totalCycles; cycle++) {
       await executeAccumulate({
         project: enterpriseProjectPath,
@@ -111,6 +112,10 @@ describe('Loom Enterprise Integration Test Suite', () => {
       const cpRaw = await fs.readFile(path.join(metaDirA, 'checkpoint.json'), 'utf8');
       const checkpoint = JSON.parse(cpRaw);
       expect(checkpoint.cycleIndex).toBe(cycle);
+
+      if (cycle === 1) {
+        cycle1Lifecycles = JSON.parse(JSON.stringify(checkpoint.continuity.activeLifecycleStates));
+      }
 
       // Validate all gates pass at every cycle
       const report = await executeValidate({
@@ -148,6 +153,28 @@ describe('Loom Enterprise Integration Test Suite', () => {
         expect(JSON.stringify(currentLines[i])).toBe(JSON.stringify(initialLines[i]));
       }
     }
+
+    const finalCpRaw = await fs.readFile(path.join(metaDirA, 'checkpoint.json'), 'utf8');
+    const finalCheckpoint = JSON.parse(finalCpRaw);
+
+    // R3-4: Assert activeLifecycleStates differs between cycle 1 and cycle 12
+    expect(JSON.stringify(cycle1Lifecycles)).not.toBe(
+      JSON.stringify(finalCheckpoint.continuity.activeLifecycleStates)
+    );
+
+    // R3-4: Assert that at least one delta migration across the 12 cycles contains an UPDATE statement
+    const migrationFiles = await fs.readdir(migrDirA);
+    let foundUpdate = false;
+    for (const f of migrationFiles) {
+      if (f.endsWith('.sql')) {
+        const content = await fs.readFile(path.join(migrDirA, f), 'utf8');
+        if (content.includes('UPDATE ')) {
+          foundUpdate = true;
+          break;
+        }
+      }
+    }
+    expect(foundUpdate).toBe(true);
   });
 
   it('guarantees 100% byte-for-byte idempotency across two independent multi-cycle simulation runs', async () => {
@@ -294,28 +321,57 @@ describe('Loom Enterprise Integration Test Suite', () => {
 
   it('deleting or altering a factor in the ruleset causes empirical validation to fail its derived gate (L1 requirement)', async () => {
     const loaded = await loadProject(enterpriseProjectPath);
-    const validator = new Validator();
 
-    const records: Record<string, Record<string, unknown>[]> = {};
+    // 1. Snapshot of dataset generated with the factor present
+    const membersWithFactor: Record<string, unknown>[] = JSON.parse(
+      await fs.readFile(path.join(metaDirA, 'core', 'Member.json'), 'utf8')
+    );
+    const activeCountWith = membersWithFactor.filter((m) => m['Status'] === 'Active').length;
+    const rateWith = activeCountWith / membersWithFactor.length;
+
+    // Original factor contract from common.json
+    const originalFactor = loaded.rulesetModules['common']?.effects['factor-membership-renewal'];
+    expect(originalFactor).toBeDefined();
+
+    // 2. Build with factor altered: create temporary project copy and alter target drastically
+    const tempProjDir = path.join(tempDirA, 'proj-altered-factor');
+    await fs.cp(enterpriseProjectPath, tempProjDir, { recursive: true });
+
+    const commonJsonPath = path.join(tempProjDir, 'ruleset', 'common.json');
+    const commonMod = JSON.parse(await fs.readFile(commonJsonPath, 'utf8'));
+    // Alter factor target drastically from 0.80 to 0.20
+    commonMod.effects['factor-membership-renewal'].target = 0.20;
+    await fs.writeFile(commonJsonPath, JSON.stringify(commonMod, null, 2), 'utf8');
+
+    const testMetaAltered = path.join(tempDirA, 'meta-altered');
+    const testMigrAltered = path.join(tempDirA, 'migr-altered');
+    await executeBuild({
+      project: tempProjDir,
+      seed: '42',
+      output: testMetaAltered,
+      migrationsOutput: testMigrAltered,
+    });
+
+    const membersAltered: Record<string, unknown>[] = JSON.parse(
+      await fs.readFile(path.join(testMetaAltered, 'core', 'Member.json'), 'utf8')
+    );
+    const activeCountAltered = membersAltered.filter((m) => m['Status'] === 'Active').length;
+    const rateAltered = activeCountAltered / membersAltered.length;
+
+    // (a) Assert the observed distribution changes by more than the tolerance
+    expect(Math.abs(rateAltered - rateWith)).toBeGreaterThan(originalFactor!.tolerance);
+
+    // (b) Assert the original factor's gate now fails against the altered dataset
+    const recordsAltered: Record<string, Record<string, unknown>[]> = {};
     for (const [entity, entityCfg] of Object.entries(loaded.domain.entities)) {
-      const filePath = path.join(metaDirA, entityCfg.pack, `${entity}.json`);
-      records[entity] = JSON.parse(await fs.readFile(filePath, 'utf8'));
+      const filePath = path.join(testMetaAltered, entityCfg.pack, `${entity}.json`);
+      recordsAltered[entity] = JSON.parse(await fs.readFile(filePath, 'utf8'));
     }
 
-    // A factor with a target that the data does not satisfy must fail validation
-    const demandingFactor = {
-      id: 'factor-extreme-target',
-      effect: 'Member',
-      target: 0.99,
-      tolerance: 0.01,
-      evidence: { source: 'test', confidence: 'high' },
-      outcome: { from: 'self', where: { Status: 'Active' } },
-      arrows: {},
-    };
-
-    const report = validator.Validate(loaded.domain, records, [demandingFactor]);
+    const validator = new Validator();
+    const report = validator.Validate(loaded.domain, recordsAltered, [originalFactor!]);
     expect(report.passed).toBe(false);
-    expect(report.gates.some((g) => g.name.includes('factor-extreme-target') && !g.passed)).toBe(true);
+    expect(report.gates.some((g) => g.name.includes(originalFactor!.id) && !g.passed)).toBe(true);
   });
 });
 

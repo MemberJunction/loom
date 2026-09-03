@@ -36,6 +36,9 @@
         "from": "self",
         "where": {
           "Status": "Active"
+        },
+        "otherwise": {
+          "Status": "Lapsed"
         }
       },
       "arrows": {}
@@ -72,6 +75,9 @@
         "from": "self",
         "where": {
           "Tier": "Enterprise"
+        },
+        "otherwise": {
+          "Tier": "Standard"
         }
       },
       "arrows": {}

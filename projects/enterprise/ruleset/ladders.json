@@ -29,7 +29,7 @@
           "durationCycles": 4,
           "prerequisites": {
             "priorState": "Trial",
-            "dials": { "theta": { "min": 0.5 } }
+            "dials": { "theta": { "min": -0.5 } }
           },
           "effects": [
             { "factor": "factor-membership-renewal", "beta": 2.5 }

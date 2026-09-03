@@ -20,6 +20,9 @@
         "from": "self",
         "where": {
           "Status": "Active"
+        },
+        "otherwise": {
+          "Status": "Inactive"
         }
       },
       "arrows": {

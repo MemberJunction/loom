@@ -15,6 +15,7 @@ export const FeatureQuerySchema = z.object({
   field: z.string().optional(),
   path: z.array(z.string()).optional(),
   where: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
+  otherwise: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
   aggregation: z.enum(['count', 'sum', 'avg', 'min', 'max', 'exists']).optional(),
 });
 export type FeatureQuery = z.infer<typeof FeatureQuerySchema>;

@@ -29,7 +29,11 @@ export interface BuildCommandOptions {
 export async function executeBuild(options: BuildCommandOptions): Promise<void> {
   const loaded = await loadProject(options.project);
   const seed = options.seed ? parseInt(options.seed, 10) : 42;
-  const releaseDate = options.release ?? '2026-09-02';
+  const releaseDate =
+    options.release ??
+    ((loaded.manifest as Record<string, unknown>).releaseDate as string) ??
+    ((loaded.manifest as Record<string, unknown>).asOfDate as string) ??
+    '2026-09-02';
   const asOfYear = parseInt(releaseDate.slice(0, 4), 10) || 2026;
   const outputDir = options.output
     ? path.resolve(process.cwd(), options.output)
@@ -122,7 +126,15 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         }
 
         // 3. Multi-cycle retrospective simulation for entities subject to factors or heroes
-        const cycles = [asOfYear - 4, asOfYear - 3, asOfYear - 2, asOfYear - 1, asOfYear];
+        const startCycle =
+          typeof (loaded.manifest as Record<string, unknown>).startCycle === 'number'
+            ? ((loaded.manifest as Record<string, unknown>).startCycle as number)
+            : asOfYear - 4;
+        const cycles: number[] = [];
+        for (let y = startCycle; y <= asOfYear; y++) {
+          cycles.push(y);
+        }
+
         const unrollCandidates: EntityCandidate[] = records.map((r, idx) => {
           const id = String(r['ID'] ?? r['id']);
           const hero = heroInjector.GetHeroById(id);
@@ -152,7 +164,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         unroller.Run(rng);
         unrollerMap.set(entityName, unroller);
 
-        // 4. Calibrate entity record fields against factor outcomes
+        // 4. Calibrate entity record fields against factor outcomes (domain-agnostic)
         const entityFactors = factorContracts.filter((f) => f.effect === entityName);
         for (const row of records) {
           const id = String(row['ID'] ?? row['id']);
@@ -162,16 +174,26 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
             for (const contract of entityFactors) {
               const realized = outcomes ? outcomes[contract.id] : undefined;
               if (realized !== undefined && contract.outcome && contract.outcome.where) {
+                const otherwise = (contract.outcome as Record<string, unknown>).otherwise as Record<string, unknown> | undefined;
+                const hero = heroInjector.GetHeroById(id);
                 for (const [field, targetVal] of Object.entries(contract.outcome.where)) {
+                  if (hero && hero.fixedFields && field in hero.fixedFields) {
+                    // Invariant: hero fixedFields take precedence over factor outcome calibration
+                    continue;
+                  }
                   if (realized) {
                     row[field] = targetVal;
                   } else {
                     if (typeof targetVal === 'boolean') {
                       row[field] = !targetVal;
-                    } else if (field === 'Status') {
-                      row[field] = 'Cancelled';
-                    } else if (field === 'Tier') {
-                      row[field] = 'Standard';
+                    } else if (otherwise && otherwise[field] !== undefined) {
+                      row[field] = otherwise[field];
+                    } else if (row[field] !== targetVal) {
+                      // Row already has an alternative non-target value from base generation; keep it
+                    } else {
+                      throw new Error(
+                        `Factor '${contract.id}': negative outcome for field '${entityName}.${field}' cannot be resolved. Specify an explicit 'otherwise' clause in the factor outcome.`
+                      );
                     }
                   }
                 }
@@ -254,6 +276,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
           ladder: ladder.ladderKey,
           currentState: state.currentState,
           enteredCycle: state.enteredCycle,
+          tenure: state.tenureInCurrentState,
         });
       }
     }

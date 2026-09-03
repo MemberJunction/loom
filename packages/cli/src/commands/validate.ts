@@ -46,13 +46,19 @@ export async function executeValidate(options: ValidateCommandOptions): Promise<
     }
   }
 
+  const totalLoaded = Object.values(records).reduce((sum, r) => sum + r.length, 0);
+  if (totalLoaded === 0) {
+    throw new Error(`Loom Validate: No records found in '${dataDir}'. Dataset is empty or directory does not exist.`);
+  }
+
   // Compile factor contracts from ruleset modules
   const allFactors = Object.values(loaded.rulesetModules).flatMap((mod) =>
     Object.values(mod.effects)
   );
 
   const validator = new Validator();
-  const report = validator.Validate(loaded.domain, records, allFactors);
+  const heroes = loaded.heroesManifest?.heroes ?? [];
+  const report = validator.Validate(loaded.domain, records, allFactors, heroes);
 
   console.log(`\nValidation Report:`);
   console.log(`------------------------------------------------------------`);

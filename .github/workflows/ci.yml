@@ -37,5 +37,8 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck
 
+      - name: Verify Zero Domain Vocabulary
+        run: node scripts/check-domain-vocabulary.mjs
+
       - name: Run Unit & Integration Tests
         run: pnpm run test
