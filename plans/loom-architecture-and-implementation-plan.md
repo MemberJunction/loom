@@ -260,7 +260,7 @@ sequenceDiagram
 ### Phase 4: Accumulation Engine & Delta Resolver
 - [x] Implement stateful prior-state reader and continuity boundary tracker (`Accumulator`).
 - [x] Implement `loom accumulate` CLI command.
-- [x] Implement delta emitter producing versioned metadata record diffs (SQL spCreate migrations superseded by Invariant 8).
+- [x] Implement delta resolver updating metadata records in place via differential status updates (SQL spCreate migrations superseded by Invariant 8).
 - [x] Verify multi-cycle accumulation on `projects/fixture`.
 
 ### Phase 5: More Cheese Migration to Loom

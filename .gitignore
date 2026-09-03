@@ -7,5 +7,4 @@ coverage
 .tmp
 test-output
 projects/*/metadata
-projects/*/migrations
 projects/*/test-output

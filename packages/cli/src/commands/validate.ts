@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { loadProject } from '../project.js';
 import { Validator, readEntityMetadata, type ValidationReport, type GateResult } from '@memberjunction/loom-engine';
@@ -20,8 +21,35 @@ export async function executeValidate(options: ValidateCommandOptions): Promise<
   const records: Record<string, Record<string, unknown>[]> = {};
   const syncGates: GateResult[] = [];
 
+  // Root .mj-sync.json validation gate
+  const rootSyncPath = path.join(dataDir, '.mj-sync.json');
+  try {
+    const raw = fs.readFileSync(rootSyncPath, 'utf8');
+    const rootConfig = JSON.parse(raw);
+    if (!Array.isArray(rootConfig.directoryOrder) || rootConfig.directoryOrder.length === 0) {
+      throw new Error("Root '.mj-sync.json' missing required 'directoryOrder' array");
+    }
+    syncGates.push({
+      name: `MetadataSync: Root Manifest (.mj-sync.json)`,
+      category: 'schema',
+      passed: true,
+      message: `Root directoryOrder declares topological sequence (${rootConfig.directoryOrder.length} entities)`,
+      populationCount: rootConfig.directoryOrder.length,
+    });
+  } catch (rootErr) {
+    syncGates.push({
+      name: `MetadataSync: Root Manifest (.mj-sync.json)`,
+      category: 'schema',
+      passed: false,
+      message: rootErr instanceof Error ? rootErr.message : String(rootErr),
+      populationCount: 0,
+    });
+  }
+
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
-    const entityDir = path.join(dataDir, entityCfg.pack, entityName);
+    const entityDir = fs.existsSync(path.join(dataDir, entityName))
+      ? path.join(dataDir, entityName)
+      : path.join(dataDir, entityCfg.pack, entityName);
     try {
       const { records: unwrapped } = await readEntityMetadata(entityDir, entityCfg.entityName);
       records[entityName] = unwrapped;
@@ -29,7 +57,7 @@ export async function executeValidate(options: ValidateCommandOptions): Promise<
         name: `MetadataSync: ${entityName} (.mj-sync.json & record wrapper)`,
         category: 'schema',
         passed: true,
-        message: `Entity directory '${entityCfg.pack}/${entityName}' conforms to MetadataSync specifications`,
+        message: `Entity directory '${entityName}' conforms to MetadataSync specifications`,
         populationCount: unwrapped.length,
       });
     } catch (syncErr) {

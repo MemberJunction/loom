@@ -1,4 +1,5 @@
 import * as fs from 'node:fs/promises';
+import * as syncFs from 'node:fs';
 import * as path from 'node:path';
 import { loadProject } from '../project.js';
 import {
@@ -18,28 +19,31 @@ import { generateEntityRecord } from '../generation.js';
 
 export interface AccumulateCommandOptions {
   project: string;
-  priorState: string;
+  priorState?: string;
   weeks?: string;
   seed?: string;
   asOf?: string;
   output?: string;
 }
 
-function advanceDateByWeeks(baseDateStr: string, weeks: number): string {
+function advanceDate(baseDateStr: string, days: number): string {
   const d = new Date(baseDateStr);
-  d.setUTCDate(d.getUTCDate() + weeks * 7);
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
 export async function executeAccumulate(options: AccumulateCommandOptions): Promise<void> {
   const loaded = await loadProject(options.project);
   const weeksToAdd = options.weeks ? parseInt(options.weeks, 10) : 1;
-  const priorDir = path.resolve(process.cwd(), options.priorState);
   const outputDir = options.output
     ? path.resolve(process.cwd(), options.output)
     : path.resolve(loaded.projectDir, loaded.manifest.output.metadataDir);
 
-  // 1. Read prior checkpoint.json
+  const priorDir = options.priorState
+    ? path.resolve(process.cwd(), options.priorState)
+    : outputDir;
+
+  // 1. Read prior checkpoint if available
   const checkpointPath = path.join(priorDir, 'checkpoint.json');
   let priorCheckpoint: SimulationCheckpoint | null = null;
   try {
@@ -54,19 +58,18 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       );
     }
   } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      console.log(`   ℹ️ No prior checkpoint.json found in ${priorDir}; starting fresh accumulation cycle.`);
-    } else {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
       throw err;
     }
   }
 
   const cycleIndex = (priorCheckpoint?.cycleIndex ?? 0) + 1;
-  const asOfDate =
-    options.asOf ??
-    (priorCheckpoint
-      ? advanceDateByWeeks(priorCheckpoint.releaseDate, weeksToAdd)
-      : (loaded.manifest.releaseDate ?? '2026-09-02'));
+  const asOfDate = options.asOf
+    ? options.asOf
+    : priorCheckpoint
+    ? advanceDate(priorCheckpoint.continuity.asOfDate, weeksToAdd * 7)
+    : (loaded.manifest.releaseDate ?? '2026-09-02');
+
   const seed = options.seed
     ? parseInt(options.seed, 10)
     : priorCheckpoint?.seed ?? 42;
@@ -78,19 +81,18 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
   // 2. Read existing entity records from priorState
   const priorRecords: Record<string, Record<string, unknown>[]> = {};
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
-    const entityDir = path.join(priorDir, entityCfg.pack, entityName);
-    try {
+    const entityDir = syncFs.existsSync(path.join(priorDir, entityName))
+      ? path.join(priorDir, entityName)
+      : path.join(priorDir, entityCfg.pack, entityName);
+
+    // Only swallow if the entity directory itself does not exist (new entity added to domain)
+    if (!syncFs.existsSync(entityDir)) {
+      priorRecords[entityName] = [];
+    } else {
+      // Must NOT catch or swallow missing .mj-sync.json or corrupt files!
+      // If entity directory exists, readEntityMetadata will throw if invalid.
       const { records: unwrapped } = await readEntityMetadata(entityDir, entityCfg.entityName);
       priorRecords[entityName] = unwrapped;
-    } catch (err: unknown) {
-      if (
-        (err as NodeJS.ErrnoException).code === 'ENOENT' ||
-        (err instanceof Error && err.message.includes("Missing required '.mj-sync.json'"))
-      ) {
-        priorRecords[entityName] = [];
-      } else {
-        throw err;
-      }
     }
   }
 

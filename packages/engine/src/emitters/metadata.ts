@@ -15,23 +15,107 @@ export interface SyncMetadataRecord {
 }
 
 /**
+ * Computes topological ordering of domain entities based on foreign key dependencies
+ * and pack dependencies. Parent entities appear before child entities.
+ */
+export function computeTopologicalOrder(domain: DomainConfig): string[] {
+  const entityNames = Object.keys(domain.entities);
+  const adj = new Map<string, Set<string>>();
+  const inDegree = new Map<string, number>();
+
+  for (const name of entityNames) {
+    adj.set(name, new Set());
+    inDegree.set(name, 0);
+  }
+
+  // Edge from parent -> child (parent must be created before child)
+  for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
+    for (const fk of Object.values(entityCfg.foreignKeys ?? {})) {
+      const target = fk.targetEntity;
+      if (domain.entities[target] && target !== entityName) {
+        if (!adj.get(target)!.has(entityName)) {
+          adj.get(target)!.add(entityName);
+          inDegree.set(entityName, (inDegree.get(entityName) ?? 0) + 1);
+        }
+      }
+    }
+  }
+
+  // Enforce pack dependencies: parentPack entities -> childPack entities
+  for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
+    const pack = domain.packs[entityCfg.pack];
+    if (pack?.dependsOn) {
+      for (const parentPackName of pack.dependsOn) {
+        for (const [otherName, otherCfg] of Object.entries(domain.entities)) {
+          if (otherCfg.pack === parentPackName && otherName !== entityName) {
+            if (!adj.get(otherName)!.has(entityName)) {
+              adj.get(otherName)!.add(entityName);
+              inDegree.set(entityName, (inDegree.get(entityName) ?? 0) + 1);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Kahn's algorithm
+  const queue: string[] = [];
+  for (const [name, deg] of inDegree.entries()) {
+    if (deg === 0) queue.push(name);
+  }
+
+  const order: string[] = [];
+  while (queue.length > 0) {
+    const u = queue.shift()!;
+    order.push(u);
+    for (const v of adj.get(u) ?? []) {
+      const newDeg = (inDegree.get(v) ?? 1) - 1;
+      inDegree.set(v, newDeg);
+      if (newDeg === 0) queue.push(v);
+    }
+  }
+
+  // Append any entities not yet in order (e.g. if circular)
+  for (const name of entityNames) {
+    if (!order.includes(name)) order.push(name);
+  }
+
+  return order;
+}
+
+/**
  * Emits generated records into the standard MemberJunction /metadata/** directory structure
- * with .mj-sync.json configuration and { primaryKey, fields } wrappers for consumption by `mj sync push`.
+ * with root .mj-sync.json (directoryOrder in topological sequence, autoCreateMissingRecords)
+ * and per-entity single-level directories with .mj-sync.json and { primaryKey, fields } wrappers.
  */
 export async function emitMetadata(options: MetadataEmitterOptions): Promise<string[]> {
   const writtenFiles: string[] = [];
   const maxPartSize = options.maxPartSize ?? 5000;
 
+  await fs.mkdir(options.outputDir, { recursive: true });
+
+  // 1. Emit root .mj-sync.json for discovery by MetadataSync (findEntityDirectories)
+  const directoryOrder = computeTopologicalOrder(options.domain);
+  const rootSyncConfigPath = path.join(options.outputDir, '.mj-sync.json');
+  const rootSyncConfig = {
+    directoryOrder,
+    push: {
+      autoCreateMissingRecords: true,
+    },
+  };
+  await fs.writeFile(rootSyncConfigPath, JSON.stringify(rootSyncConfig, null, 2) + '\n', 'utf8');
+  writtenFiles.push(rootSyncConfigPath);
+
+  // 2. Emit entity directories directly under outputDir (single level for MetadataSync)
   for (const [entityName, records] of Object.entries(options.data)) {
     const entityCfg = options.domain.entities[entityName];
     if (!entityCfg) continue;
 
-    const pack = entityCfg.pack ?? 'default';
-    const entityDir = path.join(options.outputDir, pack, entityName);
+    const entityDir = path.join(options.outputDir, entityName);
 
     await fs.mkdir(entityDir, { recursive: true });
 
-    // 1. Emit .mj-sync.json specifying the target MemberJunction entityName
+    // Emit per-entity .mj-sync.json specifying the target MemberJunction entityName
     const syncConfigPath = path.join(entityDir, '.mj-sync.json');
     const syncConfig = {
       entity: entityCfg.entityName,

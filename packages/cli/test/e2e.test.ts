@@ -29,11 +29,11 @@ describe('Loom E2E Fixture Pipeline', () => {
     });
 
     const { records: orgs } = await readEntityMetadata(
-      path.join(tempMetadataDir, 'common', 'Organization'),
+      path.join(tempMetadataDir, 'Organization'),
       'Fixture: Organizations'
     );
     const { records: people } = await readEntityMetadata(
-      path.join(tempMetadataDir, 'common', 'Person'),
+      path.join(tempMetadataDir, 'Person'),
       'Fixture: People'
     );
 
@@ -58,7 +58,7 @@ describe('Loom E2E Fixture Pipeline', () => {
     });
 
     const { records: updatedPeople } = await readEntityMetadata(
-      path.join(tempMetadataDir, 'common', 'Person'),
+      path.join(tempMetadataDir, 'Person'),
       'Fixture: People'
     );
     expect(updatedPeople.length).toBe(12); // 10 baseline + 2 accumulated

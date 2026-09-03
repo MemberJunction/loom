@@ -40,7 +40,7 @@ describe('Loom Enterprise Integration Test Suite', () => {
 
     for (const entity of expectedEntities) {
       const entityCfg = loaded.domain.entities[entity]!;
-      const entityDir = path.join(metaDirA, entityCfg.pack, entity);
+      const entityDir = path.join(metaDirA, entity);
 
       // Verify .mj-sync.json exists and specifies entityName
       const syncConfigPath = path.join(entityDir, '.mj-sync.json');
@@ -139,11 +139,11 @@ describe('Loom Enterprise Integration Test Suite', () => {
     const loaded = await loadProject(enterpriseProjectPath);
 
     const { records: initialOrders } = await readEntityMetadata(
-      path.join(metaDirA, 'commerce', 'OrderHeader'),
+      path.join(metaDirA, 'OrderHeader'),
       loaded.domain.entities['OrderHeader']!.entityName
     );
     const { records: initialLines } = await readEntityMetadata(
-      path.join(metaDirA, 'commerce', 'OrderLine'),
+      path.join(metaDirA, 'OrderLine'),
       loaded.domain.entities['OrderLine']!.entityName
     );
 
@@ -151,7 +151,7 @@ describe('Loom Enterprise Integration Test Suite', () => {
     for (const entity of Object.keys(loaded.domain.entities)) {
       const entityCfg = loaded.domain.entities[entity]!;
       const { records } = await readEntityMetadata(
-        path.join(metaDirA, entityCfg.pack, entity),
+        path.join(metaDirA, entity),
         entityCfg.entityName
       );
       seenIdsByEntity[entity] = new Set(records.map((r) => String(r['ID'] ?? r['id'])));
@@ -180,7 +180,7 @@ describe('Loom Enterprise Integration Test Suite', () => {
         for (const tr of cycleTransitions) {
           const entityCfg = loaded.domain.entities[tr.entity]!;
           const { records: currentEntityRows } = await readEntityMetadata(
-            path.join(metaDirA, entityCfg.pack, tr.entity),
+            path.join(metaDirA, tr.entity),
             entityCfg.entityName
           );
           const rec = currentEntityRows.find((r) => String(r['ID'] ?? r['id']) === tr.id);
@@ -205,7 +205,7 @@ describe('Loom Enterprise Integration Test Suite', () => {
       // Check non-deletion and ID stability
       for (const [entity, entityCfg] of Object.entries(loaded.domain.entities)) {
         const { records } = await readEntityMetadata(
-          path.join(metaDirA, entityCfg.pack, entity),
+          path.join(metaDirA, entity),
           entityCfg.entityName
         );
 
@@ -223,11 +223,11 @@ describe('Loom Enterprise Integration Test Suite', () => {
 
       // Check deep immutability: initial order headers and lines must not have mutated
       const { records: currentOrders } = await readEntityMetadata(
-        path.join(metaDirA, 'commerce', 'OrderHeader'),
+        path.join(metaDirA, 'OrderHeader'),
         loaded.domain.entities['OrderHeader']!.entityName
       );
       const { records: currentLines } = await readEntityMetadata(
-        path.join(metaDirA, 'commerce', 'OrderLine'),
+        path.join(metaDirA, 'OrderLine'),
         loaded.domain.entities['OrderLine']!.entityName
       );
 
@@ -311,7 +311,7 @@ describe('Loom Enterprise Integration Test Suite', () => {
       const baselineRecordsByEntity: Record<string, Map<string, Record<string, unknown>>> = {};
       for (const [entity, entityCfg] of Object.entries(loaded.domain.entities)) {
         const { records } = await readEntityMetadata(
-          path.join(diffMetaDir, entityCfg.pack, entity),
+          path.join(diffMetaDir, entity),
           entityCfg.entityName
         );
         const map = new Map<string, Record<string, unknown>>();
@@ -348,7 +348,7 @@ describe('Loom Enterprise Integration Test Suite', () => {
       // Assert differential properties on resulting metadata tree
       for (const [entity, entityCfg] of Object.entries(loaded.domain.entities)) {
         const { records: updatedRecords } = await readEntityMetadata(
-          path.join(diffMetaDir, entityCfg.pack, entity),
+          path.join(diffMetaDir, entity),
           entityCfg.entityName
         );
         const baselineMap = baselineRecordsByEntity[entity]!;
@@ -383,7 +383,7 @@ describe('Loom Enterprise Integration Test Suite', () => {
 
     // 1. Snapshot of dataset generated with the factor present
     const { records: membersWithFactor } = await readEntityMetadata(
-      path.join(metaDirA, 'core', 'Member'),
+      path.join(metaDirA, 'Member'),
       loaded.domain.entities['Member']!.entityName
     );
     const activeCountWith = membersWithFactor.filter((m) => m['Status'] === 'Active').length;
@@ -411,7 +411,7 @@ describe('Loom Enterprise Integration Test Suite', () => {
     });
 
     const { records: membersAltered } = await readEntityMetadata(
-      path.join(testMetaAltered, 'core', 'Member'),
+      path.join(testMetaAltered, 'Member'),
       loaded.domain.entities['Member']!.entityName
     );
     const activeCountAltered = membersAltered.filter((m) => m['Status'] === 'Active').length;
@@ -424,7 +424,7 @@ describe('Loom Enterprise Integration Test Suite', () => {
     const recordsAltered: Record<string, Record<string, unknown>[]> = {};
     for (const [entity, entityCfg] of Object.entries(loaded.domain.entities)) {
       const { records } = await readEntityMetadata(
-        path.join(testMetaAltered, entityCfg.pack, entity),
+        path.join(testMetaAltered, entity),
         entityCfg.entityName
       );
       recordsAltered[entity] = records;
@@ -439,7 +439,7 @@ describe('Loom Enterprise Integration Test Suite', () => {
   it('R3-2: hero record has the exact same key set as a background row, and all schema columns are populated', async () => {
     const loaded = await loadProject(enterpriseProjectPath);
     const { records: members } = await readEntityMetadata(
-      path.join(metaDirA, 'core', 'Member'),
+      path.join(metaDirA, 'Member'),
       loaded.domain.entities['Member']!.entityName
     );
 
@@ -511,7 +511,7 @@ describe('Loom Enterprise Integration Test Suite', () => {
     await fs.copyFile(path.join(metaDirA, 'checkpoint.json'), cpPath);
 
     // 2. Corrupt entity file throws naming the file and leaves metadata untouched
-    const memberPath = path.join(corruptTestDir, 'core', 'Member', 'Member.json');
+    const memberPath = path.join(corruptTestDir, 'Member', 'Member.json');
     await fs.writeFile(memberPath, '[ { "broken": json', 'utf8');
 
     // Snapshot directory state before execution
@@ -537,6 +537,90 @@ describe('Loom Enterprise Integration Test Suite', () => {
       const hashAfter = await computeFileSha256(f);
       expect(hashAfter).toBe(hashesBefore[f]);
     }
+  });
+
+  it('R9-1: accumulate throws when .mj-sync.json is missing in prior state and leaves prior files untouched', async () => {
+    const corruptSyncDir = path.join(tempDirA, 'corrupt-sync');
+    await fs.cp(metaDirA, corruptSyncDir, { recursive: true });
+
+    // Delete one .mj-sync.json
+    const targetSyncFile = path.join(corruptSyncDir, 'Member', '.mj-sync.json');
+    await fs.unlink(targetSyncFile);
+
+    // Snapshot files before accumulate
+    const filesBefore = await getAllFilesRecursively(corruptSyncDir);
+    const hashesBefore: Record<string, string> = {};
+    for (const f of filesBefore) {
+      hashesBefore[f] = await computeFileSha256(f);
+    }
+
+    // Accumulate must throw, not fail open or re-create Member from scratch
+    await expect(
+      executeAccumulate({
+        project: enterpriseProjectPath,
+        priorState: corruptSyncDir,
+        output: corruptSyncDir,
+        weeks: '1',
+      })
+    ).rejects.toThrow(/Missing required '\.mj-sync\.json'/);
+
+    // Verify prior data was not overwritten or destroyed (hashes identical)
+    const filesAfter = await getAllFilesRecursively(corruptSyncDir);
+    expect(filesAfter).toEqual(filesBefore);
+    for (const f of filesAfter) {
+      const hashAfter = await computeFileSha256(f);
+      expect(hashAfter).toBe(hashesBefore[f]);
+    }
+  });
+
+  it('R9-2: MetadataSync discovery finds 7 entity directories in topological order via root .mj-sync.json', async () => {
+    // Verify root .mj-sync.json exists and specifies directoryOrder and push options
+    const rootSyncPath = path.join(metaDirA, '.mj-sync.json');
+    const rootRaw = await fs.readFile(rootSyncPath, 'utf8');
+    const rootConfig = JSON.parse(rootRaw);
+    expect(Array.isArray(rootConfig.directoryOrder)).toBe(true);
+    expect(rootConfig.directoryOrder.length).toBe(7);
+    expect(rootConfig.push?.autoCreateMissingRecords).toBe(true);
+
+    // Replicate MetadataSync's one-level discovery rule (findEntityDirectories):
+    // 1. Read root .mj-sync.json directoryOrder
+    // 2. Scan immediate subdirectories for .mj-sync.json
+    // 3. Sort according to directoryOrder
+    const entries = await fs.readdir(metaDirA, { withFileTypes: true });
+    const foundDirs: string[] = [];
+    for (const entry of entries) {
+      if (entry.isDirectory() && !entry.name.startsWith('.')) {
+        const subDir = path.join(metaDirA, entry.name);
+        try {
+          await fs.access(path.join(subDir, '.mj-sync.json'));
+          foundDirs.push(subDir);
+        } catch {
+          // not an entity dir
+        }
+      }
+    }
+
+    // Must find all 7 entity directories directly under metaDirA
+    expect(foundDirs.length).toBe(7);
+
+    // Order according to directoryOrder
+    const orderedDirs: string[] = [];
+    for (const dirName of rootConfig.directoryOrder as string[]) {
+      const match = foundDirs.find((d) => path.basename(d) === dirName);
+      if (match) orderedDirs.push(match);
+    }
+    expect(orderedDirs.length).toBe(7);
+
+    const orderedNames = orderedDirs.map((d) => path.basename(d));
+    // Topological sequence: parents before children
+    expect(orderedNames.indexOf('Company')).toBeLessThan(orderedNames.indexOf('Member'));
+    expect(orderedNames.indexOf('Company')).toBeLessThan(orderedNames.indexOf('Product'));
+    expect(orderedNames.indexOf('Member')).toBeLessThan(orderedNames.indexOf('Subscription'));
+    expect(orderedNames.indexOf('Product')).toBeLessThan(orderedNames.indexOf('Subscription'));
+    expect(orderedNames.indexOf('Member')).toBeLessThan(orderedNames.indexOf('OrderHeader'));
+    expect(orderedNames.indexOf('OrderHeader')).toBeLessThan(orderedNames.indexOf('OrderLine'));
+    expect(orderedNames.indexOf('Product')).toBeLessThan(orderedNames.indexOf('OrderLine'));
+    expect(orderedNames.indexOf('OrderHeader')).toBeLessThan(orderedNames.indexOf('Payment'));
   });
 });
 
