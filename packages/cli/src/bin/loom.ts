@@ -18,7 +18,6 @@ program
   .option('-s, --seed <number>', 'Deterministic seed', '42')
   .option('-r, --release <date>', 'Release baseline date (YYYY-MM-DD)', '2026-09-02')
   .option('-o, --output <dir>', 'Custom output directory for metadata')
-  .option('-m, --migrations-output <dir>', 'Custom output directory for Skyway migrations')
   .action(async (opts) => {
     try {
       await executeBuild(opts);
@@ -30,14 +29,13 @@ program
 
 program
   .command('accumulate')
-  .description('Advance simulation by N cycles and emit pure delta migrations')
+  .description('Advance simulation by N cycles and emit pure delta metadata')
   .requiredOption('-p, --project <path>', 'Path to project directory')
   .requiredOption('--prior-state <dir>', 'Path to committed metadata/ directory')
   .option('-w, --weeks <number>', 'Number of weeks to advance', '1')
   .option('-s, --seed <number>', 'Simulation seed', '42')
   .option('-a, --as-of <date>', 'Explicit as-of simulation date (YYYY-MM-DD)')
   .option('-o, --output <dir>', 'Custom output directory for metadata')
-  .option('-m, --migrations-output <dir>', 'Custom output directory for Skyway migrations')
   .action(async (opts) => {
     try {
       await executeAccumulate(opts);

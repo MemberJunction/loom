@@ -1,15 +1,10 @@
-import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { loadProject } from '../project.js';
-import { Validator, type ValidationReport } from '@memberjunction/loom-engine';
+import { Validator, readEntityMetadata, type ValidationReport, type GateResult } from '@memberjunction/loom-engine';
 
 export interface ValidateCommandOptions {
   project: string;
   data?: string;
-}
-
-function isEnoent(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && 'code' in err && (err as { code: string }).code === 'ENOENT';
 }
 
 export async function executeValidate(options: ValidateCommandOptions): Promise<ValidationReport> {
@@ -21,34 +16,37 @@ export async function executeValidate(options: ValidateCommandOptions): Promise<
   console.log(`🧵 Loom Validate: Verifying dataset for '${loaded.domain.name}'`);
   console.log(`   Source: ${dataDir}`);
 
-  // Load all metadata records
+  // Load all metadata records via MetadataSync format reader and enforce format gates
   const records: Record<string, Record<string, unknown>[]> = {};
+  const syncGates: GateResult[] = [];
 
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
-    const filePath = path.join(dataDir, entityCfg.pack, `${entityName}.json`);
+    const entityDir = path.join(dataDir, entityCfg.pack, entityName);
     try {
-      const content = await fs.readFile(filePath, 'utf8');
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(content);
-      } catch (jsonErr) {
-        throw new Error(`Invalid JSON syntax in metadata file '${filePath}': ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`);
-      }
-      if (!Array.isArray(parsed) || !parsed.every((item): item is Record<string, unknown> => typeof item === 'object' && item !== null && !Array.isArray(item))) {
-        throw new Error(`Metadata file '${filePath}' must contain a JSON array of record objects`);
-      }
-      records[entityName] = parsed;
-    } catch (err) {
-      if (!isEnoent(err)) {
-        throw err;
-      }
+      const { records: unwrapped } = await readEntityMetadata(entityDir, entityCfg.entityName);
+      records[entityName] = unwrapped;
+      syncGates.push({
+        name: `MetadataSync: ${entityName} (.mj-sync.json & record wrapper)`,
+        category: 'schema',
+        passed: true,
+        message: `Entity directory '${entityCfg.pack}/${entityName}' conforms to MetadataSync specifications`,
+        populationCount: unwrapped.length,
+      });
+    } catch (syncErr) {
       records[entityName] = [];
+      syncGates.push({
+        name: `MetadataSync: ${entityName} (.mj-sync.json & record wrapper)`,
+        category: 'schema',
+        passed: false,
+        message: syncErr instanceof Error ? syncErr.message : String(syncErr),
+        populationCount: 0,
+      });
     }
   }
 
   const totalLoaded = Object.values(records).reduce((sum, r) => sum + r.length, 0);
-  if (totalLoaded === 0) {
-    throw new Error(`Loom Validate: No records found in '${dataDir}'. Dataset is empty or directory does not exist.`);
+  if (totalLoaded === 0 && syncGates.every((g) => !g.passed)) {
+    console.error(`❌ MetadataSync Ingestibility Failed: Directory structure missing or malformed in '${dataDir}'.`);
   }
 
   // Compile factor contracts from ruleset modules
@@ -59,6 +57,15 @@ export async function executeValidate(options: ValidateCommandOptions): Promise<
   const validator = new Validator();
   const heroes = loaded.heroesManifest?.heroes ?? [];
   const report = validator.Validate(loaded.domain, records, allFactors, heroes);
+
+  // Prepend MetadataSync gates
+  report.gates.unshift(...syncGates);
+  report.totalGates += syncGates.length;
+  report.passedCount += syncGates.filter((g) => g.passed).length;
+  report.failedCount += syncGates.filter((g) => !g.passed).length;
+  if (syncGates.some((g) => !g.passed)) {
+    report.passed = false;
+  }
 
   console.log(`\nValidation Report:`);
   console.log(`------------------------------------------------------------`);

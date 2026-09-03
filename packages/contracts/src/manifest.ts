@@ -14,11 +14,8 @@ export const ProjectManifestSchema = z.object({
   cycleUnit: z.enum(['year', 'week', 'month', 'cycle']).default('year'),
   output: z.object({
     metadataDir: z.string().default('./metadata'),
-    migrationsDir: z.string().optional(),
-    sqlDialect: z.enum(['sqlserver', 'postgres']).default('sqlserver'),
-  }).default({
+  }).strict().default({
     metadataDir: './metadata',
-    sqlDialect: 'sqlserver',
   }),
 });
 export type ProjectManifest = z.infer<typeof ProjectManifestSchema>;

@@ -116,6 +116,7 @@ describe('CLI Record Generator: generateEntityRecord', () => {
       entities: {
         Parent: {
           name: 'Parent',
+          entityName: 'Parent',
           targetTable: 'Parent',
           schema: 'dbo',
           pack: 'core',
@@ -127,6 +128,7 @@ describe('CLI Record Generator: generateEntityRecord', () => {
         },
         Child: {
           name: 'Child',
+          entityName: 'Child',
           targetTable: 'Child',
           schema: 'dbo',
           pack: 'core',

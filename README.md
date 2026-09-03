@@ -74,7 +74,7 @@ Real businesses do not drop their database and re-seed every quarter; they accum
 ### 3. Sole Delivery Invariant: Exclusive Metadata Ingestion (BaseEntity Lifecycle)
 Loom enforces an absolute architectural invariant: **Metadata is the sole, exclusive engine for synthetic data delivery.**
 - All simulated records are emitted as declarative MemberJunction metadata trees (`metadata/` JSON format) and ingested via `mj sync push`.
-- **Zero Direct-SQL Bypasses**: Direct SQL migrations (`INSERT INTO ...`) for transactional data are strictly prohibited. In MemberJunction, operational integrity relies on strongly typed `BaseEntity` subclasses (`Record.Save()`), which execute server-side validation rules, permission checks, custom lifecycle overrides, status transitions, vector embeddings, and audit trails. Bypassing `BaseEntity` via direct SQL produces silent corruption and breaks platform guarantees. Every synthetic record in Loom executes the exact same pipeline as live production user activity.
+- **Zero Direct-SQL Bypasses**: Direct transactional SQL execution for synthetic data delivery is strictly prohibited. In MemberJunction, operational integrity relies on strongly typed `BaseEntity` subclasses, which execute server-side validation rules, permission checks, custom lifecycle overrides, status transitions, vector embeddings, and audit trails. Bypassing `BaseEntity` produces silent corruption and breaks platform guarantees. All synthetic data ingestion goes through `BaseEntity.Save()` (validation, hooks, audit).
 
 ### 4. Fully Metadata- & Configuration-Driven
 - The Loom engine contains **zero hardcoded domain procedures**.
@@ -130,19 +130,16 @@ Loom provides an ergonomic, scriptable CLI designed for both human engineers and
 
 ```bash
 # Generate complete world baseline from declarative metadata
-loom build --project=morecheese --seed=42 --release=2026-09-01
+loom build --project=projects/enterprise --seed=42 --release=2026-09-02
 
 # Advance simulation by one cycle (Accumulation mode)
-loom accumulate --project=morecheese --prior-state=./metadata --weeks=1
+loom accumulate --project=projects/enterprise --prior-state=./metadata --weeks=1
 
 # Execute 300+ statistical, referential, and factor verification gates
-loom validate --project=morecheese
+loom validate --project=projects/enterprise
 
 # Inspect causal graph and factor dependencies
-loom inspect factors --project=morecheese
-
-# Emit delta metadata sync JSON and versioned Skyway migrations
-loom emit migrations --output=./migrations
+loom inspect factors --project=projects/enterprise
 ```
 
 ---
@@ -163,7 +160,7 @@ Loom includes an autonomous **Agent Skill** designed to run recurring weekly sim
 | Tool | Focus | Role in Ecosystem |
 |---|---|---|
 | **`Loom`** | Data & World Simulation | Weaves causal, deterministic enterprise data and living operational history |
-| **`Skyway`** | Database Migrations | TypeScript-native, multi-dialect migration engine (SQL Server & PostgreSQL) managing schema DDL, versioning, and transactional execution |
+| **`MetadataSync`** | Declarative Data Sync | Bidirectional declarative metadata and seed synchronization for MemberJunction |
 | **`Forge`** | Database Administration IDE | AI-native SQL Server & database administration client for macOS and Windows — query, explore, visualize, and manage data |
 | **`Sonar`** | Engagement Scoring & Data Quality | Declarative engagement scoring, health monitoring, and anomaly detection across entities with explainable factor rubrics |
 

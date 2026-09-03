@@ -32,7 +32,7 @@ Real organizations do not drop their database and re-seed every quarter; they ac
 - Loom treats accumulation as a first-class engine primitive:
   $$\text{Loom: } (\text{domainConfig}, \text{seed}, \text{releaseDate}, \text{ruleset}, \text{priorState}) \longrightarrow \text{deltaRecords}$$
 - Each simulation cycle ingests the committed prior state (`metadata/` JSON tree), respects continuity boundaries (active committee terms, open billing tickets, pending renewal grace periods), and emits **only new records**.
-- Every delta is naturally a pure, additive Skyway migration (`spCreate`), eliminating destructive wipe scripts and massive migration captures.
+- Every delta is naturally a pure, additive MemberJunction metadata sync diff, ingested via `mj sync push` and executing `BaseEntity` lifecycles.
 
 ### 1.4 Canonical Engine Invariants
 The Loom simulation engine strictly preserves seven architectural invariants across all packages, seeds, and execution modes:
@@ -115,7 +115,7 @@ loom/
 │   │   │   ├── identity/     # Deterministic uuidv5 namespace management
 │   │   │   ├── accumulation/ # Prior state diffing and delta calculation
 │   │   │   ├── validation/   # Bidirectional factor and referential gate engine
-│   │   │   ├── emitters/     # Metadata JSON and Skyway SQL emitters
+│   │   │   ├── emitters/     # MetadataSync JSON emitters
 │   │   │   └── index.ts
 │   │   └── package.json
 │   │
@@ -196,7 +196,7 @@ Loom natively targets the solid BizApps schemas in the MemberJunction ecosystem:
 Loom codifies the clean separation between causal data generation and in-app operational residue:
 - **No Synthetic JSON Guesswork**: In-app artifacts (Explorer dashboards, saved query views, agent conversation histories, pinned lists) are created natively in the UI by demo authors and personas.
 - **`mj sync pull` Extraction**: Running `mj sync pull` captures those live database records into `/metadata/**`.
-- **Versioned Packaging**: The committed metadata files are packaged into standard Open App migrations (`V*__Metadata_Sync.sql`) alongside Loom's data migrations.
+- **Declarative Metadata Delivery**: The committed metadata files are pushed directly through MemberJunction `MetadataSync` (`mj sync push`). Direct SQL data migrations are superseded by Invariant 8.
 
 ---
 
@@ -249,7 +249,7 @@ sequenceDiagram
 - [x] Implement `FactorEngine` (latent dial generation via Cholesky decomposition and factor contract evaluation).
 - [x] Implement `IdentityService` (deterministic `uuidv5` namespace registration).
 - [x] Implement `Validator` (referential closure and empirical factor tolerance evaluation).
-- [x] Implement multi-target emitters (`metadata/` JSON tree and Skyway SQL).
+- [x] Implement MetadataSync emitter (`metadata/` JSON tree with `.mj-sync.json` and `{ primaryKey, fields }` record wrappers; SQL emitter superseded by Invariant 8).
 
 ### Phase 3: The `loom` CLI (`@memberjunction/loom-cli`)
 - [x] Implement `loom build` (full baseline generation).
@@ -260,7 +260,7 @@ sequenceDiagram
 ### Phase 4: Accumulation Engine & Delta Resolver
 - [x] Implement stateful prior-state reader and continuity boundary tracker (`Accumulator`).
 - [x] Implement `loom accumulate` CLI command.
-- [x] Implement delta emitter producing versioned Skyway `spCreate` migrations.
+- [x] Implement delta emitter producing versioned metadata record diffs (SQL spCreate migrations superseded by Invariant 8).
 - [x] Verify multi-cycle accumulation on `projects/fixture`.
 
 ### Phase 5: More Cheese Migration to Loom

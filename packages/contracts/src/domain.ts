@@ -33,6 +33,7 @@ export type ForeignKeyConfig = z.infer<typeof ForeignKeyConfigSchema>;
 
 export const EntityConfigSchema = z.object({
   name: z.string().min(1),
+  entityName: z.string().min(1),
   targetTable: z.string().min(1),
   schema: z.string().min(1),
   pack: z.string().min(1),
@@ -139,6 +140,7 @@ export function createDomainConfigFromMJEntities(
 
     entityConfigs[entity.Name] = {
       name: entity.Name,
+      entityName: entity.Name,
       targetTable: entity.BaseTable ?? entity.Name,
       schema: entity.SchemaName ?? 'dbo',
       pack: defaultPack,

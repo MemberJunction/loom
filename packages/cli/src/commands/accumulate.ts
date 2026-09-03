@@ -6,7 +6,7 @@ import {
   IdentityService,
   createRng,
   emitMetadata,
-  emitSkywayMigration,
+  readEntityMetadata,
   FactorEngine,
   StateLadderEngine,
 } from '@memberjunction/loom-engine';
@@ -23,7 +23,6 @@ export interface AccumulateCommandOptions {
   seed?: string;
   asOf?: string;
   output?: string;
-  migrationsOutput?: string;
 }
 
 function advanceDateByWeeks(baseDateStr: string, weeks: number): string {
@@ -39,11 +38,6 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
   const outputDir = options.output
     ? path.resolve(process.cwd(), options.output)
     : path.resolve(loaded.projectDir, loaded.manifest.output.metadataDir);
-  const migrationsDir = options.migrationsOutput
-    ? path.resolve(process.cwd(), options.migrationsOutput)
-    : loaded.manifest.output.migrationsDir
-      ? path.resolve(loaded.projectDir, loaded.manifest.output.migrationsDir)
-      : undefined;
 
   // 1. Read prior checkpoint.json
   const checkpointPath = path.join(priorDir, 'checkpoint.json');
@@ -84,24 +78,15 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
   // 2. Read existing entity records from priorState
   const priorRecords: Record<string, Record<string, unknown>[]> = {};
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
-    const filePath = path.join(priorDir, entityCfg.pack, `${entityName}.json`);
+    const entityDir = path.join(priorDir, entityCfg.pack, entityName);
     try {
-      const content = await fs.readFile(filePath, 'utf8');
-      try {
-        const parsed = JSON.parse(content);
-        if (!Array.isArray(parsed)) {
-          throw new Error(`Expected array of records in '${filePath}', got ${typeof parsed}`);
-        }
-        priorRecords[entityName] = parsed;
-      } catch (jsonErr) {
-        throw new Error(
-          `Accumulate: failed to parse '${filePath}': ${
-            jsonErr instanceof Error ? jsonErr.message : String(jsonErr)
-          }`
-        );
-      }
+      const { records: unwrapped } = await readEntityMetadata(entityDir, entityCfg.entityName);
+      priorRecords[entityName] = unwrapped;
     } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (
+        (err as NodeJS.ErrnoException).code === 'ENOENT' ||
+        (err instanceof Error && err.message.includes("Missing required '.mj-sync.json'"))
+      ) {
         priorRecords[entityName] = [];
       } else {
         throw err;
@@ -348,21 +333,6 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     data: currentRecords,
   });
 
-  // 9. Emit additive Skyway delta migration with status transitions (if migrationsDir configured)
-  let migrationPath: string | undefined;
-  if (migrationsDir) {
-    const migrationVersion = `${asOfDate.replace(/-/g, '')}${String(cycleIndex).padStart(4, '0')}`;
-    migrationPath = await emitSkywayMigration({
-      outputDir: migrationsDir,
-      version: migrationVersion,
-      description: `Delta_Cycle_${cycleIndex}_${loaded.domain.name}`,
-      domain: loaded.domain,
-      data: diff.delta.generatedRecords,
-      statusTransitions,
-    });
-    console.log(`   ✓ Emitted Skyway delta migration: ${path.basename(migrationPath)}`);
-  }
-
   // 10. Update simulation checkpoint.json with advanced continuity
   const totalRecordCounts: Record<string, number> = {};
   const activeEntityIds: Record<string, string[]> = {};
@@ -399,9 +369,6 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     'utf8'
   );
 
-  if (migrationPath) {
-    console.log(`   ✓ Emitted additive migration: ${path.basename(migrationPath)}`);
-  }
   console.log(`   ✓ Saved checkpoint to: ${path.join(outputDir, 'checkpoint.json')}`);
   console.log(`✨ Accumulation complete.`);
 }

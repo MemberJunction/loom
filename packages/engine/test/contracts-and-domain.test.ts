@@ -30,6 +30,7 @@ describe('Plan 02 Strict Schemas and Domain Validation (Gate 0 / L4a)', () => {
     entities: {
       Person: {
         name: 'Person',
+        entityName: 'Test: Persons',
         targetTable: 'Person',
         schema: 'test',
         pack: 'core',
@@ -45,6 +46,7 @@ describe('Plan 02 Strict Schemas and Domain Validation (Gate 0 / L4a)', () => {
       },
       CommitteeMember: {
         name: 'CommitteeMember',
+        entityName: 'Test: Committee Members',
         targetTable: 'CommitteeMember',
         schema: 'test',
         pack: 'core',
@@ -216,6 +218,7 @@ describe('Plan 02 Strict Schemas and Domain Validation (Gate 0 / L4a)', () => {
       entities: {
         Parent: {
           name: 'Parent',
+          entityName: 'Test: Parents',
           targetTable: 'Parent',
           schema: 'test',
           pack: 'core',
@@ -225,6 +228,7 @@ describe('Plan 02 Strict Schemas and Domain Validation (Gate 0 / L4a)', () => {
         },
         Child: {
           name: 'Child',
+          entityName: 'Test: Children',
           targetTable: 'Child',
           schema: 'test',
           pack: 'core',
@@ -278,6 +282,7 @@ describe('Plan 02 Strict Schemas and Domain Validation (Gate 0 / L4a)', () => {
       entities: {
         Person: {
           name: 'Person',
+          entityName: 'Test: Persons',
           targetTable: 'Person',
           schema: 'dbo',
           pack: 'core',
@@ -289,6 +294,7 @@ describe('Plan 02 Strict Schemas and Domain Validation (Gate 0 / L4a)', () => {
         },
         CommitteeMember: {
           name: 'CommitteeMember',
+          entityName: 'Test: Committee Members',
           targetTable: 'CommitteeMember',
           schema: 'dbo',
           pack: 'core',
