@@ -3,7 +3,7 @@
 **Universal Metadata-Driven World Modeling for MemberJunction**
 
 Version 2.0 · September 2026  
-Status: Proposed (Round 1 Review Incorporated)  
+Status: Proposed (Round 2 Review Incorporated)  
 Target Repository: `MemberJunction/loom`  
 Flagship Consumer: `MemberJunction/more-cheese`  
 Companion PR: [MemberJunction/more-cheese#20](https://github.com/MemberJunction/more-cheese/pull/20)
@@ -14,7 +14,7 @@ Companion PR: [MemberJunction/more-cheese#20](https://github.com/MemberJunction/
 
 ### 1.1 The Challenge
 To deliver compelling demonstrations and robust analytical/AI training sets, business data simulations require two distinct operational modes:
-1. **Scriptable Predictability ("Hero Personas")**: A demonstration narrative requires specific individuals with guaranteed storylines (e.g., a board chair rising through the ranks, a customer churning following an employer shutdown, a practitioner mid-way through a multi-tier credential, or an account in a 14-day renewal grace window). These records cannot be left to unseeded or random rolls.
+1. **Scriptable Predictability ("Hero Personas")**: A demonstration narrative requires specific individuals with guaranteed storylines (e.g., an account executive rising through account tiers, a customer churning following a corporate restructuring, an account mid-way through an onboarding cycle, or an account in a renewal grace window). These records cannot be left to unseeded or random rolls.
 2. **Emergent Macro Distribution ("The Calibrated Crowd")**: Around the heroes, thousands of background records must exhibit realistic macroeconomic behavior over multi-cycle history (e.g., an intake curve, calibrated retention targets, tenure curves, churn shocks during external macro events, and authentic reactivation rates).
 
 ### 1.2 The Absolute Engine Boundary: 100% Schema-Agnostic
@@ -23,26 +23,26 @@ Loom must **never** hardcode domain vocabulary ("Board of Directors", "Cheesemak
 > **The Enterprise Test**: Every contract key defined in this plan must be authorable by `projects/enterprise` (`Company`, `Product`, `Member`, `Subscription`, `OrderHeader`, `OrderLine`, `Payment`) without renaming a single key. Domain vocabulary appears strictly as **values** in a consumer's authored JSON, never as **keys** in Loom's Zod schemas.
 
 ### 1.3 Loom Engine Invariants
-The simulation engine strictly adheres to the following foundational invariants:
-- **Invariant 1 (Deterministic Identity)**: Primary keys are always derived deterministically via `IdentityService.MintId(domain, entity, businessKeys)` (uuidv5). Same business key values always yield the exact same UUID across all cycles and seeds.
-- **Invariant 2 (No Unseeded Dice)**: Generation is 100% deterministic and reproducible. personal pseudo-random streams are keyed via `seed:entity:id:cycle`.
+The simulation engine strictly adheres to the canonical invariant list defined in the [Loom Architecture Roadmap](loom-architecture-and-implementation-plan.md):
+- **Invariant 1 (Deterministic Identity)**: Primary keys are derived deterministically via `IdentityService.MintId(domain, entity, businessKeys)` (uuidv5). Identical business key values yield the exact same UUID across all cycles and seeds.
+- **Invariant 2 (No Unseeded Dice)**: Generation is 100% deterministic and reproducible. Personal pseudo-random streams are keyed via `seed:entity:id:cycle`.
 - **Invariant 3 (No Index Overwriting)**: Heroes are **additive** records minted from business keys, never index overwrites of crowd slots. Adding or removing a hero changes no other generated record in the dataset.
 - **Invariant 4 (The LLM Boundary)**: Runtime simulation is strictly zero-LLM math. LLM capabilities are confined entirely to an authoring-time companion package (`@memberjunction/loom-author`) that outputs validated JSON metadata.
 - **Invariant 5 (Deep Immutability)**: Emitted transaction history from earlier cycles is never mutated in subsequent cycles.
-- **Invariant 7 (Factor Recovery)**: Statistical regression over emitted crowd data recovers authored $\beta$ weights within defined tolerance bounds ($\pm 0.15$ at $N \ge 5000$).
+- **Invariant 6 (Factor Recovery)**: Statistical logistic regression over emitted crowd data recovers authored $\beta$ weights within defined tolerance bounds ($\pm 0.15$ at $N \ge 5000$).
 
 ---
 
-## 2. Declarative Metadata Contracts
+## 2. Declarative Metadata Architecture
 
 ```mermaid
 flowchart TD
     subgraph AuthoringPhase ["1. Authoring Time (@memberjunction/loom-author)"]
-        ES["Entity Schema & Banks<br/>(Domain Manifest)"] --> LS["loom suggest / loom author<br/>(LLM World Builder via @memberjunction/ai)"]
-        LS --> HF["heroes.json<br/>(Business Keys & Predicate Pins)"]
-        LS --> MF["motifs.json<br/>(Generic Trajectories & Quotas)"]
+        ES["Entity Schema & Banks<br/>(Domain Manifest)"] --> LS["loom-author suggest<br/>(LLM World Builder via @memberjunction/ai)"]
+        LS --> HF["heroes.json<br/>(Business Keys & Feature Pins)"]
+        LS --> MF["motifs.json<br/>(Trajectories, Quotas & Eras)"]
         LS --> LF["ladders.json<br/>(State Progression Machines)"]
-        LS --> EF["eras.json<br/>(Macro Shocks & Intercept Deltas)"]
+        LS --> EF["eras.json<br/>(Macro Shocks: all vs tagged)"]
         LS --> RF["ruleset/common.json<br/>(Factor Contracts & Targets)"]
     end
 
@@ -61,7 +61,7 @@ flowchart TD
     end
 
     subgraph Outputs ["3. Emitters & Validators"]
-        GEN --> VAL["loom validate<br/>(Gate 0: Pins Evaluated True)"]
+        GEN --> VAL["loom validate<br/>(Gate 0: Pins Evaluated True via FeatureCompiler)"]
         GEN --> MSYNC["MetadataSync JSON Emitter<br/>(mj sync push)"]
         GEN --> SKY["Topological Skyway SQL Emitter<br/>(PostgreSQL & SQL Server)"]
     end
@@ -69,26 +69,33 @@ flowchart TD
 
 ---
 
-## 3. Detailed Zod Contract Specifications
+## 3. Detailed Zod Contract Specifications (Enterprise Testbed)
+
+To guarantee compliance with the Enterprise Test, all examples below are written strictly against the benchmark schema in `projects/enterprise` (`Company`, `Product`, `Member`, `Subscription`, `OrderHeader`, `OrderLine`, `Payment`). These exact files will be committed under `projects/enterprise/ruleset/` in Phase 02.4.
 
 ### 3.1 Hero Personas Contract (`heroes.json`)
-Heroes do not carry hardcoded `primaryKey` values. They declare their business keys, and Loom mints their IDs. Their `pins` are checkable predicates over schema fields or named factor outcomes.
+Heroes specify their entity, business keys, fixed fields, birth cycle, and checkable `pins`. 
+
+Pins support three kinds:
+1. `kind: "field"`: Single field equality/comparison on the entity.
+2. `kind: "outcome"`: Asserting the boolean result of a named factor contract in a cycle.
+3. `kind: "feature"`: **Reuses Loom's `FeatureQuerySchema`** (`from`, `path`, `where`, `field`, `aggregation: count|sum|avg|min|max|exists`) evaluated via `compileFeature`. Supports operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `exists`, and `withinCyclesOfAsOf`.
 
 ```json
 {
   "$schema": "https://memberjunction.org/schemas/loom/heroes.v1.json",
   "heroes": [
     {
-      "heroKey": "HERO-001",
+      "heroKey": "HERO-ENT-001",
       "entity": "Member",
       "businessKeys": {
-        "Email": "elena.rodriguez@crowfeathercreamery.example.com"
+        "Email": "sarah.chen@acme-corp.example.com"
       },
       "fixedFields": {
-        "FirstName": "Elena",
-        "LastName": "Rodriguez",
-        "Title": "Head Cheesemaker",
-        "CompanyID": "@lookup:Company:ORG-0042"
+        "FirstName": "Sarah",
+        "LastName": "Chen",
+        "Title": "VP of Operations",
+        "CompanyID": "@lookup:Company:COMP-0001"
       },
       "birthCycle": 2021,
       "latentDials": {
@@ -97,63 +104,76 @@ Heroes do not carry hardcoded `primaryKey` values. They declare their business k
       },
       "ladderEntries": [
         {
-          "ladderKey": "governance-ladder",
-          "state": "CommitteeMember",
-          "enterCycle": 2022,
-          "exitCycle": 2024
+          "ladderKey": "subscription-tier-ladder",
+          "state": "Standard",
+          "enterCycle": 2021,
+          "exitCycle": 2023
         },
         {
-          "ladderKey": "governance-ladder",
-          "state": "BoardDirector",
-          "enterCycle": 2024,
+          "ladderKey": "subscription-tier-ladder",
+          "state": "Enterprise",
+          "enterCycle": 2023,
           "exitCycle": 2026
         }
       ],
       "pins": [
         {
           "kind": "field",
-          "field": "Status",
+          "field": "Title",
           "op": "eq",
-          "value": "Active"
+          "value": "VP of Operations"
         },
         {
           "kind": "outcome",
           "factor": "factor-membership-renewal",
           "cycle": 2025,
           "value": true
+        },
+        {
+          "kind": "feature",
+          "feature": {
+            "from": "OrderHeader",
+            "where": { "Cycle": 2025 },
+            "aggregation": "count"
+          },
+          "op": "gte",
+          "value": 2
         }
       ]
     },
     {
-      "heroKey": "HERO-002",
+      "heroKey": "HERO-ENT-002",
       "entity": "Member",
       "businessKeys": {
-        "Email": "danielle.okafor@mistlebrook.example.com"
+        "Email": "david.ross@globex.example.com"
       },
       "fixedFields": {
-        "FirstName": "Danielle",
-        "LastName": "Okafor",
-        "Title": "Dairy Operations Specialist",
-        "CompanyID": "@lookup:Company:ORG-0089"
+        "FirstName": "David",
+        "LastName": "Ross",
+        "Title": "Procurement Lead",
+        "CompanyID": "@lookup:Company:COMP-0002"
       },
       "birthCycle": 2022,
       "latentDials": {
         "theta": 0.2,
         "phi": -0.8
       },
-      "eras": ["era-dairy-crisis-2025"],
+      "eras": ["era-recession-2023"],
       "pins": [
-        {
-          "kind": "field",
-          "field": "Status",
-          "op": "eq",
-          "value": "Lapsed"
-        },
         {
           "kind": "outcome",
           "factor": "factor-membership-renewal",
-          "cycle": 2025,
+          "cycle": 2023,
           "value": false
+        },
+        {
+          "kind": "feature",
+          "feature": {
+            "from": "Subscription",
+            "field": "EndDate"
+          },
+          "op": "withinCyclesOfAsOf",
+          "value": [0, 1]
         }
       ]
     }
@@ -162,28 +182,28 @@ Heroes do not carry hardcoded `primaryKey` values. They declare their business k
 ```
 
 ### 3.2 Motifs Contract (`motifs.json`)
-Motifs define parameterized trajectories and quotas stamped onto subsets of the crowd population:
+Motifs specify quotas, birth cycles, latent trajectories (positive or negative wander), child interaction rates, and era participation:
 
 ```json
 {
   "$schema": "https://memberjunction.org/schemas/loom/motifs.v1.json",
   "motifs": [
     {
-      "motifKey": "leadership-growth-track",
+      "motifKey": "enterprise-expansion-track",
       "targetEntity": "Member",
       "quota": { "mode": "count", "value": 16 },
-      "birthCycles": [2018, 2019, 2020],
+      "birthCycles": [2021, 2022],
       "latentConstraints": {
         "theta": { "min": 1.2, "max": 2.2 },
         "phi": { "min": 0.2, "max": 1.5 }
       },
       "ladderProgression": {
-        "ladderKey": "governance-ladder",
-        "initialState": "CommitteeMember"
+        "ladderKey": "subscription-tier-ladder",
+        "initialState": "Standard"
       }
     },
     {
-      "motifKey": "rising-star-trajectory",
+      "motifKey": "high-volume-buyer-trajectory",
       "targetEntity": "Member",
       "quota": { "mode": "percentage", "value": 0.05, "rounding": "round" },
       "latentTrajectory": {
@@ -192,26 +212,24 @@ Motifs define parameterized trajectories and quotas stamped onto subsets of the 
       },
       "childRates": [
         {
-          "entity": "CourseEnrollment",
-          "perCycle": { "min": 1, "max": 3 }
+          "entity": "OrderHeader",
+          "perCycle": { "min": 2, "max": 6 }
         }
       ]
     },
     {
-      "motifKey": "corporate-ghost-autorenew",
+      "motifKey": "quiet-churn-casualty",
       "targetEntity": "Member",
       "quota": { "mode": "count", "value": 25 },
-      "latentConstraints": {
-        "theta": { "min": -2.0, "max": -0.8 },
-        "phi": { "min": 1.0, "max": 2.5 }
-      },
-      "fixedFields": {
-        "AutoRenew": true
+      "eras": ["era-recession-2023"],
+      "latentTrajectory": {
+        "dial": "theta",
+        "deltaPerCycle": -0.40
       },
       "factorOverrides": [
         {
           "factor": "factor-membership-renewal",
-          "probability": 0.98
+          "probability": 0.05
         }
       ]
     }
@@ -220,82 +238,60 @@ Motifs define parameterized trajectories and quotas stamped onto subsets of the 
 ```
 
 ### 3.3 State Progression Ladders (`ladders.json`)
-Ladders are generic Markov state machines. They bind either to a field on the entity or to child-entity records (such as committee membership or subscription terms):
+Ladders model Markov state machines. They bind either directly to an entity field (e.g. `Tier` or `Status`) or to child-entity records (e.g. `Subscription` or `MembershipTerm`):
 
 ```json
 {
   "$schema": "https://memberjunction.org/schemas/loom/ladders.v1.json",
   "ladders": [
     {
-      "ladderKey": "governance-ladder",
+      "ladderKey": "subscription-tier-ladder",
       "entity": "Member",
       "binding": {
         "mode": "childEntity",
-        "childEntity": "CommitteeMembership",
+        "childEntity": "Subscription",
         "foreignKey": "MemberID",
-        "stateField": "Role",
-        "termField": "TermCycle"
+        "stateField": "Tier",
+        "termField": "Cycle"
       },
       "cohortShare": 0.5,
       "states": [
         {
-          "name": "CommitteeMember",
-          "capacity": 60,
-          "durationCycles": 2,
+          "name": "Trial",
+          "capacity": 200,
+          "durationCycles": 1,
           "prerequisites": {
-            "minCyclesSinceBirth": 1,
-            "dials": { "theta": { "min": 0.8 } }
+            "minCyclesSinceBirth": 0
           },
           "effects": [
-            { "factor": "factor-membership-renewal", "beta": 1.2 }
+            { "factor": "factor-membership-renewal", "beta": 0.5 }
           ]
         },
         {
-          "name": "BoardDirector",
-          "capacity": 12,
-          "durationCycles": 2,
+          "name": "Standard",
+          "capacity": 100,
+          "durationCycles": 4,
           "prerequisites": {
-            "priorState": "CommitteeMember",
+            "priorState": "Trial",
+            "dials": { "theta": { "min": 0.5 } }
+          },
+          "effects": [
+            { "factor": "factor-membership-renewal", "beta": 1.5 }
+          ]
+        },
+        {
+          "name": "Enterprise",
+          "capacity": 20,
+          "durationCycles": 4,
+          "prerequisites": {
+            "priorState": "Standard",
             "dials": { "theta": { "min": 1.2 } }
           },
           "effects": [
-            { "factor": "factor-membership-renewal", "beta": 3.0 }
-          ]
-        },
-        {
-          "name": "ChairElect",
-          "capacity": 1,
-          "durationCycles": 1,
-          "prerequisites": {
-            "priorState": "BoardDirector"
-          },
-          "effects": [
-            { "factor": "factor-membership-renewal", "beta": 4.0 }
-          ]
-        },
-        {
-          "name": "BoardChair",
-          "capacity": 1,
-          "durationCycles": 2,
-          "prerequisites": {
-            "priorState": "ChairElect"
-          },
-          "effects": [
-            { "factor": "factor-membership-renewal", "beta": 4.5 }
-          ]
-        },
-        {
-          "name": "ImmediatePastChair",
-          "capacity": 1,
-          "durationCycles": 2,
-          "prerequisites": {
-            "priorState": "BoardChair"
-          },
-          "effects": [
-            { "factor": "factor-membership-renewal", "beta": 2.5 }
+            { "factor": "factor-membership-renewal", "beta": 3.5 }
           ],
           "exitEffects": [
-            { "dial": "theta", "delta": 0.5 }
+            { "dial": "theta", "delta": 0.3 }
           ]
         }
       ]
@@ -305,20 +301,34 @@ Ladders are generic Markov state machines. They bind either to a field on the en
 ```
 
 ### 3.4 Eras & Shocks Contract (`eras.json`)
-Eras provide macroeconomic shifts applied to factor baseline intercepts and volume multipliers over specific cycle spans:
+Eras provide macroeconomic shifts applied to factor baseline intercepts and volume multipliers over specific cycle spans. The `scope` determines applicability:
+- `"all"`: Applies globally to all entities in the simulation during the active cycles.
+- `"tagged"`: Applies only to entities tagged with the era key (either individually on a hero via `eras: ["..."]` or cohort-wide on a motif via `eras: ["..."]`).
 
 ```json
 {
   "$schema": "https://memberjunction.org/schemas/loom/eras.v1.json",
   "eras": [
     {
-      "eraKey": "era-dairy-crisis-2025",
-      "cycles": [2025],
+      "eraKey": "era-recession-2023",
+      "scope": "all",
+      "cycles": [2023],
       "factorAdjustments": [
         { "factor": "factor-membership-renewal", "deltaIntercept": -0.85 }
       ],
       "volumeMultipliers": [
         { "entity": "OrderHeader", "multiplier": 0.70 }
+      ]
+    },
+    {
+      "eraKey": "era-supply-disruption",
+      "scope": "tagged",
+      "cycles": [2024],
+      "factorAdjustments": [
+        { "factor": "factor-membership-renewal", "deltaIntercept": -1.2 }
+      ],
+      "volumeMultipliers": [
+        { "entity": "OrderHeader", "multiplier": 0.50 }
       ]
     }
   ]
@@ -340,29 +350,32 @@ The retrospective engine reconstructs operational history across $N$ historical 
 4. **Solving Baseline Intercept (The Tide)**:
    The engine reuses `calibrateIntercept(scores, targetRate)` (Newton-Raphson with bisection fallback) to determine intercept $B_c$ such that:
    $$\frac{1}{|S_c|} \sum_{i \in S_c} \sigma(\text{Score}_{i, c} + B_c) = \text{TargetRate}_c$$
-5. **Texture Band Gate**:
-   An explicit `texture` tolerance band $[\text{Rate}_{\min}, \text{Rate}_{\max}]$ ensures year-to-year macro outcomes wander naturally rather than forming a flat line.
-6. **Reactivation Pool**:
-   Lapsed records enter a dormant pool. Reactivation decisions are evaluated via an authored factor (e.g. `factor-reactivation`) conditioned on feature `{ from: 'self', field: 'dormantCycles' }`.
+5. **Reactivation Pool & Continuity Fields**:
+   Lapsed records transition to a dormant pool. Reactivation decisions are evaluated via an authored factor (e.g. `factor-reactivation`). The feature grammar can reference a fixed set of **engine-maintained continuity fields** exposed by `ContinuityState`:
+   - `birthCycle`: Cycle in which entity was minted.
+   - `cyclesSinceBirth`: Total elapsed cycles since birth (`currentCycle - birthCycle`).
+   - `dormantCycles`: Consecutive inactive cycles since last active state.
+   - `currentLadderState`: The entity's active state in each bound ladder (or `null`).
+   - `tenureInCurrentLadderState`: Consecutive cycles in the active ladder state.
 
 ---
 
 ## 5. Authoring-Time AI Package (`@memberjunction/loom-author`)
 
 ### 5.1 Clean Package Architecture
-- **Package Isolation**: Kept in `@memberjunction/loom-author`. Neither `@memberjunction/loom-engine` nor `@memberjunction/loom-cli` carry LLM dependencies.
+- **Package Isolation**: Kept strictly in `@memberjunction/loom-author`. Neither `@memberjunction/loom-engine` nor `@memberjunction/loom-cli` carry LLM dependencies.
 - **Provider Abstraction**: Implements MemberJunction's native AI abstraction (`@memberjunction/ai`) rather than raw vendor SDKs.
 - **Consumer Bank Inputs**: Cultural names, geographic coordinates, and catalogs are consumer-supplied data files loaded by the authoring tool, never bundled into Loom core.
 
 ### 5.2 CLI Workflow
 ```bash
 loom-author suggest \
-  --project ./data \
+  --project ./projects/enterprise \
   --entity Member \
   --target heroes \
   --count 16 \
-  --theme "Artisan producers, buyers, safety trainers, judges" \
-  --out ./data/ruleset/heroes.json
+  --theme "B2B enterprise buyers, procurement managers, operations leads" \
+  --out ./projects/enterprise/ruleset/heroes.json
 ```
 
 ---
@@ -370,20 +383,29 @@ loom-author suggest \
 ## 6. Verification Gates & Execution Roadmap
 
 ### Automated Verification Gates
-- **Gate 0 (Hero Pins Evaluated)**: Every `pins` entry in `heroes.json` must evaluate to `true` during `loom validate`, failing the build if false, reported per hero per pin.
+- **Gate 0 (Hero Pins Evaluated True)**: Every `pins` entry in `heroes.json` (field, outcome, and feature predicates) must evaluate to `true` during `loom validate` using `compileFeature`, failing the build if false, reported per hero per pin.
 - **Gate 1 (Hero Determinism)**: Hero records are 100% byte-identical across any random seed.
 - **Gate 2 (Motif Quotas)**: Motif assignments match declared counts ($\pm 0$) and rounded percentages ($\pm 0$).
 - **Gate 3 (State Ladder Integrity)**: Zero gaps, zero overlapping terms, and 100% prerequisite compliance across all ladder transitions.
 - **Gate 4 (Factor Recovery)**: Statistical logistic regression over simulated history recovers authored $\beta$ weights within $\pm 0.15$ at $N \ge 5000$.
 - **Gate 5 (Dual-Dialect SQL Migrations)**: [MERGED in PR 4] Topological table ordering and valid transaction blocks in PostgreSQL and SQL Server.
 - **Gate 6 (Schema-Agnostic Enterprise Proof)**: `projects/enterprise` authors at least one hero, one motif, and one ladder with the exact same contracts, and passes all tests in CI.
+- **Gate 7 (Texture Band)**: For each factor with a declared `texture` band $[R_{\min}, R_{\max}]$, the realized per-cycle rate must fall inside the band for every cycle and must exhibit non-zero variance (never a flat series).
+
+---
+
+## 7. Non-Goals for Plan 02
+
+To preserve focus on delivering the core metadata contracts and retrospective simulation engine, the following capabilities are explicitly declared as non-goals for Plan 02:
+1. **Scenarios (Parameter Overlays via `--scenario <key>`)**: Deferred to Plan 03. Plan 02 establishes the foundational persona, motif, ladder, and retrospective unroll simulation. Parameter overlays (e.g. `--scenario decliningOrg` overriding baseline factor weights and macro era multipliers) layer cleanly on top once the core contracts exist.
+2. **Three Authoring Vocabularies (`liftPts` / `groupTarget` / `strength` compiled to $\beta$)**: Deferred to Plan 03 / `@memberjunction/loom-author`. Plan 02 standardizes on direct log-odds $\beta$ coefficients and target rates ($R_c$) calibrated via `calibrateIntercept`. High-level human unit compilation (`liftPts` $\to$ $\beta$) belongs in the authoring compiler layer.
 
 ---
 
 ### Implementation Phases (Roadmap Plan 02)
 - **Phase 02.1**: Zod metadata schemas in `@memberjunction/loom-contracts` (`heroes.ts`, `motifs.ts`, `ladders.ts`, `eras.ts`).
 - **Phase 02.2**: Engine execution modules (`HeroInjector`, `MotifSampler`, `StateLadderEngine`, `RetrospectiveUnroller`).
-- **Phase 02.3**: Validation engine integration (`loom validate` Gate 0, Gate 2, Gate 3, Gate 4).
+- **Phase 02.3**: Validation engine integration (`loom validate` Gate 0, Gate 2, Gate 3, Gate 4, Gate 7).
 - **Phase 02.4**: Enterprise testbed expansion (`projects/enterprise` hero, motif, ladder integration test).
-- **Phase 02.5**: Standalone authoring tooling package (`@memberjunction/loom-author` with `loom suggest`).
+- **Phase 02.5**: Standalone authoring tooling package (`@memberjunction/loom-author` with `loom-author suggest`).
 - **Phase 02.6**: Downstream integration and verification in `MemberJunction/more-cheese`.
