@@ -81,9 +81,7 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
   // 2. Read existing entity records from priorState
   const priorRecords: Record<string, Record<string, unknown>[]> = {};
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
-    const entityDir = syncFs.existsSync(path.join(priorDir, entityName))
-      ? path.join(priorDir, entityName)
-      : path.join(priorDir, entityCfg.pack, entityName);
+    const entityDir = path.join(priorDir, entityName);
 
     // Only swallow if the entity directory itself does not exist (new entity added to domain)
     if (!syncFs.existsSync(entityDir)) {

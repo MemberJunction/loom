@@ -47,9 +47,7 @@ export async function executeValidate(options: ValidateCommandOptions): Promise<
   }
 
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
-    const entityDir = fs.existsSync(path.join(dataDir, entityName))
-      ? path.join(dataDir, entityName)
-      : path.join(dataDir, entityCfg.pack, entityName);
+    const entityDir = path.join(dataDir, entityName);
     try {
       const { records: unwrapped } = await readEntityMetadata(entityDir, entityCfg.entityName);
       records[entityName] = unwrapped;
