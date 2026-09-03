@@ -1,0 +1,11 @@
+node_modules
+dist
+.turbo
+*.log
+coverage
+.DS_Store
+.tmp
+test-output
+projects/*/metadata
+projects/*/migrations
+projects/*/test-output

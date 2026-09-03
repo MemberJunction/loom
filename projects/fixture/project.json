@@ -1,0 +1,14 @@
+{
+  "name": "fixture",
+  "version": "1.0.0",
+  "domain": "fixture",
+  "uuidNamespace": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+  "description": "Minimal fixture domain testing referential integrity and causal contracts in CI",
+  "entrypoint": "./index.ts",
+  "rulesetPath": "./ruleset",
+  "output": {
+    "metadataDir": "./metadata",
+    "migrationsDir": "./migrations",
+    "sqlDialect": "sqlserver"
+  }
+}

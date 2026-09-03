@@ -1,0 +1,25 @@
+{
+  "name": "@memberjunction/loom-agent-skill",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Autonomous simulation agent skill for Loom: recurring weekly cycles and Playwright visual inspection",
+  "license": "BUSL-1.1",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@memberjunction/loom-contracts": "workspace:*",
+    "@memberjunction/loom-engine": "workspace:*",
+    "playwright": "^1.50.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}

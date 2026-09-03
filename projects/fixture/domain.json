@@ -1,0 +1,49 @@
+{
+  "name": "fixture",
+  "namespace": "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+  "description": "Minimal fixture domain testing two entities and referential closure",
+  "packs": {
+    "common": {
+      "name": "common",
+      "dependsOn": [],
+      "description": "Core identity pack"
+    }
+  },
+  "entities": {
+    "Organization": {
+      "name": "Organization",
+      "targetTable": "Organization",
+      "schema": "fixture",
+      "pack": "common",
+      "businessKey": ["ID"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "Name": { "name": "Name", "type": "string" },
+        "CreatedAt": { "name": "CreatedAt", "type": "date" }
+      },
+      "foreignKeys": {}
+    },
+    "Person": {
+      "name": "Person",
+      "targetTable": "Person",
+      "schema": "fixture",
+      "pack": "common",
+      "businessKey": ["ID"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "Name": { "name": "Name", "type": "string" },
+        "CompanyID": { "name": "CompanyID", "type": "uuid", "nullable": true },
+        "Status": { "name": "Status", "type": "string" },
+        "CreatedAt": { "name": "CreatedAt", "type": "date" }
+      },
+      "foreignKeys": {
+        "FK_Person_Organization": {
+          "fieldName": "CompanyID",
+          "targetEntity": "Organization",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        }
+      }
+    }
+  }
+}

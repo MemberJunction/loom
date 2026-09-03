@@ -1,0 +1,44 @@
+{
+  "name": "@memberjunction/loom-engine",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Core causal simulation engine for Loom: DAG resolution, latent factor generation, stateful accumulation, and multi-target emission",
+  "license": "BUSL-1.1",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@memberjunction/loom-contracts": "workspace:*",
+    "uuid": "^11.0.0",
+    "zod": "^3.25.76"
+  },
+  "peerDependencies": {
+    "@memberjunction/core": ">=5.45.0"
+  },
+  "peerDependenciesMeta": {
+    "@memberjunction/core": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@memberjunction/core": "^5.51.2",
+    "@types/node": "^22.10.0",
+    "@types/uuid": "^10.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
