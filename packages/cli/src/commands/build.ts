@@ -516,6 +516,25 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
                 childRow[cf] = cv;
               }
             }
+
+            // Calibrate factor outcomes on motif-generated child row using contract target
+            for (const contract of factorContracts.filter((fc) => fc.effect === cr.entity)) {
+              if (contract.outcome && contract.outcome.where) {
+                const childDraw = rowRng.next() < contract.target;
+                const otherwise = contract.outcome.otherwise;
+                for (const [field, targetVal] of Object.entries(contract.outcome.where)) {
+                  if (childDraw) {
+                    childRow[field] = targetVal;
+                  } else {
+                    if (typeof targetVal === 'boolean') {
+                      childRow[field] = !targetVal;
+                    } else if (otherwise && otherwise[field] !== undefined) {
+                      childRow[field] = otherwise[field];
+                    }
+                  }
+                }
+              }
+            }
             if (!allRecords[cr.entity]) {
               allRecords[cr.entity] = [];
             }

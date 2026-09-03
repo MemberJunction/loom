@@ -324,8 +324,17 @@ export class Validator {
         } else if (pin.kind === 'outcome') {
           const factor = factorMap.get(pin.factor);
           if (factor && factor.outcome) {
+            let targetRecord: Record<string, unknown> = heroRecord;
+            if (factor.effect !== hero.entity) {
+              const children = ctx.getChildren(hero.entity, String(heroRecord['ID'] ?? heroRecord['id']), factor.effect, '');
+              const cycleField = Object.keys(children[0] ?? {}).find(f => f.toLowerCase().includes('year') || f.toLowerCase().includes('cycle') || f.toLowerCase().includes('date'));
+              targetRecord = children.find(c => {
+                if (!pin.cycle || !cycleField) return true;
+                return String(c[cycleField]).includes(String(pin.cycle));
+              }) ?? children[0] ?? heroRecord;
+            }
             const evalFn = compileRawFeature(factor.outcome);
-            const actual = evalFn(heroRecord, ctx);
+            const actual = evalFn(targetRecord, ctx);
             const passed = Boolean(actual) === pin.value;
             if (!passed) {
               failedPins.push(`Outcome for factor '${pin.factor}': expected ${pin.value}, got ${Boolean(actual)}`);
