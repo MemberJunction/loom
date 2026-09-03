@@ -1,0 +1,14 @@
+{
+  "name": "enterprise",
+  "version": "1.0.0",
+  "domain": "enterprise",
+  "uuidNamespace": "b1e4c4d5-8f6a-4d2b-9e3a-7a5c8d1f2e34",
+  "description": "Full-stack enterprise B2B membership, subscriptions, and financial transactions testbed",
+  "entrypoint": "./index.ts",
+  "rulesetPath": "./ruleset",
+  "output": {
+    "metadataDir": "./metadata",
+    "migrationsDir": "./migrations",
+    "sqlDialect": "sqlserver"
+  }
+}

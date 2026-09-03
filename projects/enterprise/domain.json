@@ -1,0 +1,192 @@
+{
+  "name": "enterprise",
+  "namespace": "b1e4c4d5-8f6a-4d2b-9e3a-7a5c8d1f2e34",
+  "description": "Full-stack enterprise B2B membership, subscriptions, and commerce transactions domain",
+  "packs": {
+    "core": {
+      "name": "core",
+      "dependsOn": [],
+      "description": "Core accounts, organizations, and member identity entities"
+    },
+    "commerce": {
+      "name": "commerce",
+      "dependsOn": ["core"],
+      "description": "Catalog, subscriptions, orders, order lines, and payment settlements"
+    }
+  },
+  "entities": {
+    "Company": {
+      "name": "Company",
+      "targetTable": "Company",
+      "schema": "enterprise",
+      "pack": "core",
+      "businessKey": ["Name"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "Name": { "name": "Name", "type": "string" },
+        "Industry": { "name": "Industry", "type": "string" },
+        "Tier": { "name": "Tier", "type": "string" },
+        "Employees": { "name": "Employees", "type": "number" },
+        "AnnualRevenue": { "name": "AnnualRevenue", "type": "number" },
+        "CreatedAt": { "name": "CreatedAt", "type": "date" }
+      },
+      "foreignKeys": {},
+      "isImmutable": false
+    },
+    "Product": {
+      "name": "Product",
+      "targetTable": "Product",
+      "schema": "enterprise",
+      "pack": "commerce",
+      "businessKey": ["SKU"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "SKU": { "name": "SKU", "type": "string" },
+        "Name": { "name": "Name", "type": "string" },
+        "Category": { "name": "Category", "type": "string" },
+        "Price": { "name": "Price", "type": "number" },
+        "IsActive": { "name": "IsActive", "type": "boolean" }
+      },
+      "foreignKeys": {},
+      "isImmutable": false
+    },
+    "Member": {
+      "name": "Member",
+      "targetTable": "Member",
+      "schema": "enterprise",
+      "pack": "core",
+      "businessKey": ["Email"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "CompanyID": { "name": "CompanyID", "type": "uuid", "nullable": true },
+        "FirstName": { "name": "FirstName", "type": "string" },
+        "LastName": { "name": "LastName", "type": "string" },
+        "Email": { "name": "Email", "type": "string" },
+        "Title": { "name": "Title", "type": "string" },
+        "Status": { "name": "Status", "type": "string" },
+        "JoinDate": { "name": "JoinDate", "type": "date" },
+        "CreatedAt": { "name": "CreatedAt", "type": "date" }
+      },
+      "foreignKeys": {
+        "FK_Member_Company": {
+          "fieldName": "CompanyID",
+          "targetEntity": "Company",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        }
+      },
+      "isImmutable": false
+    },
+    "Subscription": {
+      "name": "Subscription",
+      "targetTable": "Subscription",
+      "schema": "enterprise",
+      "pack": "commerce",
+      "businessKey": ["MemberID", "ProductID", "StartDate"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "MemberID": { "name": "MemberID", "type": "uuid" },
+        "ProductID": { "name": "ProductID", "type": "uuid" },
+        "Status": { "name": "Status", "type": "string" },
+        "MonthlyFee": { "name": "MonthlyFee", "type": "number" },
+        "AutoRenew": { "name": "AutoRenew", "type": "boolean" },
+        "StartDate": { "name": "StartDate", "type": "date" },
+        "EndDate": { "name": "EndDate", "type": "date" }
+      },
+      "foreignKeys": {
+        "FK_Subscription_Member": {
+          "fieldName": "MemberID",
+          "targetEntity": "Member",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        },
+        "FK_Subscription_Product": {
+          "fieldName": "ProductID",
+          "targetEntity": "Product",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        }
+      },
+      "isImmutable": false
+    },
+    "OrderHeader": {
+      "name": "OrderHeader",
+      "targetTable": "OrderHeader",
+      "schema": "enterprise",
+      "pack": "commerce",
+      "businessKey": ["OrderNumber"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "MemberID": { "name": "MemberID", "type": "uuid" },
+        "OrderNumber": { "name": "OrderNumber", "type": "string" },
+        "OrderDate": { "name": "OrderDate", "type": "date" },
+        "TotalAmount": { "name": "TotalAmount", "type": "number" },
+        "Status": { "name": "Status", "type": "string" },
+        "CreatedAt": { "name": "CreatedAt", "type": "date" }
+      },
+      "foreignKeys": {
+        "FK_OrderHeader_Member": {
+          "fieldName": "MemberID",
+          "targetEntity": "Member",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        }
+      },
+      "isImmutable": true
+    },
+    "OrderLine": {
+      "name": "OrderLine",
+      "targetTable": "OrderLine",
+      "schema": "enterprise",
+      "pack": "commerce",
+      "businessKey": ["OrderID", "ProductID"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "OrderID": { "name": "OrderID", "type": "uuid" },
+        "ProductID": { "name": "ProductID", "type": "uuid" },
+        "Quantity": { "name": "Quantity", "type": "number" },
+        "UnitPrice": { "name": "UnitPrice", "type": "number" },
+        "ExtendedPrice": { "name": "ExtendedPrice", "type": "number" }
+      },
+      "foreignKeys": {
+        "FK_OrderLine_Order": {
+          "fieldName": "OrderID",
+          "targetEntity": "OrderHeader",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        },
+        "FK_OrderLine_Product": {
+          "fieldName": "ProductID",
+          "targetEntity": "Product",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        }
+      },
+      "isImmutable": true
+    },
+    "Payment": {
+      "name": "Payment",
+      "targetTable": "Payment",
+      "schema": "enterprise",
+      "pack": "commerce",
+      "businessKey": ["OrderID", "PaymentDate"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "OrderID": { "name": "OrderID", "type": "uuid" },
+        "PaymentMethod": { "name": "PaymentMethod", "type": "string" },
+        "Amount": { "name": "Amount", "type": "number" },
+        "PaymentDate": { "name": "PaymentDate", "type": "date" },
+        "Status": { "name": "Status", "type": "string" }
+      },
+      "foreignKeys": {
+        "FK_Payment_Order": {
+          "fieldName": "OrderID",
+          "targetEntity": "OrderHeader",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        }
+      },
+      "isImmutable": true
+    }
+  }
+}

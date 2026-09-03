@@ -1,0 +1,7 @@
+{
+  "name": "@memberjunction/loom-enterprise-project",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Full-stack enterprise B2B membership and subscriptions testbed for Loom",
+  "license": "BUSL-1.1"
+}

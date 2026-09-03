@@ -14,8 +14,10 @@ export interface SkywayMigrationOptions {
 
 /**
  * Emits additive Skyway migrations with dual-dialect support (SQL Server & PostgreSQL).
- * Validates all emitted columns strictly against domain entity field declarations.
- * Properly escapes JSON objects and strings, avoiding [object Object] leaks.
+ * 1. Topologically sorts entities (parents before children) so foreign keys never fail at apply-time.
+ * 2. Validates all emitted columns strictly against domain entity field declarations.
+ * 3. Escapes JSON objects and strings cleanly, avoiding [object Object] leaks.
+ * 4. Deterministically sorts records by primary key for 100% byte-for-byte idempotency.
  */
 export async function emitSkywayMigration(options: SkywayMigrationOptions): Promise<string> {
   await fs.mkdir(options.outputDir, { recursive: true });
@@ -37,8 +39,14 @@ export async function emitSkywayMigration(options: SkywayMigrationOptions): Prom
     ``,
   ];
 
-  for (const [entityName, records] of Object.entries(options.data)) {
-    if (records.length === 0) continue;
+  // Topologically sort entity emission order: parents before children
+  const entityNames = Object.keys(options.data);
+  const orderedEntities = sortEntitiesTopologically(entityNames, options.domain);
+
+  for (const entityName of orderedEntities) {
+    const rawRecords = options.data[entityName] ?? [];
+    if (rawRecords.length === 0) continue;
+
     const entityCfg = options.domain.entities[entityName];
     if (!entityCfg) {
       throw new Error(`emitSkywayMigration: entity '${entityName}' is not defined in domain configuration`);
@@ -55,6 +63,13 @@ export async function emitSkywayMigration(options: SkywayMigrationOptions): Prom
     const fullTableName = isPostgres
       ? `"${schemaName}"."${tableName}"`
       : `[${schemaName}].[${tableName}]`;
+
+    // Sort records deterministically by primary key (ID) using code-point comparison
+    const records = [...rawRecords].sort((a, b) => {
+      const idA = String(a['ID'] ?? a['id'] ?? '');
+      const idB = String(b['ID'] ?? b['id'] ?? '');
+      return idA < idB ? -1 : idA > idB ? 1 : 0;
+    });
 
     lines.push(`-- Entity: ${entityName} (${records.length} records)`);
 
@@ -74,9 +89,7 @@ export async function emitSkywayMigration(options: SkywayMigrationOptions): Prom
         ? cols.map((c) => `"${c}"`).join(', ')
         : cols.map((c) => `[${c}]`).join(', ');
 
-      const valList = cols
-        .map((col) => formatSqlValue(record[col], isPostgres))
-        .join(', ');
+      const valList = cols.map((c) => formatSqlValue(record[c], isPostgres)).join(', ');
 
       if (options.useSpCreate) {
         if (isPostgres) {
@@ -102,6 +115,76 @@ export async function emitSkywayMigration(options: SkywayMigrationOptions): Prom
 
   await fs.writeFile(filePath, lines.join('\n'), 'utf8');
   return filePath;
+}
+
+/**
+ * Topologically sorts entity names so that parent entities precede child entities
+ * in generated SQL insertion statements.
+ * Throws if a cyclic foreign key dependency is detected.
+ */
+export function sortEntitiesTopologically(
+  entityNames: string[],
+  domain: DomainConfig
+): string[] {
+  const set = new Set(entityNames);
+  const inDegree = new Map<string, number>();
+  const adj = new Map<string, Set<string>>();
+
+  for (const name of entityNames) {
+    inDegree.set(name, 0);
+    adj.set(name, new Set());
+  }
+
+  for (const name of entityNames) {
+    const entityCfg = domain.entities[name];
+    if (!entityCfg || !entityCfg.foreignKeys) continue;
+
+    for (const fk of Object.values(entityCfg.foreignKeys)) {
+      const parent = fk.targetEntity;
+      if (set.has(parent) && parent !== name) {
+        // parent -> name (parent must precede child)
+        const children = adj.get(parent)!;
+        if (!children.has(name)) {
+          children.add(name);
+          inDegree.set(name, inDegree.get(name)! + 1);
+        }
+      }
+    }
+  }
+
+  // Seed Kahn queue in deterministic code-point order
+  const zeroInDegree = entityNames
+    .filter((name) => inDegree.get(name) === 0)
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+
+  const queue: string[] = [...zeroInDegree];
+  const sorted: string[] = [];
+
+  while (queue.length > 0) {
+    const curr = queue.shift()!;
+    sorted.push(curr);
+
+    const children = Array.from(adj.get(curr) ?? []).sort((a, b) =>
+      a < b ? -1 : a > b ? 1 : 0
+    );
+    for (const child of children) {
+      const newDeg = inDegree.get(child)! - 1;
+      inDegree.set(child, newDeg);
+      if (newDeg === 0) queue.push(child);
+    }
+  }
+
+  if (sorted.length !== entityNames.length) {
+    const sortedSet = new Set(sorted);
+    const unresolved = entityNames
+      .filter((name) => !sortedSet.has(name))
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    throw new Error(
+      `Cyclic foreign key dependency detected among entities: ${unresolved.join(', ')}`
+    );
+  }
+
+  return sorted;
 }
 
 function formatSqlValue(val: unknown, isPostgres: boolean): string {

@@ -4,6 +4,7 @@ import { loadProject } from '../project.js';
 import {
   Accumulator,
   IdentityService,
+  createRng,
   emitMetadata,
   emitSkywayMigration,
 } from '@memberjunction/loom-engine';
@@ -11,6 +12,7 @@ import {
   SimulationCheckpointSchema,
   type SimulationCheckpoint,
 } from '@memberjunction/loom-contracts';
+import { generateEntityRecord } from '../generation.js';
 
 export interface AccumulateCommandOptions {
   project: string;
@@ -19,6 +21,7 @@ export interface AccumulateCommandOptions {
   seed?: string;
   asOf?: string;
   output?: string;
+  migrationsOutput?: string;
 }
 
 function isEnoent(err: unknown): boolean {
@@ -33,7 +36,9 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
   const outputDir = options.output
     ? path.resolve(process.cwd(), options.output)
     : path.resolve(loaded.projectDir, loaded.manifest.output.metadataDir);
-  const migrationsDir = path.resolve(loaded.projectDir, loaded.manifest.output.migrationsDir);
+  const migrationsDir = options.migrationsOutput
+    ? path.resolve(process.cwd(), options.migrationsOutput)
+    : path.resolve(loaded.projectDir, loaded.manifest.output.migrationsDir);
 
   // 1. Read prior checkpoint if available
   let priorCheckpoint: SimulationCheckpoint | null = null;
@@ -102,20 +107,21 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
   for (const [entityName, existingList] of Object.entries(priorRecords)) {
     const list = [...existingList];
     const entityCfg = loaded.domain.entities[entityName];
+    if (!entityCfg) continue;
+
     const newItemsCount = 2;
     const startIdx = list.length + 1;
+    const rng = createRng(seed, `accumulate:${entityName}:cycle:${cycleIndex}`);
 
     for (let i = startIdx; i < startIdx + newItemsCount; i++) {
-      const bizKey = `${entityName}-${i}`;
-      const id = identityService.MintId(loaded.domain.name, entityName, bizKey);
-      const row: Record<string, unknown> = {
-        ID: id,
-        Name: `${entityName} ${i} (Cycle ${cycleIndex})`,
-        CreatedAt: asOfDate,
-      };
-      if (entityCfg?.fields['Status']) {
-        row['Status'] = 'Active';
-      }
+      const row = generateEntityRecord({
+        domain: loaded.domain,
+        entity: entityName,
+        i,
+        parentPool: currentRecords,
+        rng,
+        identityService,
+      });
       list.push(row);
     }
     currentRecords[entityName] = list;

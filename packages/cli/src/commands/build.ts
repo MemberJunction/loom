@@ -10,12 +10,14 @@ import {
   type SimulationNode,
 } from '@memberjunction/loom-engine';
 import type { SimulationCheckpoint } from '@memberjunction/loom-contracts';
+import { generateEntityRecord } from '../generation.js';
 
 export interface BuildCommandOptions {
   project: string;
   seed?: string;
   release?: string;
   output?: string;
+  migrationsOutput?: string;
 }
 
 export async function executeBuild(options: BuildCommandOptions): Promise<void> {
@@ -25,7 +27,9 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
   const outputDir = options.output
     ? path.resolve(process.cwd(), options.output)
     : path.resolve(loaded.projectDir, loaded.manifest.output.metadataDir);
-  const migrationsDir = path.resolve(loaded.projectDir, loaded.manifest.output.migrationsDir);
+  const migrationsDir = options.migrationsOutput
+    ? path.resolve(process.cwd(), options.migrationsOutput)
+    : path.resolve(loaded.projectDir, loaded.manifest.output.migrationsDir);
 
   console.log(`🧵 Loom Build: Generating domain '${loaded.domain.name}'`);
   console.log(`   Seed: ${seed} | Release: ${releaseDate}`);
@@ -48,28 +52,20 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         const count = 10;
         const records: Record<string, unknown>[] = [];
 
+        const parentPool: Record<string, Record<string, unknown>[]> = {};
+        for (const [pEnt, pRows] of ctx.generatedData.entries()) {
+          parentPool[pEnt] = pRows;
+        }
+
         for (let i = 1; i <= count; i++) {
-          const bizKey = `${entityName}-${i}`;
-          const id = identityService.MintId(loaded.domain.name, entityName, bizKey);
-          const row: Record<string, unknown> = {
-            ID: id,
-            Name: `${entityName} ${i}`,
-            CreatedAt: releaseDate,
-          };
-
-          // Link foreign keys to parents if available
-          for (const fk of Object.values(entityCfg.foreignKeys)) {
-            const parentList = ctx.generatedData.get(fk.targetEntity) ?? [];
-            if (parentList.length > 0) {
-              const pickedParent = rng.pick(parentList);
-              row[fk.fieldName] = pickedParent['ID'] ?? pickedParent['id'];
-            }
-          }
-
-          if (entityCfg.fields['Status']) {
-            row['Status'] = i <= 8 ? 'Active' : 'Inactive';
-          }
-
+          const row = generateEntityRecord({
+            domain: loaded.domain,
+            entity: entityName,
+            i,
+            parentPool,
+            rng,
+            identityService,
+          });
           records.push(row);
         }
 
