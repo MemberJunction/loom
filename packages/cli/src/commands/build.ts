@@ -36,7 +36,9 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
     : path.resolve(loaded.projectDir, loaded.manifest.output.metadataDir);
   const migrationsDir = options.migrationsOutput
     ? path.resolve(process.cwd(), options.migrationsOutput)
-    : path.resolve(loaded.projectDir, loaded.manifest.output.migrationsDir);
+    : loaded.manifest.output.migrationsDir
+      ? path.resolve(loaded.projectDir, loaded.manifest.output.migrationsDir)
+      : undefined;
 
   console.log(`🧵 Loom Build: Generating domain '${loaded.domain.name}'`);
   console.log(`   Seed: ${seed} | Release: ${releaseDate} (asOfYear: ${asOfYear})`);
@@ -292,16 +294,18 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
   });
   console.log(`   ✓ Emitted ${writtenMetadata.length} metadata files to ${outputDir}`);
 
-  // Emit baseline Skyway migration with timestamp version
-  const migrationVersion = `${releaseDate.replace(/-/g, '')}0000`;
-  const migrationPath = await emitSkywayMigration({
-    outputDir: migrationsDir,
-    version: migrationVersion,
-    description: `Baseline_${loaded.domain.name}`,
-    domain: loaded.domain,
-    data: allRecords,
-  });
-  console.log(`   ✓ Emitted Skyway migration: ${path.basename(migrationPath)}`);
+  // Emit baseline Skyway migration with timestamp version (if migrationsDir configured)
+  if (migrationsDir) {
+    const migrationVersion = `${releaseDate.replace(/-/g, '')}0000`;
+    const migrationPath = await emitSkywayMigration({
+      outputDir: migrationsDir,
+      version: migrationVersion,
+      description: `Baseline_${loaded.domain.name}`,
+      domain: loaded.domain,
+      data: allRecords,
+    });
+    console.log(`   ✓ Emitted Skyway migration: ${path.basename(migrationPath)}`);
+  }
 
   // Write initial simulation checkpoint.json with populated continuity
   const totalRecordCounts: Record<string, number> = {};

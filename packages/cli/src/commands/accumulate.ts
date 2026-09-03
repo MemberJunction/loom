@@ -41,7 +41,9 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     : path.resolve(loaded.projectDir, loaded.manifest.output.metadataDir);
   const migrationsDir = options.migrationsOutput
     ? path.resolve(process.cwd(), options.migrationsOutput)
-    : path.resolve(loaded.projectDir, loaded.manifest.output.migrationsDir);
+    : loaded.manifest.output.migrationsDir
+      ? path.resolve(loaded.projectDir, loaded.manifest.output.migrationsDir)
+      : undefined;
 
   // 1. Read prior checkpoint.json
   const checkpointPath = path.join(priorDir, 'checkpoint.json');
@@ -346,16 +348,20 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     data: currentRecords,
   });
 
-  // 9. Emit additive Skyway delta migration with status transitions
-  const migrationVersion = `${asOfDate.replace(/-/g, '')}${String(cycleIndex).padStart(4, '0')}`;
-  const migrationPath = await emitSkywayMigration({
-    outputDir: migrationsDir,
-    version: migrationVersion,
-    description: `Delta_Cycle_${cycleIndex}_${loaded.domain.name}`,
-    domain: loaded.domain,
-    data: diff.delta.generatedRecords,
-    statusTransitions,
-  });
+  // 9. Emit additive Skyway delta migration with status transitions (if migrationsDir configured)
+  let migrationPath: string | undefined;
+  if (migrationsDir) {
+    const migrationVersion = `${asOfDate.replace(/-/g, '')}${String(cycleIndex).padStart(4, '0')}`;
+    migrationPath = await emitSkywayMigration({
+      outputDir: migrationsDir,
+      version: migrationVersion,
+      description: `Delta_Cycle_${cycleIndex}_${loaded.domain.name}`,
+      domain: loaded.domain,
+      data: diff.delta.generatedRecords,
+      statusTransitions,
+    });
+    console.log(`   ✓ Emitted Skyway delta migration: ${path.basename(migrationPath)}`);
+  }
 
   // 10. Update simulation checkpoint.json with advanced continuity
   const totalRecordCounts: Record<string, number> = {};
@@ -393,7 +399,9 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     'utf8'
   );
 
-  console.log(`   ✓ Emitted additive migration: ${path.basename(migrationPath)}`);
+  if (migrationPath) {
+    console.log(`   ✓ Emitted additive migration: ${path.basename(migrationPath)}`);
+  }
   console.log(`   ✓ Saved checkpoint to: ${path.join(outputDir, 'checkpoint.json')}`);
   console.log(`✨ Accumulation complete.`);
 }

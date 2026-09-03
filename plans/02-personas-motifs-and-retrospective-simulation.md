@@ -30,7 +30,8 @@ The simulation engine strictly adheres to the canonical invariant list defined i
 - **Invariant 4 (The LLM Boundary)**: Runtime simulation is strictly zero-LLM math. LLM capabilities are confined entirely to an authoring-time companion package (`@memberjunction/loom-author`) that outputs validated JSON metadata.
 - **Invariant 5 (Deep Immutability)**: Emitted transaction history from earlier cycles is never mutated in subsequent cycles.
 - **Invariant 6 (Factor Recovery)**: Statistical logistic regression over emitted crowd data recovers authored $\beta$ weights within defined tolerance bounds ($\pm 0.15$ at $N \ge 5000$).
-- **Invariant 7 (Topological & Referential Closure)**: Emitted datasets and Skyway migrations strictly preserve foreign key closure in topological DAG dependency order with zero orphaned records.
+- **Invariant 7 (Topological & Referential Closure)**: Emitted datasets strictly preserve foreign key closure in topological DAG dependency order with zero orphaned records.
+- **Invariant 8 (Metadata Sole Delivery & BaseEntity Integrity)**: Metadata is the sole, exclusive engine for synthetic data delivery. All simulated records are emitted as partitioned declarative metadata files (`metadata/` tree) and ingested exclusively via MemberJunction's metadata sync push (`mj sync push`), ensuring every record triggers the complete `BaseEntity` subclass lifecycle, server hooks, validation rules, status transitions, vector embeddings, and audit tracking. Direct SQL `INSERT` bypasses are strictly prohibited.
 
 ---
 
