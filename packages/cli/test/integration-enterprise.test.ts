@@ -6,7 +6,7 @@ import * as crypto from 'node:crypto';
 import { executeBuild } from '../src/commands/build.js';
 import { executeAccumulate } from '../src/commands/accumulate.js';
 import { executeValidate } from '../src/commands/validate.js';
-import { emitSkywayMigration } from '@memberjunction/loom-engine';
+import { emitSkywayMigration, Validator } from '@memberjunction/loom-engine';
 import { loadProject } from '../src/project.js';
 
 describe('Loom Enterprise Integration Test Suite', () => {
@@ -72,6 +72,13 @@ describe('Loom Enterprise Integration Test Suite', () => {
     expect(report1.failedCount).toBe(0);
     // 7 PK gates + 7 FK gates + 3 factor gates = 17 gates total
     expect(report1.totalGates).toBeGreaterThanOrEqual(17);
+
+    // Verify continuity is populated and non-empty (L1 requirement)
+    const cpRaw = await fs.readFile(path.join(metaDirA, 'checkpoint.json'), 'utf8');
+    const checkpoint = JSON.parse(cpRaw);
+    expect(Object.keys(checkpoint.continuity.activeEntityIds).length).toBeGreaterThan(0);
+    expect(Object.keys(checkpoint.continuity.latentStates).length).toBeGreaterThan(0);
+    expect(Object.keys(checkpoint.continuity.activeLifecycleStates).length).toBeGreaterThan(0);
   });
 
   it('accumulates 12 consecutive weekly cycles and enforces ID persistence, non-deletion, and deep immutability', async () => {
@@ -255,6 +262,60 @@ describe('Loom Enterprise Integration Test Suite', () => {
     expect(pgContent).toContain('"enterprise"."OrderLine"');
     expect(pgContent).toContain('"enterprise"."Subscription"');
     expect(pgContent).toContain('"enterprise"."Payment"');
+  });
+
+  it('emits status transitions as transactional UPDATE statements in delta migrations (L1 requirement)', async () => {
+    const loaded = await loadProject(enterpriseProjectPath);
+    const migrDir = path.join(tempDirA, 'status-test-migrations');
+
+    const migrFile = await emitSkywayMigration({
+      outputDir: migrDir,
+      version: '202609029998',
+      description: 'Status_Transition_Emission_Test',
+      domain: loaded.domain,
+      data: {},
+      statusTransitions: [
+        {
+          entity: 'Member',
+          id: '11111111-2222-3333-4444-555555555555',
+          fromStatus: 'Active',
+          toStatus: 'Cancelled',
+          effectiveDate: '2026-09-09',
+        },
+      ],
+    });
+
+    const content = await fs.readFile(migrFile, 'utf8');
+    expect(content).toContain('-- Status Transitions');
+    expect(content).toContain(
+      "UPDATE [enterprise].[Member] SET [Status] = 'Cancelled' WHERE [ID] = '11111111-2222-3333-4444-555555555555';"
+    );
+  });
+
+  it('deleting or altering a factor in the ruleset causes empirical validation to fail its derived gate (L1 requirement)', async () => {
+    const loaded = await loadProject(enterpriseProjectPath);
+    const validator = new Validator();
+
+    const records: Record<string, Record<string, unknown>[]> = {};
+    for (const [entity, entityCfg] of Object.entries(loaded.domain.entities)) {
+      const filePath = path.join(metaDirA, entityCfg.pack, `${entity}.json`);
+      records[entity] = JSON.parse(await fs.readFile(filePath, 'utf8'));
+    }
+
+    // A factor with a target that the data does not satisfy must fail validation
+    const demandingFactor = {
+      id: 'factor-extreme-target',
+      effect: 'Member',
+      target: 0.99,
+      tolerance: 0.01,
+      evidence: { source: 'test', confidence: 'high' },
+      outcome: { from: 'self', where: { Status: 'Active' } },
+      arrows: {},
+    };
+
+    const report = validator.Validate(loaded.domain, records, [demandingFactor]);
+    expect(report.passed).toBe(false);
+    expect(report.gates.some((g) => g.name.includes('factor-extreme-target') && !g.passed)).toBe(true);
   });
 });
 

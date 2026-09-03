@@ -103,7 +103,7 @@ export function validateMotifsAgainstDomain(
       }
     }
 
-    for (const childRate of motif.childRates) {
+    for (const childRate of motif.childRates ?? []) {
       if (!domain.entities[childRate.entity]) {
         errors.push(`Motif '${motif.motifKey}': unknown child entity '${childRate.entity}' in childRates`);
       }

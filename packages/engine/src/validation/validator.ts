@@ -1,9 +1,10 @@
-import type { DomainConfig, FactorContract } from '@memberjunction/loom-contracts';
-import { compileFeature, type RelationalContext } from '../features/compiler.js';
+import type { DomainConfig, FactorContract, HeroConfig } from '@memberjunction/loom-contracts';
+import { compileFeature, compileRawFeature, type RelationalContext } from '../features/compiler.js';
+import { HeroInjector } from '../heroes/HeroInjector.js';
 
 export interface GateResult {
   name: string;
-  category: 'referential' | 'factor' | 'schema';
+  category: 'referential' | 'factor' | 'schema' | 'hero';
   passed: boolean;
   message: string;
   populationCount: number; // Invariant 7: exact number of entities/records examined
@@ -29,7 +30,8 @@ export class Validator {
   public Validate(
     domain: DomainConfig,
     data: Record<string, readonly Record<string, unknown>[]>,
-    factors: readonly FactorContract[] = []
+    factors: readonly FactorContract[] = [],
+    heroes: readonly HeroConfig[] = []
   ): ValidationReport {
     const gates: GateResult[] = [];
 
@@ -67,6 +69,9 @@ export class Validator {
         });
       },
     };
+
+    // 0. Hero pins validation (Gate 0)
+    this.checkHeroPins(data, heroes, factors, relationalCtx, gates);
 
     // 1. Referential integrity gates
     this.checkReferentialClosure(domain, data, gates);
@@ -266,6 +271,72 @@ export class Validator {
           actual: NaN,
         });
       }
+    }
+  }
+
+  private checkHeroPins(
+    data: Record<string, readonly Record<string, unknown>[]>,
+    heroes: readonly HeroConfig[],
+    factors: readonly FactorContract[],
+    ctx: RelationalContext,
+    gates: GateResult[]
+  ): void {
+    const factorMap = new Map(factors.map((f) => [f.id, f]));
+
+    for (const hero of heroes) {
+      const records = data[hero.entity] ?? [];
+      const heroRecord = records.find((r) => {
+        return Object.entries(hero.businessKeys).every(([k, v]) => String(r[k]) === String(v));
+      });
+
+      if (!heroRecord) {
+        gates.push({
+          name: `Gate 0 (Hero Pins): ${hero.heroKey} (${hero.entity})`,
+          category: 'hero',
+          passed: false,
+          populationCount: 1,
+          message: `Hero record '${hero.heroKey}' not found in emitted data for entity '${hero.entity}'`,
+        });
+        continue;
+      }
+
+      const failedPins: string[] = [];
+
+      for (const pin of hero.pins) {
+        if (pin.kind === 'field') {
+          const actual = heroRecord[pin.field];
+          if (!HeroInjector.EvaluatePinOp(pin.op, actual, pin.value)) {
+            failedPins.push(`Field '${pin.field}': expected ${pin.op} ${JSON.stringify(pin.value)}, got ${JSON.stringify(actual)}`);
+          }
+        } else if (pin.kind === 'feature') {
+          const evalFn = compileRawFeature(pin.feature);
+          const actual = evalFn(heroRecord, ctx);
+          if (!HeroInjector.EvaluatePinOp(pin.op, actual, pin.value)) {
+            failedPins.push(`Feature on '${pin.feature.from}': expected ${pin.op} ${JSON.stringify(pin.value)}, got ${JSON.stringify(actual)}`);
+          }
+        } else if (pin.kind === 'outcome') {
+          const factor = factorMap.get(pin.factor);
+          if (factor && factor.outcome) {
+            const evalFn = compileRawFeature(factor.outcome);
+            const actual = evalFn(heroRecord, ctx);
+            const passed = Boolean(actual) === pin.value;
+            if (!passed) {
+              failedPins.push(`Outcome for factor '${pin.factor}': expected ${pin.value}, got ${Boolean(actual)}`);
+            }
+          }
+        }
+      }
+
+      const passed = failedPins.length === 0;
+      gates.push({
+        name: `Gate 0 (Hero Pins): ${hero.heroKey} (${hero.entity})`,
+        category: 'hero',
+        passed,
+        populationCount: 1,
+        message: passed
+          ? `All ${hero.pins.length} pin(s) satisfied for hero '${hero.heroKey}'`
+          : `Hero '${hero.heroKey}' failed ${failedPins.length} pin(s):\n  ${failedPins.join('\n  ')}`,
+      });
     }
   }
 }

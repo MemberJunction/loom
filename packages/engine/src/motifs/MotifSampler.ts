@@ -20,6 +20,7 @@ export interface EntityCandidate {
 export interface MotifAssignment {
   entityId: string;
   motifKey: string;
+  eras: string[];
   latentTrajectory?: LatentTrajectory;
   childRates: ChildRate[];
   factorOverrides: FactorOverride[];
@@ -138,9 +139,10 @@ export class MotifSampler {
         const assignment: MotifAssignment = {
           entityId: entity.id,
           motifKey: motif.motifKey,
+          eras: [...(motif.eras ?? [])],
           latentTrajectory: motif.latentTrajectory,
-          childRates: [...motif.childRates],
-          factorOverrides: [...motif.factorOverrides],
+          childRates: [...(motif.childRates ?? [])],
+          factorOverrides: [...(motif.factorOverrides ?? [])],
           ladderProgression: motif.ladderProgression,
         };
 

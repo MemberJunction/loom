@@ -1,0 +1,66 @@
+{
+  "$schema": "https://memberjunction.org/schemas/loom/ladders.v1.json",
+  "ladders": [
+    {
+      "ladderKey": "subscription-status-ladder",
+      "entity": "Member",
+      "binding": {
+        "mode": "childEntity",
+        "childEntity": "Subscription",
+        "foreignKey": "MemberID",
+        "stateField": "Status"
+      },
+      "cohortShare": 0.5,
+      "states": [
+        {
+          "name": "Trial",
+          "capacity": 200,
+          "durationCycles": 1,
+          "prerequisites": {
+            "minCyclesSinceBirth": 0
+          },
+          "effects": [
+            { "factor": "factor-membership-renewal", "beta": 0.5 }
+          ]
+        },
+        {
+          "name": "Active",
+          "capacity": 100,
+          "durationCycles": 4,
+          "prerequisites": {
+            "priorState": "Trial",
+            "dials": { "theta": { "min": 0.5 } }
+          },
+          "effects": [
+            { "factor": "factor-membership-renewal", "beta": 2.5 }
+          ]
+        },
+        {
+          "name": "PastDue",
+          "capacity": 20,
+          "durationCycles": 1,
+          "prerequisites": {
+            "priorState": "Active"
+          },
+          "effects": [
+            { "factor": "factor-membership-renewal", "beta": -2.0 }
+          ],
+          "exitEffects": [
+            { "dial": "theta", "delta": -0.3 }
+          ]
+        },
+        {
+          "name": "Cancelled",
+          "capacity": 500,
+          "durationCycles": 10,
+          "prerequisites": {
+            "priorState": "PastDue"
+          },
+          "effects": [
+            { "factor": "factor-membership-renewal", "beta": -4.0 }
+          ]
+        }
+      ]
+    }
+  ]
+}

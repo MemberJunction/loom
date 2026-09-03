@@ -54,11 +54,11 @@ export class HeroInjector {
       heroKey: hero.heroKey,
       entity: hero.entity,
       birthCycle: hero.birthCycle,
-      eras: [...hero.eras],
-      latentDials: { ...hero.latentDials },
-      fixedFields: { ...hero.fixedFields },
-      ladderEntries: [...hero.ladderEntries],
-      pins: [...hero.pins],
+      eras: [...(hero.eras ?? [])],
+      latentDials: { ...(hero.latentDials ?? {}) },
+      fixedFields: { ...(hero.fixedFields ?? {}) },
+      ladderEntries: [...(hero.ladderEntries ?? [])],
+      pins: [...(hero.pins ?? [])],
       description: hero.description,
     };
 

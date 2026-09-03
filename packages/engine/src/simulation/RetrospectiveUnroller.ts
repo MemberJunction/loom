@@ -132,6 +132,23 @@ export class RetrospectiveUnroller {
         }
       }
     }
+
+    // 4. Enroll cohort into ladders according to ladder.cohortShare (Plan 02 §3.3)
+    for (const ladder of ladderEngine.GetAllLadders()) {
+      const eligible = Array.from(this.entityStates.values()).filter(
+        (e) => !e.isHero && e.entity === ladder.entity && !e.ladderStates[ladder.ladderKey]
+      );
+      const targetCount = Math.round(eligible.length * ladder.cohortShare);
+      const shuffled = rng.shuffle(eligible);
+      for (let i = 0; i < targetCount; i++) {
+        const ent = shuffled[i]!;
+        const initialState = ladder.states[0]?.name;
+        if (initialState) {
+          ladderEngine.Enroll(ladder.ladderKey, ent.id, initialState, ent.birthCycle);
+          ent.ladderStates[ladder.ladderKey] = initialState;
+        }
+      }
+    }
   }
 
   /**
@@ -144,6 +161,7 @@ export class RetrospectiveUnroller {
     for (const c of this.cycles) {
       // 1. Identify active eras for absolute cycle c
       const activeEras = (this.config.eras ?? []).filter((era) => era.cycles.includes(c));
+      const activeEraKeys = new Set(activeEras.map((e) => e.eraKey));
       const eraFactorAdjustments = new Map<string, number>();
       for (const era of activeEras) {
         for (const adj of era.factorAdjustments) {
@@ -193,8 +211,11 @@ export class RetrospectiveUnroller {
         // Apply motif deterministic trajectory adjustments
         for (const a of assignments) {
           if (a.latentTrajectory) {
-            const cur = entity.latentDials[a.latentTrajectory.dial] ?? 0;
-            entity.latentDials[a.latentTrajectory.dial] = cur + a.latentTrajectory.deltaPerCycle;
+            const eraApplies = !a.eras || a.eras.length === 0 || a.eras.some((k) => activeEraKeys.has(k));
+            if (eraApplies) {
+              const cur = entity.latentDials[a.latentTrajectory.dial] ?? 0;
+              entity.latentDials[a.latentTrajectory.dial] = cur + a.latentTrajectory.deltaPerCycle;
+            }
           }
         }
 
@@ -238,6 +259,9 @@ export class RetrospectiveUnroller {
           let overrideProb: number | undefined;
           let overrideBeta: number | undefined;
           for (const a of assignments) {
+            const eraApplies = !a.eras || a.eras.length === 0 || a.eras.some((k) => activeEraKeys.has(k));
+            if (!eraApplies) continue;
+
             const fo = a.factorOverrides.find((o) => o.factor === contract.id);
             if (fo) {
               if (fo.probability !== undefined) overrideProb = fo.probability;

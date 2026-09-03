@@ -5,7 +5,21 @@
   "params": {
     "baseRenewalTarget": 0.80,
     "autoRenewTarget": 0.70,
-    "enterpriseTierTarget": 0.30
+    "enterpriseTierTarget": 0.30,
+    "volume_Company": 10,
+    "volume_Product": 10,
+    "volume_Member": 15,
+    "volume_Subscription": 15,
+    "volume_OrderHeader": 10,
+    "volume_OrderLine": 10,
+    "volume_Payment": 10,
+    "intake_Company": 2,
+    "intake_Product": 2,
+    "intake_Member": 2,
+    "intake_Subscription": 2,
+    "intake_OrderHeader": 2,
+    "intake_OrderLine": 2,
+    "intake_Payment": 2
   },
   "effects": {
     "factor-membership-renewal": {

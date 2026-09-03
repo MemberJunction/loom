@@ -77,6 +77,10 @@ To guarantee compliance with the Enterprise Test, all examples below are written
 ### 3.1 Hero Personas Contract (`heroes.json`)
 Heroes specify their entity, business keys, fixed fields, birth cycle, and checkable `pins`. 
 
+**Conditioning vs. Constraint Semantics (L3)**:
+- **Conditioning**: Outcome pins represent conditioning (forcing the draw) during retrospective simulation to guarantee demo outcomes for hero records without relying on LLM authoring iterations.
+- **Empirical Gate 0 Verification**: During `loom validate`, Gate 0 verifies that the emitted dataset carries all pinned facts (catching emitter bugs, regressions, or pipeline mismatches). Field and feature pins are verified against realized records using `ValidateFieldPins` and `ValidateFeaturePins` / `compileRawFeature` without numeric coercion.
+
 Pins support three kinds:
 1. `kind: "field"`: Single field equality/comparison on the entity.
 2. `kind: "outcome"`: Asserting the boolean result of a named factor contract in a cycle.
@@ -407,10 +411,14 @@ To preserve focus on delivering the core metadata contracts and retrospective si
 
 ---
 
-### Implementation Phases (Roadmap Plan 02)
-- **Phase 02.1**: Zod metadata schemas in `@memberjunction/loom-contracts` (`heroes.ts`, `motifs.ts`, `ladders.ts`, `eras.ts`).
-- **Phase 02.2**: Engine execution modules (`HeroInjector`, `MotifSampler`, `StateLadderEngine`, `RetrospectiveUnroller`).
-- **Phase 02.3**: Validation engine integration (`loom validate` Gate 0, Gate 2, Gate 3, Gate 4, Gate 7).
-- **Phase 02.4**: Enterprise testbed expansion (`projects/enterprise` hero, motif, ladder integration test).
-- **Phase 02.5**: Standalone authoring tooling package (`@memberjunction/loom-author` with `loom-author suggest`).
-- **Phase 02.6**: Downstream integration and verification in `MemberJunction/more-cheese`.
+### Implementation Phases & Task/Gate Mapping (Plan 02)
+
+| Phase / Task | Finding Resolved | Scope & Deliverables | Verification Gate | PR |
+|---|---|---|---|---|
+| **Phase 02.1: Strict Schemas & Domain Validation** | L4a | `.strict()` on all Zod schemas (`heroes.ts`, `motifs.ts`, `ladders.ts`, `eras.ts`). Authored `validate*AgainstDomain` functions reporting unknown `entity.field` by name. Percentage quotas as fraction $\in [0, 1]$. | Gate 0 / L4a suite: rejects unexpected keys (e.g. `primaryKey`), validates field existence. | `MemberJunction/loom#6` |
+| **Phase 02.2: Unified Factor Engine & Retrospective Simulation** | L2, L3, L4b, L7 | Composed `RetrospectiveUnroller` with `FactorEngine` profiles and `calibrateIntercept`. Absolute cycle convention (`[2021..2026]`). Scripted hero ladder transitions (`ForceTransition`/`ExitLadder`). Era conditioning on motif factor overrides. | Gate 4: $\beta$ recovery $\pm 0.15$ at $N \ge 5000$. Absolute cycle era delta shock test. Invariant 3 byte-compare idempotency. | `MemberJunction/loom#6` |
+| **Phase 02.3: CLI Generation Wiring & Continuity** | L1 | `loom build` and `loom accumulate` run generation through `FactorEngine` + `RetrospectiveUnroller` + ruleset volumes (`volume_${entity}`, `intake_${entity}`). Continuity (`activeEntityIds`, `latentStates`, `activeLifecycleStates`) populated and asserted non-empty. `statusTransitions` emitted as SQL `UPDATE`s in delta migrations. | `integration-enterprise.test.ts`: non-empty continuity, `UPDATE` statements in delta migrations, removing factor alters distribution and fails gate. | `MemberJunction/loom#6` |
+| **Phase 02.4: Validator Gate 0 & Empirical Factor Tolerance** | L3, L5 | `Validator.Validate` implements Gate 0 evaluating all three pin kinds (field, outcome, feature via `compileRawFeature` without numeric coercion) per hero per pin. Factor tolerance gates evaluate observed vs target rate. | `validator.test.ts`: Gate 0 pass/fail tests, factor tolerance breach checks. | `MemberJunction/loom#6` |
+| **Phase 02.5: Enterprise Fixtures & CI Grep Gate** | L5, Gate 6 | Committed §3 enterprise fixtures (`heroes.json`, `motifs.json`, `ladders.json`, `eras.json`) under `projects/enterprise/ruleset/`. CI grep gate ensuring zero domain vocabulary in `packages/*/src`. | Gate 6: Enterprise 7-entity, 4-tier simulation passing 17 gates and 12-cycle accumulation. | `MemberJunction/loom#6` |
+| **Phase 02.6: Flagship Consumer Schema & Conformance** | M1, M2, M5 | Real schema fields and business keys matching committed metadata in `more-cheese/data/domain.json`. Foreign keys declared with `fieldName` and `cardinality`. Safe output paths (`output/`). Added `validate-loom-data.mjs` in CI workflow. | `check-metadata-closure.mjs` (0 orphans across 177,518 FKs) + `validate-loom-data.mjs` (all 6 files pass). | `MemberJunction/more-cheese#21` |
+

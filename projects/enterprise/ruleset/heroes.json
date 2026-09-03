@@ -1,0 +1,90 @@
+{
+  "$schema": "https://memberjunction.org/schemas/loom/heroes.v1.json",
+  "heroes": [
+    {
+      "heroKey": "HERO-ENT-001",
+      "entity": "Member",
+      "businessKeys": {
+        "Email": "sarah.connor@acme.example.com"
+      },
+      "fixedFields": {
+        "FirstName": "Sarah",
+        "LastName": "Connor",
+        "Title": "VP of Operations"
+      },
+      "birthCycle": 2021,
+      "latentDials": {
+        "theta": 1.8,
+        "phi": 0.8
+      },
+      "ladderEntries": [
+        {
+          "ladderKey": "subscription-status-ladder",
+          "state": "Active",
+          "enterCycle": 2021,
+          "exitCycle": 2025
+        }
+      ],
+      "pins": [
+        {
+          "kind": "field",
+          "field": "Title",
+          "op": "eq",
+          "value": "VP of Operations"
+        },
+        {
+          "kind": "outcome",
+          "factor": "factor-membership-renewal",
+          "cycle": 2025,
+          "value": true
+        },
+        {
+          "kind": "feature",
+          "feature": {
+            "from": "OrderHeader",
+            "where": { "Status": "Completed" },
+            "aggregation": "count"
+          },
+          "op": "gte",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "heroKey": "HERO-ENT-002",
+      "entity": "Member",
+      "businessKeys": {
+        "Email": "david.ross@globex.example.com"
+      },
+      "fixedFields": {
+        "FirstName": "David",
+        "LastName": "Ross",
+        "Title": "Procurement Lead"
+      },
+      "birthCycle": 2022,
+      "latentDials": {
+        "theta": 0.2,
+        "phi": -0.8
+      },
+      "eras": ["era-supply-disruption"],
+      "pins": [
+        {
+          "kind": "outcome",
+          "factor": "factor-membership-renewal",
+          "cycle": 2023,
+          "value": false
+        },
+        {
+          "kind": "feature",
+          "feature": {
+            "from": "Subscription",
+            "where": { "Status": "Cancelled" },
+            "aggregation": "exists"
+          },
+          "op": "eq",
+          "value": 1
+        }
+      ]
+    }
+  ]
+}

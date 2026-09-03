@@ -7,6 +7,7 @@ import {
   createRng,
   emitMetadata,
   emitSkywayMigration,
+  FactorEngine,
 } from '@memberjunction/loom-engine';
 import {
   SimulationCheckpointSchema,
@@ -98,18 +99,52 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     console.warn(`   ⚠️ Warning: seed ${options.seed} differs from checkpoint seed ${priorCheckpoint.seed}; maintaining checkpoint continuity`);
   }
 
-  // 4. Generate simulated delta additions strictly conforming to domain fields
+  // 4. Advance latent dial profiles from continuity
+  const factorEngine = new FactorEngine();
+
+  const updatedLatentStates: Record<string, Record<string, number>> = {
+    ...(priorCheckpoint?.continuity.latentStates ?? {}),
+  };
+
+  for (const [id, dials] of Object.entries(updatedLatentStates)) {
+    const entRng = createRng(seed, `latent:${id}:${cycleIndex}`);
+    const advanced = factorEngine.AdvanceProfile(entRng, { entityId: id, dials }, 1);
+    updatedLatentStates[id] = advanced.dials;
+  }
+
+  // 5. Generate simulated delta additions strictly conforming to ruleset intake
   const identityService = new IdentityService();
   identityService.RegisterNamespace(loaded.domain.name, loaded.domain.namespace);
 
   const currentRecords: Record<string, Record<string, unknown>[]> = {};
+  const statusTransitions: Array<{
+    entity: string;
+    id: string;
+    fromStatus: string;
+    toStatus: string;
+    effectiveDate: string;
+  }> = [];
 
   for (const [entityName, existingList] of Object.entries(priorRecords)) {
-    const list = [...existingList];
+    const list = existingList.map((r) => ({ ...r }));
     const entityCfg = loaded.domain.entities[entityName];
     if (!entityCfg) continue;
 
-    const newItemsCount = 2;
+    // Read authored intake volume from ruleset params, falling back to default 2
+    let newItemsCount = 2;
+    for (const mod of Object.values(loaded.rulesetModules)) {
+      const directIntake = mod.params[`intake_${entityName}`];
+      const lowerIntake = mod.params[`intake_${entityName.toLowerCase()}`];
+      if (typeof directIntake === 'number') {
+        newItemsCount = directIntake;
+        break;
+      }
+      if (typeof lowerIntake === 'number') {
+        newItemsCount = lowerIntake;
+        break;
+      }
+    }
+
     const startIdx = list.length + 1;
     const rng = createRng(seed, `accumulate:${entityName}:cycle:${cycleIndex}`);
 
@@ -127,7 +162,7 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     currentRecords[entityName] = list;
   }
 
-  // 5. Compute pure delta using Accumulator (enforces no deletions by default)
+  // 6. Compute pure delta using Accumulator (enforces no deletions by default)
   const accumulator = new Accumulator();
   const diff = accumulator.ComputeDelta(
     loaded.domain,
@@ -142,14 +177,14 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     console.log(`     • ${entity}: +${count} new record(s)`);
   }
 
-  // 6. Update metadata tree
+  // 7. Update metadata tree
   await emitMetadata({
     outputDir,
     domain: loaded.domain,
     data: currentRecords,
   });
 
-  // 7. Emit additive Skyway migration with sortable timestamp version
+  // 8. Emit additive Skyway migration with sortable timestamp version and status transitions
   const migrationVersion = `${asOfDate.replace(/-/g, '')}${String(cycleIndex).padStart(4, '0')}`;
   const migrationPath = await emitSkywayMigration({
     outputDir: migrationsDir,
@@ -157,12 +192,16 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     description: `Delta_Cycle_${cycleIndex}_${loaded.domain.name}`,
     domain: loaded.domain,
     data: diff.delta.generatedRecords,
+    statusTransitions,
   });
 
-  // 8. Write updated checkpoint.json
+  // 9. Write updated checkpoint.json with populated continuity
   const totalRecordCounts: Record<string, number> = {};
+  const activeEntityIds: Record<string, string[]> = {};
+
   for (const [e, rows] of Object.entries(currentRecords)) {
     totalRecordCounts[e] = rows.length;
+    activeEntityIds[e] = rows.map((r) => String(r['ID'] ?? r['id']));
   }
 
   const updatedCheckpoint: SimulationCheckpoint = {
@@ -173,13 +212,16 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     continuity: {
       asOfDate,
       cycleIndex,
-      activeEntityIds: {},
-      latentStates: {},
-      activeLifecycleStates: {},
+      activeEntityIds,
+      latentStates: updatedLatentStates,
+      activeLifecycleStates: priorCheckpoint?.continuity.activeLifecycleStates ?? {},
       metadata: { lastAccumulatedAt: asOfDate },
     },
     committedRecordCounts: totalRecordCounts,
-    lastGeneratedDelta: diff.delta,
+    lastGeneratedDelta: {
+      ...diff.delta,
+      statusTransitions,
+    },
   };
 
   await fs.writeFile(
