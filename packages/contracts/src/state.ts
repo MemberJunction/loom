@@ -6,6 +6,7 @@ export const ContinuityStateSchema = z.object({
   activeEntityIds: z.record(z.string(), z.array(z.string().uuid())).default({}),
   latentStates: z.record(z.string(), z.record(z.string(), z.number())).default({}), // entityId -> { dialName: value }
   activeLifecycleStates: z.record(z.string(), z.array(z.record(z.string(), z.unknown()))).default({}),
+  birthCycles: z.record(z.string(), z.number().int()).default({}),
   metadata: z.record(z.string(), z.unknown()).default({}),
 });
 export type ContinuityState = z.infer<typeof ContinuityStateSchema>;

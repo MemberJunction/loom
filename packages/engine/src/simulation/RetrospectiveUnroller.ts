@@ -79,9 +79,17 @@ export class RetrospectiveUnroller {
 
     // Precompile feature queries on contract arrows (hoisted for performance)
     for (const contract of config.factorContracts ?? []) {
-      for (const arrow of Object.values(contract.arrows)) {
-        if (arrow.feature && !this.compiledFeatures.has(arrow.name)) {
-          this.compiledFeatures.set(arrow.name, compileFeature(arrow.feature, contract.effect));
+      for (const [arrowKey, arrow] of Object.entries(contract.arrows)) {
+        const arrowName = arrow.name ?? arrowKey;
+        if ('feature' in arrow && arrow.feature) {
+          if (arrow.feature.from && arrow.feature.from !== 'self' && !config.domain) {
+            throw new Error(
+              `RetrospectiveUnroller: DomainConfig is required on UnrollConfig when non-self feature arrows exist (arrow '${arrowName}' on factor '${contract.id}' queries entity '${arrow.feature.from}')`
+            );
+          }
+          if (!this.compiledFeatures.has(arrowName)) {
+            this.compiledFeatures.set(arrowName, compileFeature(arrow.feature, contract.effect));
+          }
         }
       }
     }
@@ -239,10 +247,14 @@ export class RetrospectiveUnroller {
         // Step non-hero ladders
         if (!entity.isHero) {
           for (const ladder of ladderEngine.GetAllLadders()) {
+            const cycleUnit = ladder.cycleUnit ?? 'year';
+            const ladderCyclesSinceBirth = cycleUnit === 'week' ? cyclesSinceBirth * 52 : cyclesSinceBirth;
+            const stepAmount = cycleUnit === 'week' ? 52 : 1;
             const stepResult = ladderEngine.StepEntity(ladder.ladderKey, entity.id, {
-              cycle: c,
-              cyclesSinceBirth,
+              cycle: cycleUnit === 'week' ? c * 52 : c,
+              cyclesSinceBirth: ladderCyclesSinceBirth,
               latentDials: entity.latentDials,
+              stepAmount,
             });
 
             if (stepResult.newState) {
@@ -255,6 +267,14 @@ export class RetrospectiveUnroller {
             for (const exitEffect of stepResult.exitEffects) {
               const cur = entity.latentDials[exitEffect.dial] ?? 0;
               entity.latentDials[exitEffect.dial] = cur + exitEffect.delta;
+            }
+          }
+        } else {
+          for (const ladder of ladderEngine.GetAllLadders()) {
+            const st = ladderEngine.GetEntityState(ladder.ladderKey, entity.id);
+            if (st) {
+              const cycleUnit = ladder.cycleUnit ?? 'year';
+              st.tenureInCurrentState = cycleUnit === 'week' ? (c - st.enteredCycle) * 52 : c - st.enteredCycle;
             }
           }
         }
@@ -308,10 +328,12 @@ export class RetrospectiveUnroller {
 
         // A. Compute linear scores for active entities matching contract.effect
         const entityScores: { entity: UnrollEntityState; score: number; overrideProb?: number }[] = [];
-        const hasMatchingEffect = activeEntities.some((e) => e.entity === contract.effect);
-        const targetEntities = hasMatchingEffect
-          ? activeEntities.filter((e) => e.entity === contract.effect)
-          : activeEntities;
+        const targetEntities = activeEntities.filter((e) => e.entity === contract.effect);
+        if (targetEntities.length === 0) {
+          throw new Error(
+            `RetrospectiveUnroller: Factor contract '${contract.id}' specifies effect entity '${contract.effect}' which matches no active entity in simulation.`
+          );
+        }
 
         for (const entity of targetEntities) {
           const assignments = this.motifAssignments.get(entity.id) ?? [];
@@ -335,15 +357,16 @@ export class RetrospectiveUnroller {
 
           // Evaluate linear logit score: arrows + ladder state effects
           let score = 0;
-          for (const arrow of Object.values(contract.arrows)) {
+          for (const [arrowKey, arrow] of Object.entries(contract.arrows)) {
+            const arrowName = arrow.name ?? arrowKey;
             let featureVal = 0;
-            if (arrow.name in entity.latentDials) {
-              featureVal = entity.latentDials[arrow.name] ?? 0;
-            } else if (arrow.feature) {
-              let evaluator = this.compiledFeatures.get(arrow.name);
+            if ('dial' in arrow && arrow.dial) {
+              featureVal = entity.latentDials[arrow.dial] ?? 0;
+            } else if ('feature' in arrow && arrow.feature) {
+              let evaluator = this.compiledFeatures.get(arrowName);
               if (!evaluator) {
                 evaluator = compileFeature(arrow.feature, contract.effect);
-                this.compiledFeatures.set(arrow.name, evaluator);
+                this.compiledFeatures.set(arrowName, evaluator);
               }
               featureVal = evaluator(
                 { ID: entity.id, id: entity.id, __entityName: entity.entity, ...entity.fixedFields, ...entity.latentDials, ...entity.ladderStates },
@@ -358,11 +381,10 @@ export class RetrospectiveUnroller {
               if (!eraApplies) continue;
 
               const fo = a.factorOverrides.find(
-                (o) => o.factor === contract.id && (!o.arrow || o.arrow === arrow.name)
+                (o) => o.factor === contract.id && (!o.arrow || o.arrow === arrowName)
               );
               if (fo && fo.beta !== undefined) {
                 beta = fo.beta;
-                break;
               }
             }
 

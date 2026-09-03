@@ -21,6 +21,7 @@ export interface LadderStepContext {
   cycle: number;
   cyclesSinceBirth: number;
   latentDials: Record<string, number>;
+  stepAmount?: number;
 }
 
 export interface LadderStepResult {
@@ -168,7 +169,7 @@ export class StateLadderEngine {
       return { transitioned: false, effects: [], exitEffects: [] };
     }
 
-    state.tenureInCurrentState += 1;
+    state.tenureInCurrentState += ctx.stepAmount ?? 1;
 
     const currentIndex = ladder.states.findIndex((s) => s.name === state.currentState);
     if (currentIndex === -1) {
@@ -201,7 +202,7 @@ export class StateLadderEngine {
         priorState: state.currentState,
         newState: undefined,
         effects: [],
-        exitEffects: [...currentStateConfig.exitEffects],
+        exitEffects: [...(currentStateConfig.exitEffects ?? [])],
       };
     }
 
@@ -211,17 +212,17 @@ export class StateLadderEngine {
     if (nextStateConfig.prerequisites) {
       const prereq = nextStateConfig.prerequisites;
       if (prereq.priorState && prereq.priorState !== state.currentState) {
-        return { transitioned: false, effects: [...currentStateConfig.effects], exitEffects: [] };
+        return { transitioned: false, effects: [...(currentStateConfig.effects ?? [])], exitEffects: [] };
       }
       if (prereq.minCyclesSinceBirth !== undefined && ctx.cyclesSinceBirth < prereq.minCyclesSinceBirth) {
-        return { transitioned: false, effects: [...currentStateConfig.effects], exitEffects: [] };
+        return { transitioned: false, effects: [...(currentStateConfig.effects ?? [])], exitEffects: [] };
       }
       if (prereq.dials) {
         for (const [dial, bounds] of Object.entries(prereq.dials)) {
           const val = ctx.latentDials[dial];
-          if (val === undefined) return { transitioned: false, effects: [...currentStateConfig.effects], exitEffects: [] };
-          if (bounds.min !== undefined && val < bounds.min) return { transitioned: false, effects: [...currentStateConfig.effects], exitEffects: [] };
-          if (bounds.max !== undefined && val > bounds.max) return { transitioned: false, effects: [...currentStateConfig.effects], exitEffects: [] };
+          if (val === undefined) return { transitioned: false, effects: [...(currentStateConfig.effects ?? [])], exitEffects: [] };
+          if (bounds.min !== undefined && val < bounds.min) return { transitioned: false, effects: [...(currentStateConfig.effects ?? [])], exitEffects: [] };
+          if (bounds.max !== undefined && val > bounds.max) return { transitioned: false, effects: [...(currentStateConfig.effects ?? [])], exitEffects: [] };
         }
       }
     }
@@ -231,7 +232,7 @@ export class StateLadderEngine {
       const currentOccupancy = this.GetStateOccupancy(ladderKey, nextStateConfig.name);
       if (currentOccupancy >= nextStateConfig.capacity) {
         // Capacity full: entity remains in current state until a slot frees up
-        return { transitioned: false, effects: [...currentStateConfig.effects], exitEffects: [] };
+        return { transitioned: false, effects: [...(currentStateConfig.effects ?? [])], exitEffects: [] };
       }
     }
 
@@ -249,8 +250,8 @@ export class StateLadderEngine {
       transitioned: true,
       priorState,
       newState: nextStateConfig.name,
-      effects: [...nextStateConfig.effects],
-      exitEffects: [...currentStateConfig.exitEffects],
+      effects: [...(nextStateConfig.effects ?? [])],
+      exitEffects: [...(currentStateConfig.exitEffects ?? [])],
     };
   }
 }

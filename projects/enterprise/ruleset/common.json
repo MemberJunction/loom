@@ -8,11 +8,11 @@
     "enterpriseTierTarget": 0.30,
     "volume_Company": 10,
     "volume_Product": 10,
-    "volume_Member": 15,
-    "volume_Subscription": 15,
-    "volume_OrderHeader": 10,
-    "volume_OrderLine": 10,
-    "volume_Payment": 10,
+    "volume_Member": 250,
+    "volume_Subscription": 250,
+    "volume_OrderHeader": 20,
+    "volume_OrderLine": 20,
+    "volume_Payment": 20,
     "intake_Company": 2,
     "intake_Product": 2,
     "intake_Member": 2,
@@ -26,7 +26,7 @@
       "id": "factor-membership-renewal",
       "effect": "Member",
       "target": 0.80,
-      "tolerance": 0.15,
+      "tolerance": 0.10,
       "evidence": {
         "source": "Enterprise B2B Benchmark",
         "confidence": "high",
@@ -41,7 +41,13 @@
           "Status": "Lapsed"
         }
       },
-      "arrows": {}
+      "arrows": {
+        "theta": {
+          "dial": "theta",
+          "beta": 1.2,
+          "description": "High engagement increases renewal probability"
+        }
+      }
     },
     "factor-subscription-autorenew": {
       "id": "factor-subscription-autorenew",
@@ -59,7 +65,13 @@
           "AutoRenew": true
         }
       },
-      "arrows": {}
+      "arrows": {
+        "phi": {
+          "dial": "phi",
+          "beta": 0.8,
+          "description": "Affluence increases auto-renewal"
+        }
+      }
     },
     "factor-enterprise-tier": {
       "id": "factor-enterprise-tier",

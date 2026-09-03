@@ -6,6 +6,9 @@
   "description": "Minimal fixture domain testing referential integrity and causal contracts in CI",
   "entrypoint": "./index.ts",
   "rulesetPath": "./ruleset",
+  "startCycle": 2021,
+  "releaseDate": "2026-09-02",
+  "cycleUnit": "year",
   "output": {
     "metadataDir": "./metadata",
     "migrationsDir": "./migrations",

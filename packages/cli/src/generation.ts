@@ -80,14 +80,7 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
     } else if (fieldName === 'PaymentMethod') {
       row[fieldName] = 'CreditCard';
     } else if (fieldName === 'Status') {
-      row[fieldName] = i % 5 !== 0 ? 'Active' : 'Lapsed';
-    } else if (fieldName === 'Tier') {
-      row[fieldName] =
-        i % 10 === 1 || i % 10 === 4 || i % 10 === 7
-          ? 'Enterprise'
-          : i % 2 === 0
-            ? 'MidMarket'
-            : 'SMB';
+      row[fieldName] = 'Active';
     } else if (fieldName === 'AutoRenew') {
       row[fieldName] = i % 10 !== 4 && i % 10 !== 8 && i % 10 !== 0;
     } else if (fieldName === 'IsActive') {

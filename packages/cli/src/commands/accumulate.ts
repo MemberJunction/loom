@@ -48,9 +48,21 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
   let priorCheckpoint: SimulationCheckpoint | null = null;
   try {
     const raw = await fs.readFile(checkpointPath, 'utf8');
-    priorCheckpoint = SimulationCheckpointSchema.parse(JSON.parse(raw));
-  } catch {
-    console.log(`   ℹ️ No prior checkpoint.json found in ${priorDir}; starting fresh accumulation cycle.`);
+    try {
+      priorCheckpoint = SimulationCheckpointSchema.parse(JSON.parse(raw));
+    } catch (parseErr) {
+      throw new Error(
+        `Accumulate: corrupted checkpoint at '${checkpointPath}': ${
+          parseErr instanceof Error ? parseErr.message : String(parseErr)
+        }`
+      );
+    }
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      console.log(`   ℹ️ No prior checkpoint.json found in ${priorDir}; starting fresh accumulation cycle.`);
+    } else {
+      throw err;
+    }
   }
 
   const cycleIndex = (priorCheckpoint?.cycleIndex ?? 0) + 1;
@@ -58,7 +70,7 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     options.asOf ??
     (priorCheckpoint
       ? advanceDateByWeeks(priorCheckpoint.releaseDate, weeksToAdd)
-      : (((loaded.manifest as Record<string, unknown>).releaseDate as string) ?? '2026-09-02'));
+      : (loaded.manifest.releaseDate ?? '2026-09-02'));
   const seed = options.seed
     ? parseInt(options.seed, 10)
     : priorCheckpoint?.seed ?? 42;
@@ -73,9 +85,25 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     const filePath = path.join(priorDir, entityCfg.pack, `${entityName}.json`);
     try {
       const content = await fs.readFile(filePath, 'utf8');
-      priorRecords[entityName] = JSON.parse(content);
-    } catch {
-      priorRecords[entityName] = [];
+      try {
+        const parsed = JSON.parse(content);
+        if (!Array.isArray(parsed)) {
+          throw new Error(`Expected array of records in '${filePath}', got ${typeof parsed}`);
+        }
+        priorRecords[entityName] = parsed;
+      } catch (jsonErr) {
+        throw new Error(
+          `Accumulate: failed to parse '${filePath}': ${
+            jsonErr instanceof Error ? jsonErr.message : String(jsonErr)
+          }`
+        );
+      }
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        priorRecords[entityName] = [];
+      } else {
+        throw err;
+      }
     }
   }
 
@@ -139,10 +167,37 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       const curState = ladderEngine.GetEntityState(ladder.ladderKey, entityId);
       if (curState) {
         const dials = updatedLatentStates[entityId] ?? {};
+        const cycleUnit = ladder.cycleUnit ?? 'year';
+        let stepAmount = 1;
+        let cyclesSinceBirth = 0;
+        let stepCycle = cycleIndex;
+
+        const asOfYear = parseInt(asOfDate.slice(0, 4), 10) || 2026;
+        const asOfDateObj = new Date(asOfDate);
+        const dayOfYear = Math.floor(
+          (asOfDateObj.getTime() - new Date(Date.UTC(asOfYear, 0, 1)).getTime()) / 86400000
+        );
+
+        const birthCycle = priorCheckpoint?.continuity.birthCycles?.[entityId] ?? curState.enteredCycle;
+
+        if (cycleUnit === 'week') {
+          stepAmount = weeksToAdd;
+          const currentTotalWeeks = asOfYear * 52 + Math.floor(dayOfYear / 7);
+          const birthTotalWeeks = birthCycle * 52;
+          cyclesSinceBirth = Math.max(0, currentTotalWeeks - birthTotalWeeks);
+          stepCycle = currentTotalWeeks;
+        } else {
+          stepAmount = weeksToAdd / 52;
+          const currentContinuousCycle = asOfYear + dayOfYear / 365.25;
+          cyclesSinceBirth = Math.max(0, currentContinuousCycle - birthCycle);
+          stepCycle = Math.floor(currentContinuousCycle);
+        }
+
         const stepResult = ladderEngine.StepEntity(ladder.ladderKey, entityId, {
-          cycle: cycleIndex,
-          cyclesSinceBirth: cycleIndex - curState.enteredCycle,
+          cycle: stepCycle,
+          cyclesSinceBirth,
           latentDials: dials,
+          stepAmount,
         });
 
         const stateAfter = ladderEngine.GetEntityState(ladder.ladderKey, entityId);
@@ -233,6 +288,39 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     currentRecords[entityName] = list;
   }
 
+  // Apply factor contract outcomes to newly generated intake records
+  const factorContracts = Object.values(loaded.rulesetModules).flatMap((mod) =>
+    Object.values(mod.effects)
+  );
+  for (const contract of factorContracts) {
+    const list = currentRecords[contract.effect];
+    if (!list || !contract.outcome) continue;
+    const priorCount = priorRecords[contract.effect]?.length ?? 0;
+    const newRecords = list.slice(priorCount);
+
+    for (const rec of newRecords) {
+      const recId = String(rec['ID'] ?? rec['id']);
+      const drawRng = createRng(seed, `intake:${contract.id}:${recId}`);
+      const isPositive = drawRng.bernoulli(contract.target);
+
+      if (isPositive && contract.outcome.where) {
+        for (const [k, v] of Object.entries(contract.outcome.where)) {
+          rec[k] = v;
+        }
+      } else if (!isPositive && contract.outcome.otherwise) {
+        for (const [k, v] of Object.entries(contract.outcome.otherwise)) {
+          rec[k] = v;
+        }
+      } else if (!isPositive && contract.outcome.where) {
+        for (const [k, v] of Object.entries(contract.outcome.where)) {
+          if (typeof v === 'boolean') {
+            rec[k] = false;
+          }
+        }
+      }
+    }
+  }
+
   // 7. Compute pure delta using Accumulator (enforces no deletions byte-for-byte)
   const accumulator = new Accumulator();
   const diff = accumulator.ComputeDelta(
@@ -289,6 +377,7 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       activeEntityIds,
       latentStates: updatedLatentStates,
       activeLifecycleStates: updatedLifecycleStates,
+      birthCycles: priorCheckpoint?.continuity.birthCycles ?? {},
       metadata: { lastAccumulatedAt: asOfDate },
     },
     committedRecordCounts: totalRecordCounts,

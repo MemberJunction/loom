@@ -29,11 +29,7 @@ export interface BuildCommandOptions {
 export async function executeBuild(options: BuildCommandOptions): Promise<void> {
   const loaded = await loadProject(options.project);
   const seed = options.seed ? parseInt(options.seed, 10) : 42;
-  const releaseDate =
-    options.release ??
-    ((loaded.manifest as Record<string, unknown>).releaseDate as string) ??
-    ((loaded.manifest as Record<string, unknown>).asOfDate as string) ??
-    '2026-09-02';
+  const releaseDate = options.release ?? loaded.manifest.releaseDate ?? '2026-09-02';
   const asOfYear = parseInt(releaseDate.slice(0, 4), 10) || 2026;
   const outputDir = options.output
     ? path.resolve(process.cwd(), options.output)
@@ -98,7 +94,16 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         for (const hero of entityHeroes) {
           const heroRec = heroInjector.GetHero(hero.heroKey);
           if (heroRec) {
+            const baseRow = generateEntityRecord({
+              domain: loaded.domain,
+              entity: entityName,
+              i: records.length + 1,
+              parentPool,
+              rng: createRng(ctx.seed, `hero:${hero.heroKey}`),
+              identityService,
+            });
             records.push({
+              ...baseRow,
               ID: heroRec.id,
               ...hero.businessKeys,
               ...hero.fixedFields,
@@ -119,6 +124,40 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
             identityService,
           });
           records.push(row);
+        }
+
+        // Satisfy hero feature pins targeting this child entity
+        for (const hero of loaded.heroesManifest?.heroes ?? []) {
+          const heroRec = heroInjector.GetHero(hero.heroKey);
+          if (!heroRec) continue;
+          const heroId = heroRec.id;
+
+          const fkEntry = Object.entries(entityCfg.foreignKeys ?? {}).find(
+            ([_, fk]) => fk.targetEntity === hero.entity
+          );
+          if (!fkEntry) continue;
+          const fkFieldName = fkEntry[1].fieldName ?? fkEntry[0];
+
+          for (const pin of hero.pins) {
+            if (pin.kind === 'feature' && pin.feature.from === entityName) {
+              const countNeeded =
+                typeof pin.value === 'number' && (pin.op === 'gte' || pin.op === 'gt' || pin.op === 'eq')
+                  ? pin.value
+                  : 1;
+
+              let satisfied = 0;
+              for (const row of records) {
+                if (satisfied >= countNeeded) break;
+                row[fkFieldName] = heroId;
+                if (pin.feature.where) {
+                  for (const [wField, wVal] of Object.entries(pin.feature.where)) {
+                    row[wField] = wVal;
+                  }
+                }
+                satisfied++;
+              }
+            }
+          }
         }
 
         return { [entityName]: records };
@@ -149,10 +188,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
 
   // 3. Multi-cycle retrospective simulation across the unified relational world (R4-1)
   const rng = createRng(seed);
-  const startCycle =
-    typeof (loaded.manifest as Record<string, unknown>).startCycle === 'number'
-      ? ((loaded.manifest as Record<string, unknown>).startCycle as number)
-      : asOfYear - 4;
+  const startCycle = loaded.manifest.startCycle ?? asOfYear - 4;
   const cycles: number[] = [];
   for (let y = startCycle; y <= asOfYear; y++) {
     cycles.push(y);
@@ -164,19 +200,25 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
       const r = records[idx]!;
       const id = String(r['ID'] ?? r['id']);
       const hero = heroInjector.GetHeroById(id);
+      const filteredFields: Record<string, string | number | boolean | null> = {};
+      for (const [k, v] of Object.entries(r)) {
+        if (v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+          filteredFields[k] = v;
+        }
+      }
+      if (hero?.fixedFields) {
+        Object.assign(filteredFields, hero.fixedFields);
+      }
+
+      const totalSpan = Math.max(1, asOfYear - startCycle + 1);
+      const birthCycle = hero?.birthCycle ?? (startCycle + (idx % totalSpan));
+
       allUnrollCandidates.push({
         id,
         entity: entityName,
-        birthCycle: hero?.birthCycle ?? (asOfYear - (idx % 4)),
+        birthCycle,
         latentDials: hero ? { ...hero.latentDials } : { theta: 0.0, phi: 0.0 },
-        fixedFields: {
-          ...(hero ? hero.fixedFields : {}),
-          ...(Object.fromEntries(
-            Object.entries(r).filter(
-              ([_, v]) => v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
-            )
-          ) as Record<string, string | number | boolean | null>),
-        },
+        fixedFields: filteredFields,
         isHero: hero !== undefined,
       });
     }
@@ -206,10 +248,15 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
       if (state) {
         const outcomes = state.outcomesByCycle.get(asOfYear);
         for (const contract of entityFactors) {
-          const realized = outcomes ? outcomes[contract.id] : undefined;
+          const hero = heroInjector.GetHeroById(id);
+          const heroPinnedOutcome = hero?.pins?.find(
+            (p) => p.kind === 'outcome' && p.factor === contract.id
+          );
+          const realized = heroPinnedOutcome !== undefined
+            ? heroPinnedOutcome.value
+            : (outcomes ? outcomes[contract.id] : undefined);
           if (realized !== undefined && contract.outcome && contract.outcome.where) {
-            const otherwise = (contract.outcome as Record<string, unknown>).otherwise as Record<string, unknown> | undefined;
-            const hero = heroInjector.GetHeroById(id);
+            const otherwise = contract.outcome.otherwise;
             for (const [field, targetVal] of Object.entries(contract.outcome.where)) {
               if (hero && hero.fixedFields && field in hero.fixedFields) {
                 // Invariant: hero fixedFields take precedence over factor outcome calibration
@@ -290,6 +337,11 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
     }
   }
 
+  const birthCycles: Record<string, number> = {};
+  for (const cand of allUnrollCandidates) {
+    birthCycles[cand.id] = cand.birthCycle;
+  }
+
   const initialCheckpoint: SimulationCheckpoint = {
     domain: loaded.domain.name,
     seed,
@@ -301,6 +353,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
       activeEntityIds,
       latentStates,
       activeLifecycleStates,
+      birthCycles,
       metadata: { initializedAt: releaseDate },
     },
     committedRecordCounts: totalRecordCounts,

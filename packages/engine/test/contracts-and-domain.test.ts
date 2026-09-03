@@ -4,6 +4,7 @@ import {
   PinOpSchema,
   DomainConfigSchema,
   FactorOverrideSchema,
+  FactorArrowSchema,
   validateHeroesAgainstDomain,
   validateMotifsAgainstDomain,
   validateLaddersAgainstDomain,
@@ -412,5 +413,53 @@ describe('Plan 02 Strict Schemas and Domain Validation (Gate 0 / L4a)', () => {
     expect(res.valid).toBe(false);
     expect(res.errors.length).toBeGreaterThan(0);
     expect(res.errors[0]).toContain('HeroesManifest');
+  });
+
+  // N9: FactorArrowSchema supports dial arrows with optional feature or dial property
+  it('N9: FactorArrowSchema parses dial arrows without feature property and RetrospectiveUnroller resolves dial', () => {
+    const rawArrow = {
+      name: 'theta',
+      beta: 0.75,
+      dial: 'theta',
+      description: 'Engagement increases retention',
+    };
+    const parsedArrow = FactorArrowSchema.parse(rawArrow);
+    expect(parsedArrow.name).toBe('theta');
+    expect(parsedArrow.feature).toBeUndefined();
+    expect(parsedArrow.dial).toBe('theta');
+
+    const contract: FactorContract = {
+      id: 'factor-dial-test',
+      effect: 'Person',
+      target: 0.5,
+      tolerance: 0.1,
+      evidence: { source: 'test', confidence: 'high' },
+      outcome: { from: 'self', where: { Status: 'Active' } },
+      arrows: {
+        theta: parsedArrow,
+      },
+    };
+
+    const heroInjector = new HeroInjector('test', '11111111-1111-1111-1111-111111111111', []);
+    const motifSampler = new MotifSampler([]);
+    const ladderEngine = new StateLadderEngine([]);
+
+    const unroller = new RetrospectiveUnroller({
+      cycles: [2026],
+      entities: [
+        { id: 'p1', entity: 'Person', birthCycle: 2026, latentDials: { theta: 2.0 }, isHero: false },
+        { id: 'p2', entity: 'Person', birthCycle: 2026, latentDials: { theta: -2.0 }, isHero: false },
+      ],
+      heroInjector,
+      motifSampler,
+      ladderEngine,
+      factorContracts: [contract],
+    });
+
+    const rng = createRng(42, 'test-n9');
+    unroller.Initialize(rng);
+    const snapshots = unroller.Run(rng);
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]?.outcomesCount['factor-dial-test']).toBeDefined();
   });
 });

@@ -11,11 +11,12 @@
         "stateField": "Status"
       },
       "cohortShare": 0.5,
+      "cycleUnit": "week",
       "states": [
         {
           "name": "Trial",
           "capacity": 200,
-          "durationCycles": 1,
+          "durationCycles": 2,
           "prerequisites": {
             "minCyclesSinceBirth": 0
           },
@@ -26,10 +27,10 @@
         {
           "name": "Active",
           "capacity": 100,
-          "durationCycles": 4,
+          "durationCycles": 8,
           "prerequisites": {
             "priorState": "Trial",
-            "dials": { "theta": { "min": -0.5 } }
+            "dials": { "theta": { "min": 0.5 } }
           },
           "effects": [
             { "factor": "factor-membership-renewal", "beta": 2.5 }
@@ -38,7 +39,7 @@
         {
           "name": "PastDue",
           "capacity": 20,
-          "durationCycles": 1,
+          "durationCycles": 2,
           "prerequisites": {
             "priorState": "Active"
           },
@@ -52,7 +53,7 @@
         {
           "name": "Cancelled",
           "capacity": 500,
-          "durationCycles": 10,
+          "durationCycles": 20,
           "prerequisites": {
             "priorState": "PastDue"
           },

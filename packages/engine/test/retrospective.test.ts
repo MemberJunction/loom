@@ -18,13 +18,13 @@ describe('RetrospectiveUnroller', () => {
 
   const contractMock: FactorContract = {
     id: 'annual-renewal',
-    effect: 'Binary renewal probability',
+    effect: 'Person',
     target: 0.8,
     tolerance: 0.05,
     evidence: { source: 'industry-benchmarks', confidence: 'high' },
     outcome: { aggregation: 'exists' },
     arrows: {
-      engagement: { name: 'engagement', beta: 0.5, feature: { aggregation: 'avg' } },
+      engagement: { name: 'engagement', beta: 0.5, dial: 'engagement' },
     },
   };
 
@@ -204,13 +204,13 @@ describe('RetrospectiveUnroller', () => {
     const authoredBeta = 0.5;
     const contract: FactorContract = {
       id: 'test-renewal',
-      effect: 'Binary renewal probability',
+      effect: 'Person',
       target: 0.80,
-      tolerance: 0.05,
+      tolerance: 0.02,
       evidence: { source: 'test', confidence: 'high' },
       outcome: { aggregation: 'exists' },
       arrows: {
-        engagement: { name: 'engagement', beta: authoredBeta, feature: { aggregation: 'avg' } },
+        engagement: { name: 'engagement', beta: authoredBeta, dial: 'engagement' },
       },
     };
 

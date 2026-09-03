@@ -20,12 +20,23 @@ export const FeatureQuerySchema = z.object({
 });
 export type FeatureQuery = z.infer<typeof FeatureQuerySchema>;
 
-export const FactorArrowSchema = z.object({
-  name: z.string().min(1),
+export const DialArrowSchema = z.object({
+  name: z.string().optional(),
+  dial: z.string().min(1),
   beta: z.number(),
-  feature: FeatureQuerySchema,
   description: z.string().optional(),
-});
+}).strict();
+export type DialArrow = z.infer<typeof DialArrowSchema>;
+
+export const FeatureArrowSchema = z.object({
+  name: z.string().optional(),
+  feature: FeatureQuerySchema,
+  beta: z.number(),
+  description: z.string().optional(),
+}).strict();
+export type FeatureArrow = z.infer<typeof FeatureArrowSchema>;
+
+export const FactorArrowSchema = z.union([DialArrowSchema, FeatureArrowSchema]);
 export type FactorArrow = z.infer<typeof FactorArrowSchema>;
 
 export const FactorContractSchema = z.object({

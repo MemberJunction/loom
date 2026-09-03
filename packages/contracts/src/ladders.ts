@@ -63,6 +63,7 @@ export const StateLadderConfigSchema = z.object({
   entity: z.string().min(1),
   binding: StateLadderBindingSchema,
   cohortShare: z.number().min(0).max(1).default(1),
+  cycleUnit: z.enum(['year', 'week', 'month', 'cycle']).default('year').optional(),
   states: z.array(StateLadderStateSchema).min(1),
   description: z.string().optional(),
 }).strict();

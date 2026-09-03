@@ -34,10 +34,10 @@ export async function executeValidate(options: ValidateCommandOptions): Promise<
       } catch (jsonErr) {
         throw new Error(`Invalid JSON syntax in metadata file '${filePath}': ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`);
       }
-      if (!Array.isArray(parsed)) {
-        throw new Error(`Metadata file '${filePath}' must contain a JSON array of records`);
+      if (!Array.isArray(parsed) || !parsed.every((item): item is Record<string, unknown> => typeof item === 'object' && item !== null && !Array.isArray(item))) {
+        throw new Error(`Metadata file '${filePath}' must contain a JSON array of record objects`);
       }
-      records[entityName] = parsed as Record<string, unknown>[];
+      records[entityName] = parsed;
     } catch (err) {
       if (!isEnoent(err)) {
         throw err;
