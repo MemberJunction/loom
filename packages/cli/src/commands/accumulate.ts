@@ -118,7 +118,6 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
         domain: loaded.domain,
         entity: entityName,
         i,
-        declaredFields: entityCfg.fields,
         parentPool: currentRecords,
         rng,
         identityService,

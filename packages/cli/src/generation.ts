@@ -5,7 +5,6 @@ export interface GenerateEntityRecordOptions {
   domain: DomainConfig;
   entity: string;
   i: number;
-  declaredFields: Record<string, unknown>;
   parentPool: Record<string, Record<string, unknown>[]>;
   rng: RngStream;
   identityService: IdentityService;
@@ -18,7 +17,7 @@ export interface GenerateEntityRecordOptions {
  * - Mints deterministic primary key UUIDs from declared business keys
  */
 export function generateEntityRecord(options: GenerateEntityRecordOptions): Record<string, unknown> {
-  const { domain, entity, i, declaredFields, parentPool, rng, identityService } = options;
+  const { domain, entity, i, parentPool, rng, identityService } = options;
   const entityCfg = domain.entities[entity];
   if (!entityCfg) {
     throw new Error(`generateEntityRecord: entity '${entity}' not found in domain`);
@@ -27,41 +26,33 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
   const row: Record<string, unknown> = {};
 
   // 1. Populate all declared non-PK fields first
-  for (const [fieldName, fieldDef] of Object.entries(declaredFields)) {
-    if (fieldName === 'ID' || fieldName === 'id') continue;
+  const fkList = Object.values(entityCfg.foreignKeys ?? {});
 
-    const fDef = fieldDef as {
-      type?: string;
-      foreignKey?: { targetEntity: string; targetField: string };
-    };
+  for (const [fieldName, fieldCfg] of Object.entries(entityCfg.fields)) {
+    if (fieldCfg.isPrimaryKey || fieldName === 'ID' || fieldName === 'id') continue;
 
-    // Check field-level FK or entity-level foreignKeys
-    let targetEntity: string | undefined = fDef.foreignKey?.targetEntity;
-    if (!targetEntity && entityCfg.foreignKeys) {
-      const matchingFk = Object.values(entityCfg.foreignKeys).find(
-        (fk) => fk.fieldName === fieldName
-      );
-      if (matchingFk) targetEntity = matchingFk.targetEntity;
-    }
-
-    if (targetEntity) {
-      const targetRows = parentPool[targetEntity];
+    // Foreign key resolution: match fieldName against declared foreignKeys
+    const fkIdx = fkList.findIndex((fk) => fk.fieldName === fieldName);
+    if (fkIdx >= 0) {
+      const fk = fkList[fkIdx]!;
+      const targetRows = parentPool[fk.targetEntity];
       if (!targetRows || targetRows.length === 0) {
         throw new Error(
-          `No parent records available for foreign key ${entity}.${fieldName} -> ${targetEntity}`
+          `No parent records available for foreign key ${entity}.${fieldName} -> ${fk.targetEntity}`
         );
       }
+      // Generic multi-FK indexing: spread composite FK parents without hardcoded entity names
       const parentIndex =
-        targetEntity === 'Product' && (entity === 'OrderLine' || entity === 'Subscription')
-          ? Math.floor((i - 1) / targetRows.length) % targetRows.length
-          : (i - 1) % targetRows.length;
+        fkIdx === 0
+          ? (i - 1) % targetRows.length
+          : Math.floor((i - 1) / Math.pow(targetRows.length, fkIdx)) % targetRows.length;
       const parent = targetRows[parentIndex];
       if (!parent) {
-        throw new Error(`Parent record at index ${parentIndex} not found in ${targetEntity}`);
+        throw new Error(`Parent record at index ${parentIndex} not found in ${fk.targetEntity}`);
       }
-      const parentId = parent['ID'] ?? parent['id'];
+      const parentId = parent[fk.targetField] ?? parent['ID'] ?? parent['id'];
       if (!parentId) {
-        throw new Error(`Parent record in ${targetEntity} missing primary key ID`);
+        throw new Error(`Parent record in ${fk.targetEntity} missing primary key ID`);
       }
       row[fieldName] = parentId;
       continue;
@@ -113,11 +104,11 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
       row[fieldName] = 50 + (i % 100);
     } else if (fieldName === 'AnnualRevenue') {
       row[fieldName] = 1000000 + (i % 20) * 50000;
-    } else if (fDef.type === 'number') {
+    } else if (fieldCfg.type === 'number') {
       row[fieldName] = i * 10;
-    } else if (fDef.type === 'boolean') {
+    } else if (fieldCfg.type === 'boolean') {
       row[fieldName] = true;
-    } else if (fDef.type === 'date') {
+    } else if (fieldCfg.type === 'date') {
       const year = 2026;
       const month = String(1 + (i % 12)).padStart(2, '0');
       const day = String(1 + (i % 28)).padStart(2, '0');

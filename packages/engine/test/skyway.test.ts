@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { sortEntitiesTopologically } from '../src/emitters/skyway.js';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import * as os from 'node:os';
+import { sortEntitiesTopologically, emitSkywayMigration } from '../src/emitters/skyway.js';
 import type { DomainConfig } from '@memberjunction/loom-contracts';
 
 describe('Skyway Emitter: Topological Entity Sorting', () => {
@@ -142,12 +145,71 @@ describe('Skyway Emitter: Topological Entity Sorting', () => {
     expect(order1.indexOf('Product')).toBeLessThan(order1.indexOf('OrderLine'));
   });
 
-  it('sorts rows deterministically by code-point order', () => {
-    // Probed values: ['a-b', 'ab', 'A-c', 'Ab']
-    const testIds = ['a-b', 'ab', 'A-c', 'Ab'];
-    const sorted = [...testIds].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  it('sorts rows deterministically by code-point order in emitted Skyway migrations', async () => {
+    const tmpDir = path.join(os.tmpdir(), `skyway-codepoint-${Date.now()}`);
+    await fs.mkdir(tmpDir, { recursive: true });
 
-    // Code point sorting: uppercase ASCII (< 0x61) precedes lowercase ASCII
-    expect(sorted).toEqual(['A-c', 'Ab', 'a-b', 'ab']);
+    try {
+      const singleEntityDomain: DomainConfig = {
+        name: 'sort-test',
+        namespace: '33333333-3333-3333-3333-333333333333',
+        packs: {},
+        entities: {
+          Item: {
+            name: 'Item',
+            schema: 'dbo',
+            targetTable: 'Item',
+            pack: 'core',
+            businessKey: ['ID'],
+            fields: {
+              ID: { name: 'ID', type: 'string', nullable: false, isPrimaryKey: true },
+              Value: { name: 'Value', type: 'string', nullable: false, isPrimaryKey: false },
+            },
+            foreignKeys: {},
+          },
+        },
+      };
+
+      // Pass rows in an unsorted order with probe IDs: ['a-b', 'ab', 'A-c', 'Ab']
+      const data = {
+        Item: [
+          { ID: 'a-b', Value: 'val1' },
+          { ID: 'ab', Value: 'val2' },
+          { ID: 'A-c', Value: 'val3' },
+          { ID: 'Ab', Value: 'val4' },
+        ],
+      };
+
+      const migrationFile = await emitSkywayMigration({
+        outputDir: tmpDir,
+        version: '202609020001',
+        description: 'CodePointSortTest',
+        domain: singleEntityDomain,
+        data,
+        dialect: 'sqlserver',
+      });
+
+      const content = await fs.readFile(migrationFile, 'utf8');
+
+      // Find the positions of the inserted IDs in the emitted SQL
+      const posAc = content.indexOf("'A-c'");
+      const posAb = content.indexOf("'Ab'");
+      const posDash = content.indexOf("'a-b'");
+      const posLowerAb = content.indexOf("'ab'");
+
+      expect(posAc).toBeGreaterThan(-1);
+      expect(posAb).toBeGreaterThan(-1);
+      expect(posDash).toBeGreaterThan(-1);
+      expect(posLowerAb).toBeGreaterThan(-1);
+
+      // In code-point order: 'A-c' < 'Ab' < 'a-b' < 'ab'
+      // ('-' is 0x2D, 'b' is 0x62, so 'A-c' precedes 'Ab')
+      // (Under localeCompare without locale, punctuation and case order differs from code-point)
+      expect(posAc).toBeLessThan(posAb);
+      expect(posAb).toBeLessThan(posDash);
+      expect(posDash).toBeLessThan(posLowerAb);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });

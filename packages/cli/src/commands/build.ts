@@ -62,7 +62,6 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
             domain: loaded.domain,
             entity: entityName,
             i,
-            declaredFields: entityCfg.fields,
             parentPool,
             rng,
             identityService,
