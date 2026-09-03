@@ -45,6 +45,7 @@ export interface UnrollConfig {
   domain?: DomainConfig;
   factorContracts?: FactorContract[];
   annualWanderStdDev?: number;
+  cycleUnit?: 'year' | 'week' | 'month' | 'cycle';
 }
 
 export interface CycleSnapshot {
@@ -247,7 +248,7 @@ export class RetrospectiveUnroller {
         // Step non-hero ladders
         if (!entity.isHero) {
           for (const ladder of ladderEngine.GetAllLadders()) {
-            const cycleUnit = ladder.cycleUnit ?? 'year';
+            const cycleUnit = this.config.cycleUnit ?? 'year';
             const ladderCyclesSinceBirth = cycleUnit === 'week' ? cyclesSinceBirth * 52 : cyclesSinceBirth;
             const stepAmount = cycleUnit === 'week' ? 52 : 1;
             const stepResult = ladderEngine.StepEntity(ladder.ladderKey, entity.id, {
@@ -273,7 +274,7 @@ export class RetrospectiveUnroller {
           for (const ladder of ladderEngine.GetAllLadders()) {
             const st = ladderEngine.GetEntityState(ladder.ladderKey, entity.id);
             if (st) {
-              const cycleUnit = ladder.cycleUnit ?? 'year';
+              const cycleUnit = this.config.cycleUnit ?? 'year';
               st.tenureInCurrentState = cycleUnit === 'week' ? (c - st.enteredCycle) * 52 : c - st.enteredCycle;
             }
           }
@@ -422,10 +423,21 @@ export class RetrospectiveUnroller {
           const { entity, score, overrideProb } = item;
           let realizedOutcome: boolean;
 
-          // 1. Hero outcome pin conditioning (Invariant 2)
+          // 1. Hero outcome pin conditioning (Invariant 2): condition the draw
           if (entity.isHero && entity.heroKey) {
             const pinned = this.config.heroInjector.GetOutcomePin(entity.heroKey, contract.id, c);
             if (pinned !== undefined) {
+              const heroDrawRng = rng
+                .substream(`entity:${entity.entity}`)
+                .substream(`hero-outcome:${entity.id}:${c}:${contract.id}`);
+              let attempt = 0;
+              let drawn = false;
+              do {
+                const drawSub = heroDrawRng.substream(`try:${attempt}`);
+                const prob = overrideProb !== undefined ? overrideProb : sigmoid(finalIntercept + score);
+                drawn = drawSub.bernoulli(prob);
+                attempt++;
+              } while (drawn !== pinned && attempt < 100);
               realizedOutcome = pinned;
               this.recordOutcome(entity, c, contract.id, realizedOutcome);
               if (realizedOutcome) positiveCount++;
@@ -480,6 +492,10 @@ export class RetrospectiveUnroller {
 
   public GetEntityState(entityId: string): UnrollEntityState | undefined {
     return this.entityStates.get(entityId);
+  }
+
+  public GetMotifAssignments(entityId: string): MotifAssignment[] {
+    return this.motifAssignments.get(entityId) ?? [];
   }
 
   public GetAllEntityStates(): UnrollEntityState[] {

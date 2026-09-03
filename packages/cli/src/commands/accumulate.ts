@@ -154,7 +154,7 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       const curState = ladderEngine.GetEntityState(ladder.ladderKey, entityId);
       if (curState) {
         const dials = updatedLatentStates[entityId] ?? {};
-        const cycleUnit = ladder.cycleUnit ?? 'year';
+        const cycleUnit = loaded.manifest?.cycleUnit ?? 'year';
         let stepAmount = 1;
         let cyclesSinceBirth = 0;
         let stepCycle = cycleIndex;

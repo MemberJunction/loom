@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const StateLadderFieldBindingSchema = z.object({
   mode: z.literal('field'),
   field: z.string().min(1),
+  stateValues: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
 }).strict();
 export type StateLadderFieldBinding = z.infer<typeof StateLadderFieldBindingSchema>;
 
@@ -11,9 +12,11 @@ export const StateLadderChildEntityBindingSchema = z.object({
   childEntity: z.string().min(1),
   foreignKey: z.string().min(1),
   stateField: z.string().min(1),
+  stateValues: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
   termField: z.string().min(1).optional(),
   startDateField: z.string().min(1).optional(),
   endDateField: z.string().min(1).optional(),
+  fixedFields: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional(),
 }).strict();
 export type StateLadderChildEntityBinding = z.infer<typeof StateLadderChildEntityBindingSchema>;
 
@@ -63,7 +66,6 @@ export const StateLadderConfigSchema = z.object({
   entity: z.string().min(1),
   binding: StateLadderBindingSchema,
   cohortShare: z.number().min(0).max(1).default(1),
-  cycleUnit: z.enum(['year', 'week', 'month', 'cycle']).default('year').optional(),
   states: z.array(StateLadderStateSchema).min(1),
   description: z.string().optional(),
 }).strict();

@@ -8,7 +8,7 @@
   "rulesetPath": "./ruleset",
   "startCycle": 2021,
   "releaseDate": "2026-09-02",
-  "cycleUnit": "year",
+  "cycleUnit": "week",
   "output": {
     "metadataDir": "./metadata"
   }

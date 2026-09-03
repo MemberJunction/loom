@@ -11,7 +11,6 @@
         "stateField": "Status"
       },
       "cohortShare": 0.5,
-      "cycleUnit": "week",
       "states": [
         {
           "name": "Trial",

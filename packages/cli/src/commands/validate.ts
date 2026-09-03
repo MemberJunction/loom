@@ -82,7 +82,8 @@ export async function executeValidate(options: ValidateCommandOptions): Promise<
 
   const validator = new Validator();
   const heroes = loaded.heroesManifest?.heroes ?? [];
-  const report = validator.Validate(loaded.domain, records, allFactors, heroes);
+  const eras = loaded.erasManifest?.eras ?? [];
+  const report = validator.Validate(loaded.domain, records, allFactors, heroes, eras);
 
   // Prepend MetadataSync gates
   report.gates.unshift(...syncGates);

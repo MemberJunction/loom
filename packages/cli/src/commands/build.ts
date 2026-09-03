@@ -14,7 +14,7 @@ import {
   type SimulationNode,
   type EntityCandidate,
 } from '@memberjunction/loom-engine';
-import type { SimulationCheckpoint } from '@memberjunction/loom-contracts';
+import type { SimulationCheckpoint, HeroOutcomePin } from '@memberjunction/loom-contracts';
 import { generateEntityRecord } from '../generation.js';
 
 export interface BuildCommandOptions {
@@ -56,6 +56,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
   const resolver = new CausalGraphResolver();
 
   // Create simulation DAG nodes for each entity defined in domain.json
+  const bgRecordsByEntity = new Map<string, Record<string, unknown>[]>();
+
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
     const node: SimulationNode = {
       id: `node-${entityName.toLowerCase()}`,
@@ -77,85 +79,29 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
           }
         }
 
+        // CLI Invariant 3: background parentPool uses background records to ensure identity-keyed independence
         const parentPool: Record<string, Record<string, unknown>[]> = {};
         for (const [pEnt, pRows] of ctx.generatedData.entries()) {
-          parentPool[pEnt] = pRows;
+          parentPool[pEnt] = bgRecordsByEntity.get(pEnt) ?? pRows;
         }
 
-        const records: Record<string, unknown>[] = [];
-
-        // 1. Inject heroes for this entity
-        const entityHeroes = (loaded.heroesManifest?.heroes ?? []).filter((h) => h.entity === entityName);
-        for (const hero of entityHeroes) {
-          const heroRec = heroInjector.GetHero(hero.heroKey);
-          if (heroRec) {
-            const baseRow = generateEntityRecord({
-              domain: loaded.domain,
-              entity: entityName,
-              i: records.length + 1,
-              parentPool,
-              rng: createRng(ctx.seed, `hero:${hero.heroKey}`),
-              identityService,
-            });
-            records.push({
-              ...baseRow,
-              ID: heroRec.id,
-              ...hero.businessKeys,
-              ...hero.fixedFields,
-            });
-          }
-        }
-
-        // 2. Generate remaining background entities up to targetCount
-        const needed = Math.max(0, targetCount - records.length);
+        // 1. Generate background records deterministically (1..targetCount)
+        const backgroundRecords: Record<string, unknown>[] = [];
         const entityRng = createRng(ctx.seed, `entity:${entityName}`);
-        for (let i = 1; i <= needed; i++) {
+        for (let i = 1; i <= targetCount; i++) {
           const row = generateEntityRecord({
             domain: loaded.domain,
             entity: entityName,
-            i: records.length + 1,
+            i,
             parentPool,
             rng: entityRng,
             identityService,
           });
-          records.push(row);
+          backgroundRecords.push(row);
         }
+        bgRecordsByEntity.set(entityName, backgroundRecords);
 
-        // Satisfy hero feature pins targeting this child entity
-        for (const hero of loaded.heroesManifest?.heroes ?? []) {
-          const heroRec = heroInjector.GetHero(hero.heroKey);
-          if (!heroRec) continue;
-          const heroId = heroRec.id;
-
-          const fkEntry = Object.entries(entityCfg.foreignKeys ?? {}).find(
-            ([_, fk]) => fk.targetEntity === hero.entity
-          );
-          if (!fkEntry) continue;
-          const fkFieldName = fkEntry[1].fieldName ?? fkEntry[0];
-
-          for (const pin of hero.pins) {
-            if (pin.kind === 'feature' && pin.feature.from === entityName) {
-              const countNeeded =
-                typeof pin.value === 'number' && (pin.op === 'gte' || pin.op === 'gt' || pin.op === 'eq')
-                  ? pin.value
-                  : 1;
-
-              let satisfied = 0;
-              for (const row of records) {
-                if (satisfied >= countNeeded) break;
-                row[fkFieldName] = heroId;
-                if (pin.feature.where) {
-                  for (const [wField, wVal] of Object.entries(pin.feature.where)) {
-                    row[wField] = wVal;
-                  }
-                }
-                satisfied++;
-              }
-            }
-          }
-        }
-
-        return { [entityName]: records };
+        return { [entityName]: backgroundRecords };
       },
     };
 
@@ -191,8 +137,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
 
   const allUnrollCandidates: EntityCandidate[] = [];
   for (const [entityName, records] of Object.entries(allRecords)) {
-    for (let idx = 0; idx < records.length; idx++) {
-      const r = records[idx]!;
+    let bgIdx = 0;
+    for (const r of records) {
       const id = String(r['ID'] ?? r['id']);
       const hero = heroInjector.GetHeroById(id);
       const filteredFields: Record<string, string | number | boolean | null> = {};
@@ -206,7 +152,10 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
       }
 
       const totalSpan = Math.max(1, asOfYear - startCycle + 1);
-      const birthCycle = hero?.birthCycle ?? (startCycle + (idx % totalSpan));
+      const birthCycle = hero?.birthCycle ?? (startCycle + (bgIdx % totalSpan));
+      if (!hero) {
+        bgIdx++;
+      }
 
       allUnrollCandidates.push({
         id,
@@ -229,6 +178,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
     factorContracts,
     eras: loaded.erasManifest?.eras ?? [],
     domain: loaded.domain,
+    cycleUnit: loaded.manifest?.cycleUnit ?? 'year',
   });
 
   worldUnroller.Initialize(rng);
@@ -244,12 +194,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         const outcomes = state.outcomesByCycle.get(asOfYear);
         for (const contract of entityFactors) {
           const hero = heroInjector.GetHeroById(id);
-          const heroPinnedOutcome = hero?.pins?.find(
-            (p) => p.kind === 'outcome' && p.factor === contract.id
-          );
-          const realized = heroPinnedOutcome !== undefined
-            ? heroPinnedOutcome.value
-            : (outcomes ? outcomes[contract.id] : undefined);
+          const realized = outcomes ? outcomes[contract.id] : undefined;
           if (realized !== undefined && contract.outcome && contract.outcome.where) {
             const otherwise = contract.outcome.otherwise;
             for (const [field, targetVal] of Object.entries(contract.outcome.where)) {
@@ -273,6 +218,281 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
                 }
               }
             }
+          }
+        }
+      }
+    }
+  }
+
+  // 5. Apply ladder bindings to entity records (A4 / N6)
+  for (const ladder of loaded.laddersManifest?.ladders ?? []) {
+    const binding = ladder.binding;
+    if (binding.mode === 'field') {
+      const records = allRecords[ladder.entity] ?? [];
+      for (const row of records) {
+        const id = String(row['ID'] ?? row['id']);
+        const state = ladderEngine.GetEntityState(ladder.ladderKey, id);
+        if (state) {
+          row[binding.field] = ladderEngine.GetStoredValueForState(ladder.ladderKey, state.currentState);
+        }
+      }
+    } else if (binding.mode === 'childEntity') {
+      const childRecords = allRecords[binding.childEntity] ?? [];
+      for (const childRow of childRecords) {
+        const parentId = String(childRow[binding.foreignKey] ?? '');
+        if (parentId) {
+          const state = ladderEngine.GetEntityState(ladder.ladderKey, parentId);
+          if (state) {
+            childRow[binding.stateField] = ladderEngine.GetStoredValueForState(ladder.ladderKey, state.currentState);
+            if (binding.fixedFields) {
+              for (const [k, v] of Object.entries(binding.fixedFields)) {
+                childRow[k] = v;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 6. Generate discrete child rows per cycle from motif childRates (A3 / 02.7)
+  for (const c of cycles) {
+    const activeEras = (loaded.erasManifest?.eras ?? []).filter((e) => e.cycles.includes(c));
+
+    for (const motif of loaded.motifsManifest?.motifs ?? []) {
+      const parentRecords = allRecords[motif.targetEntity] ?? [];
+      for (const parentRow of parentRecords) {
+        const parentId = String(parentRow['ID'] ?? parentRow['id']);
+        const assignments = worldUnroller.GetMotifAssignments(parentId);
+        const assignedThisMotif = assignments.some((a) => a.motifKey === motif.motifKey);
+        if (!assignedThisMotif) continue;
+
+        for (const cr of motif.childRates ?? []) {
+          const childCfg = loaded.domain.entities[cr.entity];
+          if (!childCfg) continue;
+
+          const fkEntry = Object.entries(childCfg.foreignKeys ?? {}).find(
+            ([_, fk]) => fk.targetEntity === motif.targetEntity
+          );
+          if (!fkEntry) continue;
+          const fkFieldName = fkEntry[1].fieldName ?? fkEntry[0];
+
+          let count = 0;
+          const childRng = createRng(seed, `motif-child:${parentId}:${cr.entity}:${c}`);
+          if (typeof cr.perCycle === 'number') {
+            count = cr.perCycle;
+          } else if (cr.perCycle && typeof cr.perCycle.min === 'number' && typeof cr.perCycle.max === 'number') {
+            count = childRng.int(cr.perCycle.min, cr.perCycle.max);
+          }
+
+          // Apply era volume multipliers (B1 / B2)
+          for (const era of activeEras) {
+            for (const vm of era.volumeMultipliers) {
+              if (vm.entity === cr.entity) {
+                count = Math.round(count * vm.multiplier);
+              }
+            }
+          }
+
+          for (let k = 1; k <= count; k++) {
+            const rowRng = createRng(seed, `motif-row:${parentId}:${cr.entity}:${c}:${k}`);
+            const childRow = generateEntityRecord({
+              domain: loaded.domain,
+              entity: cr.entity,
+              i: (allRecords[cr.entity]?.length ?? 0) + 1,
+              parentPool: allRecords,
+              rng: rowRng,
+              identityService,
+            });
+            childRow[fkFieldName] = parentId;
+            const cycleDateField = Object.keys(childCfg.fields).find(
+              (f) => f === 'Cycle' || f === 'Year' || f.endsWith('Date') || f.endsWith('At')
+            );
+            if (cycleDateField) {
+              childRow[cycleDateField] = childCfg.fields[cycleDateField]?.type === 'number' ? c : `${c}-06-15`;
+            }
+            if (cr.condition) {
+              for (const [cf, cv] of Object.entries(cr.condition)) {
+                childRow[cf] = cv;
+              }
+            }
+            if (!allRecords[cr.entity]) {
+              allRecords[cr.entity] = [];
+            }
+            const destList = allRecords[cr.entity];
+            if (destList) {
+              destList.push(childRow);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 7. Apply active era volume multipliers to transactional entities (B1, B2)
+  for (const era of loaded.erasManifest?.eras ?? []) {
+    for (const c of era.cycles) {
+      for (const vm of era.volumeMultipliers) {
+        const records = allRecords[vm.entity];
+        if (!records || records.length === 0) continue;
+        const entityCfg = loaded.domain.entities[vm.entity];
+        if (!entityCfg) continue;
+
+        const cycleField = Object.keys(entityCfg.fields).find(
+          (f) => f === 'Cycle' || f === 'Year' || f.endsWith('Date') || f.endsWith('At')
+        );
+
+        allRecords[vm.entity] = records.filter((r) => {
+          if (cycleField) {
+            const raw = r[cycleField];
+            if (raw) {
+              const yr = typeof raw === 'number' ? raw : new Date(String(raw)).getFullYear();
+              if (yr !== c) return true;
+            }
+          }
+          if (vm.where) {
+            let matches = true;
+            for (const [wKey, wVal] of Object.entries(vm.where)) {
+              if (r[wKey] !== undefined) {
+                if (String(r[wKey]).toLowerCase() !== String(wVal).toLowerCase()) {
+                  matches = false;
+                  break;
+                }
+              } else {
+                let matchedFk = false;
+                for (const fk of Object.values(entityCfg.foreignKeys ?? {})) {
+                  const targetList = allRecords[fk.targetEntity];
+                  if (targetList) {
+                    const fkVal = r[fk.fieldName ?? ''];
+                    const targetRow = targetList.find(
+                      (p) => String(p[fk.targetField]).toLowerCase() === String(fkVal).toLowerCase()
+                    );
+                    if (targetRow && targetRow[wKey] !== undefined) {
+                      if (String(targetRow[wKey]).toLowerCase() === String(wVal).toLowerCase()) {
+                        matchedFk = true;
+                        break;
+                      }
+                    }
+                  }
+                }
+                if (!matchedFk) {
+                  matches = false;
+                  break;
+                }
+              }
+            }
+            if (!matches) return true;
+          }
+
+          if (vm.multiplier === 0) return false;
+          return true;
+        });
+      }
+    }
+  }
+
+  // 7. Inject hero personas and additive child rows satisfying hero feature pins (A1 / CLI Invariant 3)
+  for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
+    const entityHeroes = (loaded.heroesManifest?.heroes ?? []).filter((h) => h.entity === entityName);
+    for (const hero of entityHeroes) {
+      const heroRec = heroInjector.GetHero(hero.heroKey);
+      if (heroRec) {
+        const baseRow = generateEntityRecord({
+          domain: loaded.domain,
+          entity: entityName,
+          i: 1,
+          parentPool: allRecords,
+          rng: createRng(seed, `hero:${hero.heroKey}`),
+          identityService,
+        });
+        const heroRow: Record<string, unknown> = {
+          ...baseRow,
+          ID: heroRec.id,
+          ...hero.businessKeys,
+          ...hero.fixedFields,
+        };
+
+        const heroState = worldUnroller.GetEntityState(heroRec.id);
+
+        // Calibrate outcomes on heroRow
+        const entityFactors = factorContracts.filter((fc) => fc.effect === entityName);
+        for (const contract of entityFactors) {
+          const heroPin = hero.pins?.find(
+            (p): p is HeroOutcomePin => p.kind === 'outcome' && p.factor === contract.id
+          );
+          const targetCycle = heroPin?.cycle ?? asOfYear;
+          const realized = heroState?.outcomesByCycle.get(targetCycle)?.[contract.id];
+          if (realized !== undefined && contract.outcome && contract.outcome.where) {
+            const otherwise = contract.outcome.otherwise;
+            for (const [field, targetVal] of Object.entries(contract.outcome.where)) {
+              if (hero.fixedFields && field in hero.fixedFields) {
+                continue;
+              }
+              if (realized) {
+                heroRow[field] = targetVal;
+              } else {
+                if (typeof targetVal === 'boolean') {
+                  heroRow[field] = !targetVal;
+                } else if (otherwise && otherwise[field] !== undefined) {
+                  heroRow[field] = otherwise[field];
+                }
+              }
+            }
+          }
+        }
+
+        // Apply ladder bindings to heroRow
+        for (const ladder of loaded.laddersManifest?.ladders ?? []) {
+          if (ladder.entity === entityName && ladder.binding.mode === 'field') {
+            const state = ladderEngine.GetEntityState(ladder.ladderKey, heroRec.id);
+            if (state) {
+              heroRow[ladder.binding.field] = ladderEngine.GetStoredValueForState(ladder.ladderKey, state.currentState);
+            }
+          }
+        }
+
+        if (!allRecords[entityName]) allRecords[entityName] = [];
+        allRecords[entityName]!.push(heroRow);
+      }
+    }
+
+    // Generate hero additive child rows satisfying feature pins
+    for (const hero of loaded.heroesManifest?.heroes ?? []) {
+      const heroRec = heroInjector.GetHero(hero.heroKey);
+      if (!heroRec) continue;
+      const heroId = heroRec.id;
+
+      const fkEntry = Object.entries(entityCfg.foreignKeys ?? {}).find(
+        ([_, fk]) => fk.targetEntity === hero.entity
+      );
+      if (!fkEntry) continue;
+      const fkFieldName = fkEntry[1].fieldName ?? fkEntry[0];
+
+      for (const pin of hero.pins) {
+        if (pin.kind === 'feature' && pin.feature.from === entityName) {
+          const countNeeded =
+            typeof pin.value === 'number' && (pin.op === 'gte' || pin.op === 'gt' || pin.op === 'eq')
+              ? pin.value
+              : 1;
+
+          for (let j = 1; j <= countNeeded; j++) {
+            const childRng = createRng(seed, `hero-child:${hero.heroKey}:${entityName}:${j}`);
+            const childRow = generateEntityRecord({
+              domain: loaded.domain,
+              entity: entityName,
+              i: (allRecords[entityName]?.length ?? 0) + 1,
+              parentPool: allRecords,
+              rng: childRng,
+              identityService,
+            });
+            childRow[fkFieldName] = heroId;
+            if (pin.feature.where) {
+              for (const [wField, wVal] of Object.entries(pin.feature.where)) {
+                childRow[wField] = wVal;
+              }
+            }
+            if (!allRecords[entityName]) allRecords[entityName] = [];
+            allRecords[entityName]!.push(childRow);
           }
         }
       }
@@ -324,6 +544,9 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
   const birthCycles: Record<string, number> = {};
   for (const cand of allUnrollCandidates) {
     birthCycles[cand.id] = cand.birthCycle;
+  }
+  for (const hero of heroInjector.GetAllHeroes()) {
+    birthCycles[hero.id] = hero.birthCycle;
   }
 
   const initialCheckpoint: SimulationCheckpoint = {

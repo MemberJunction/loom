@@ -93,7 +93,9 @@ export class HeroInjector {
 
     const pin = hero.pins.find(
       (p): p is HeroOutcomePin =>
-        p.kind === 'outcome' && p.factor === factorId && p.cycle === cycle
+        p.kind === 'outcome' &&
+        p.factor === factorId &&
+        (p.cycle === undefined || p.cycle === cycle)
     );
 
     return pin ? pin.value : undefined;

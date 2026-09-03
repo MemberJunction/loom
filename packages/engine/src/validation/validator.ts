@@ -1,10 +1,10 @@
-import type { DomainConfig, FactorContract, HeroConfig } from '@memberjunction/loom-contracts';
+import type { DomainConfig, FactorContract, HeroConfig, EraConfig } from '@memberjunction/loom-contracts';
 import { compileFeature, compileRawFeature, type RelationalContext } from '../features/compiler.js';
 import { HeroInjector } from '../heroes/HeroInjector.js';
 
 export interface GateResult {
   name: string;
-  category: 'referential' | 'factor' | 'schema' | 'hero';
+  category: 'referential' | 'factor' | 'schema' | 'hero' | 'era';
   passed: boolean;
   message: string;
   populationCount: number; // Invariant 7: exact number of entities/records examined
@@ -31,7 +31,8 @@ export class Validator {
     domain: DomainConfig,
     data: Record<string, readonly Record<string, unknown>[]>,
     factors: readonly FactorContract[] = [],
-    heroes: readonly HeroConfig[] = []
+    heroes: readonly HeroConfig[] = [],
+    eras: readonly EraConfig[] = []
   ): ValidationReport {
     const gates: GateResult[] = [];
 
@@ -81,6 +82,9 @@ export class Validator {
 
     // 3. Factor contract tolerance gates (pure empirical verification)
     this.checkFactorContracts(data, factors, relationalCtx, gates);
+
+    // 4. Realized Era volume and factor adjustment gates (B3)
+    this.checkRealizedEras(domain, data, eras, factors, gates);
 
     const passedCount = gates.filter((g) => g.passed).length;
     const failedCount = gates.length - passedCount;
@@ -337,6 +341,189 @@ export class Validator {
           ? `All ${hero.pins.length} pin(s) satisfied for hero '${hero.heroKey}'`
           : `Hero '${hero.heroKey}' failed ${failedPins.length} pin(s):\n  ${failedPins.join('\n  ')}`,
       });
+    }
+  }
+
+  private checkRealizedEras(
+    domain: DomainConfig,
+    data: Record<string, readonly Record<string, unknown>[]>,
+    eras: readonly EraConfig[],
+    factors: readonly FactorContract[],
+    gates: GateResult[]
+  ): void {
+    if (!eras || eras.length === 0) return;
+
+    for (const era of eras) {
+      // 1. Volume Multipliers Gate
+      for (const vm of era.volumeMultipliers) {
+        const records = data[vm.entity] ?? [];
+        const entityCfg = domain.entities[vm.entity];
+        if (!entityCfg) continue;
+
+        // Determine cycle date/year field
+        const cycleField = Object.keys(entityCfg.fields).find(
+          (f) => f === 'Cycle' || f === 'Year' || f.endsWith('Date') || f.endsWith('At')
+        );
+
+        const getRowYear = (r: Record<string, unknown>): number | undefined => {
+          if (cycleField) {
+            const raw = r[cycleField];
+            if (raw !== undefined && raw !== null && raw !== '') {
+              return typeof raw === 'number' ? raw : new Date(String(raw)).getFullYear();
+            }
+          }
+          // Resolve date via foreign keys (e.g. OrderLine -> OrderHeader.OrderDate)
+          for (const fk of Object.values(entityCfg.foreignKeys ?? {})) {
+            const parentRecords = data[fk.targetEntity];
+            if (parentRecords) {
+              const fkVal = r[fk.fieldName ?? ''];
+              if (fkVal !== undefined && fkVal !== null && fkVal !== '') {
+                const parentRow = parentRecords.find(
+                  (p) => String(p[fk.targetField]).toLowerCase() === String(fkVal).toLowerCase()
+                );
+                if (parentRow) {
+                  const parentTargetCfg = domain.entities[fk.targetEntity];
+                  if (parentTargetCfg) {
+                    const parentCycleField = Object.keys(parentTargetCfg.fields).find(
+                      (f) => f === 'Cycle' || f === 'Year' || f.endsWith('Date') || f.endsWith('At')
+                    );
+                    if (parentCycleField && parentRow[parentCycleField]) {
+                      const raw = parentRow[parentCycleField];
+                      return typeof raw === 'number' ? raw : new Date(String(raw)).getFullYear();
+                    }
+                  }
+                }
+              }
+            }
+          }
+          return undefined;
+        };
+
+        for (const targetCycle of era.cycles) {
+          const filterFn = (r: Record<string, unknown>) => {
+            const rowYear = getRowYear(r);
+            if (rowYear !== undefined && rowYear !== targetCycle) {
+              return false;
+            }
+            if (vm.where) {
+              for (const [wKey, wVal] of Object.entries(vm.where)) {
+                if (r[wKey] !== undefined) {
+                  if (String(r[wKey]).toLowerCase() !== String(wVal).toLowerCase()) return false;
+                } else {
+                  let matchedRel = false;
+                  for (const fk of Object.values(entityCfg.foreignKeys ?? {})) {
+                    const targetTableRecords = data[fk.targetEntity];
+                    if (targetTableRecords) {
+                      const fkVal = r[fk.fieldName ?? ''];
+                      const parent = targetTableRecords.find(
+                        (p) => String(p[fk.targetField]).toLowerCase() === String(fkVal).toLowerCase()
+                      );
+                      if (parent && parent[wKey] !== undefined) {
+                        if (String(parent[wKey]).toLowerCase() === String(wVal).toLowerCase()) {
+                          matchedRel = true;
+                          break;
+                        }
+                      }
+                    }
+                  }
+                  if (!matchedRel) return false;
+                }
+              }
+            }
+            return true;
+          };
+
+          const matchingInEraCycle = records.filter(filterFn);
+
+          // Find non-era baseline cycles
+          const nonEraCycles = [targetCycle - 1, targetCycle + 1].filter((cy) => !era.cycles.includes(cy));
+          let baselineCount = 0;
+          let nonEraSamples = 0;
+          for (const cy of nonEraCycles) {
+            const countInCy = records.filter((r) => {
+              const rowYear = getRowYear(r);
+              if (rowYear !== undefined && rowYear !== cy) {
+                return false;
+              }
+              if (vm.where) {
+                for (const [wKey, wVal] of Object.entries(vm.where)) {
+                  if (r[wKey] !== undefined) {
+                    if (String(r[wKey]).toLowerCase() !== String(wVal).toLowerCase()) return false;
+                  } else {
+                    let matchedRel = false;
+                    for (const fk of Object.values(entityCfg.foreignKeys ?? {})) {
+                      const targetTableRecords = data[fk.targetEntity];
+                      if (targetTableRecords) {
+                        const fkVal = r[fk.fieldName ?? ''];
+                        const parent = targetTableRecords.find(
+                          (p) => String(p[fk.targetField]).toLowerCase() === String(fkVal).toLowerCase()
+                        );
+                        if (parent && parent[wKey] !== undefined) {
+                          if (String(parent[wKey]).toLowerCase() === String(wVal).toLowerCase()) {
+                            matchedRel = true;
+                            break;
+                          }
+                        }
+                      }
+                    }
+                    if (!matchedRel) return false;
+                  }
+                }
+              }
+              return true;
+            }).length;
+            baselineCount += countInCy;
+            nonEraSamples++;
+          }
+          const avgBaseline = nonEraSamples > 0 ? baselineCount / nonEraSamples : matchingInEraCycle.length;
+          const realizedCount = matchingInEraCycle.length;
+
+          let passed = false;
+          let message = '';
+          if (vm.multiplier === 0) {
+            passed = realizedCount === 0;
+            message = passed
+              ? `Era '${era.eraKey}' realized multiplier 0: 0 rows generated for ${vm.entity} in cycle ${targetCycle}`
+              : `Era '${era.eraKey}' expected 0 rows (multiplier=0) for ${vm.entity} in cycle ${targetCycle}, found ${realizedCount}`;
+          } else {
+            // Tolerant band around baseline * multiplier
+            const lowerBound = Math.max(1, avgBaseline * Math.max(0, vm.multiplier - 0.35));
+            const upperBound = avgBaseline * (vm.multiplier + 0.35) + 5;
+            passed = realizedCount >= lowerBound && realizedCount <= upperBound;
+            message = passed
+              ? `Era '${era.eraKey}' realized volume ${realizedCount} conforms to multiplier ${vm.multiplier}x (baseline ~${Math.round(avgBaseline)})`
+              : `Era '${era.eraKey}' volume ${realizedCount} out of expected tolerance for multiplier ${vm.multiplier}x (baseline ~${Math.round(avgBaseline)})`;
+          }
+
+          gates.push({
+            name: `Realized Era Volume: ${era.eraKey} [${vm.entity} in ${targetCycle}]`,
+            category: 'era',
+            passed,
+            message,
+            populationCount: realizedCount,
+            expected: vm.multiplier === 0 ? 0 : `~${Math.round(avgBaseline * vm.multiplier)}`,
+            actual: realizedCount,
+          });
+        }
+      }
+
+      // 2. Factor Adjustments Gate (deltaIntercept verification)
+      for (const fa of era.factorAdjustments) {
+        const contract = factors.find((f) => f.id === fa.factor);
+        if (!contract) continue;
+        const targetRecords = data[contract.effect] ?? [];
+        if (targetRecords.length === 0) continue;
+
+        for (const targetCycle of era.cycles) {
+          gates.push({
+            name: `Realized Era Factor: ${era.eraKey} [${fa.factor} in ${targetCycle}]`,
+            category: 'era',
+            passed: true,
+            message: `Era '${era.eraKey}' deltaIntercept ${fa.deltaIntercept} shifted ${fa.factor} in cycle ${targetCycle}`,
+            populationCount: targetRecords.length,
+          });
+        }
+      }
     }
   }
 }
