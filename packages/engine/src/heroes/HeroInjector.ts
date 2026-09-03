@@ -3,10 +3,12 @@ import type {
   HeroPin,
   HeroFieldPin,
   HeroOutcomePin,
+  HeroFeaturePin,
   PinOp,
   PinPrimitiveValue,
 } from '@memberjunction/loom-contracts';
 import { IdentityService } from '../identity/index.js';
+import { compileRawFeature, type RelationalContext } from '../features/compiler.js';
 
 export interface InjectedHeroRecord {
   id: string;
@@ -151,6 +153,37 @@ export class HeroInjector {
 
     for (const pin of fieldPins) {
       const actual = row[pin.field];
+      if (!HeroInjector.EvaluatePinOp(pin.op, actual, pin.value)) {
+        failedPins.push(pin);
+      }
+    }
+
+    return {
+      valid: failedPins.length === 0,
+      failedPins,
+    };
+  }
+
+  /**
+   * Validates feature pins for a hero record against a realized entity and relational context.
+   * Fulfills Gate 0 verification using compileRawFeature.
+   */
+  public ValidateFeaturePins(
+    heroKey: string,
+    row: Record<string, unknown>,
+    context?: RelationalContext
+  ): { valid: boolean; failedPins: HeroFeaturePin[] } {
+    const hero = this.heroMap.get(heroKey);
+    if (!hero) {
+      return { valid: false, failedPins: [] };
+    }
+
+    const featurePins = hero.pins.filter((p): p is HeroFeaturePin => p.kind === 'feature');
+    const failedPins: HeroFeaturePin[] = [];
+
+    for (const pin of featurePins) {
+      const evaluator = compileRawFeature(pin.feature);
+      const actual = evaluator(row, context);
       if (!HeroInjector.EvaluatePinOp(pin.op, actual, pin.value)) {
         failedPins.push(pin);
       }

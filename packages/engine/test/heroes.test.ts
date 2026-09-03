@@ -53,4 +53,47 @@ describe('HeroInjector', () => {
     expect(invalidRes.valid).toBe(false);
     expect(invalidRes.failedPins).toHaveLength(1);
   });
+
+  it('validates feature pins with compileRawFeature and relational context', () => {
+    const heroWithFeaturePin: HeroConfig = {
+      ...heroMock,
+      heroKey: 'elena-feature-test',
+      pins: [
+        {
+          kind: 'feature',
+          feature: {
+            from: 'EventRegistration',
+            where: { Attended: true },
+            aggregation: 'count',
+          },
+          op: 'gte',
+          value: 2,
+        },
+      ],
+    };
+
+    const injector = new HeroInjector('more-cheese', testNamespace, [heroWithFeaturePin]);
+    const parentRow = { ID: 'person-123' };
+
+    const mockCtx = {
+      getEntity: () => undefined,
+      getChildren: () => [
+        { ID: 'reg-1', Attended: true },
+        { ID: 'reg-2', Attended: true },
+      ],
+    };
+
+    const validRes = injector.ValidateFeaturePins('elena-feature-test', parentRow, mockCtx);
+    expect(validRes.valid).toBe(true);
+    expect(validRes.failedPins).toHaveLength(0);
+
+    const mockLowCtx = {
+      getEntity: () => undefined,
+      getChildren: () => [{ ID: 'reg-1', Attended: true }],
+    };
+
+    const invalidRes = injector.ValidateFeaturePins('elena-feature-test', parentRow, mockLowCtx);
+    expect(invalidRes.valid).toBe(false);
+    expect(invalidRes.failedPins).toHaveLength(1);
+  });
 });
