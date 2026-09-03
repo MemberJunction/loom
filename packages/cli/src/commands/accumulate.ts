@@ -263,7 +263,7 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       if (pName === entityName) continue;
       for (const fk of Object.values(entityCfg.foreignKeys ?? {})) {
         if (fk.targetEntity === pName) {
-          const isDependent = fk.cardinality === 'required' || (fk as Record<string, unknown>).dependent === true;
+          const isDependent = fk.dependent === true;
           if (isDependent) {
             isChild = true;
             break;
@@ -296,7 +296,7 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
         if (childName === entityName) continue;
         for (const [fkKey, fk] of Object.entries(childCfg.foreignKeys ?? {})) {
           if (fk.targetEntity === entityName) {
-            const isDependent = fk.cardinality === 'required' || (fk as Record<string, unknown>).dependent === true;
+            const isDependent = fk.dependent === true;
             if (!isDependent) continue;
             const fkFieldName = fk.fieldName ?? fkKey;
 

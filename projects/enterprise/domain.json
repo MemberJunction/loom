@@ -159,7 +159,7 @@
           "fieldName": "OrderID",
           "targetEntity": "OrderHeader",
           "targetField": "ID",
-          "cardinality": "required"
+          "dependent": true
         },
         "FK_OrderLine_Product": {
           "fieldName": "ProductID",
@@ -190,7 +190,7 @@
           "fieldName": "OrderID",
           "targetEntity": "OrderHeader",
           "targetField": "ID",
-          "cardinality": "required"
+          "dependent": true
         }
       },
       "isImmutable": true

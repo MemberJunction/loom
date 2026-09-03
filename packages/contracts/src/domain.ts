@@ -27,8 +27,8 @@ export const ForeignKeyConfigSchema = z.object({
   fieldName: z.string().min(1).optional(),
   targetEntity: z.string().min(1),
   targetField: z.string().min(1),
-  cardinality: z.enum(['one-to-one', 'many-to-one', 'one-to-many', 'required']).default('many-to-one'),
-  dependent: z.boolean().optional(),
+  cardinality: z.enum(['one-to-one', 'many-to-one', 'one-to-many']).default('many-to-one'),
+  dependent: z.boolean().default(false),
 });
 export type ForeignKeyConfig = z.infer<typeof ForeignKeyConfigSchema>;
 
@@ -124,6 +124,7 @@ export function createDomainConfigFromMJEntities(
           targetEntity: field.RelatedEntity,
           targetField: field.RelatedEntityFieldName,
           cardinality: 'many-to-one',
+          dependent: false,
         };
       }
     }

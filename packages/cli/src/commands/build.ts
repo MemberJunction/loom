@@ -70,7 +70,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
       if (childName === parentEntity) continue;
       for (const [fkKey, fk] of Object.entries(childCfg.foreignKeys ?? {})) {
         if (fk.targetEntity === parentEntity) {
-          const isDependent = fk.cardinality === 'required' || (fk as Record<string, unknown>).dependent === true;
+          const isDependent = fk.dependent === true;
           if (!isDependent) continue;
 
           const fkFieldName = fk.fieldName ?? fkKey;

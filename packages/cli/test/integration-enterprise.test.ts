@@ -965,7 +965,7 @@ describe('Loom Enterprise Integration Test Suite', () => {
     expect(failFactorGate).toBeDefined();
     expect(failFactorGate?.passed).toBe(false);
 
-    // 5. Acceptance 2: zeroing every category yields 0 lines and 0 orders
+    // 5. Acceptance 2 & R13-1: two scoped 0x multipliers (Hardware and Software) yield 0 lines, 0 orders, and pass validate
     const tempProjZeroAll = path.join(os.tmpdir(), `loom-proj-zero-all-${Date.now()}`);
     const tempMetaZeroAll = path.join(os.tmpdir(), `loom-meta-zero-all-${Date.now()}`);
     await fs.cp(enterpriseProjectPath, tempProjZeroAll, { recursive: true });
@@ -973,11 +973,19 @@ describe('Loom Enterprise Integration Test Suite', () => {
     const erasConfigZero = JSON.parse(await fs.readFile(erasZeroPath, 'utf8'));
     erasConfigZero.eras = [
       {
-        eraKey: 'era-zero-all-categories',
+        eraKey: 'era-zero-hardware',
         scope: 'all',
         cycles: [2024],
         volumeMultipliers: [
-          { entity: 'OrderLine', multiplier: 0 }
+          { entity: 'OrderLine', multiplier: 0, where: { Category: 'Hardware' } }
+        ]
+      },
+      {
+        eraKey: 'era-zero-software',
+        scope: 'all',
+        cycles: [2024],
+        volumeMultipliers: [
+          { entity: 'OrderLine', multiplier: 0, where: { Category: 'Software' } }
         ]
       }
     ];
@@ -994,6 +1002,13 @@ describe('Loom Enterprise Integration Test Suite', () => {
     const zeroOrderYears = new Map(zeroAllOrders.map((o) => [String(o['ID'] ?? o['id']), new Date(String(o['OrderDate'])).getFullYear()]));
     const zero2024Lines = zeroAllLines.filter((ol) => zeroOrderYears.get(String(ol['OrderID'])) === 2024);
     expect(zero2024Lines.length).toBe(0);
+
+    const reportZeroAll = await executeValidate({
+      project: tempProjZeroAll,
+      data: tempMetaZeroAll,
+    });
+    expect(reportZeroAll.passed).toBe(true);
+    expect(reportZeroAll.failedCount).toBe(0);
   });
 
   it('A2 (R7-2): hero outcomes emerge from factor evaluation path without forced override, Gate 0 passes, and unsatisfiable pin throws (R11-1)', async () => {
