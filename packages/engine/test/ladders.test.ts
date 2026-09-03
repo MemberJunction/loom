@@ -115,4 +115,89 @@ describe('StateLadderEngine', () => {
     engine.ExitLadder('gov-ladder', heroId, 2028);
     expect(engine.GetEntityState('gov-ladder', heroId)).toBeUndefined();
   });
+
+  it('A4 (N6): parses stateValues mapping and executes bidirectional lookup round-trip', () => {
+    const roleMemberId = 'ROLE-UUID-001';
+    const roleViceChairId = 'ROLE-UUID-002';
+    const roleChairId = 'ROLE-UUID-003';
+
+    const committeeRoleLadder: StateLadderConfig = {
+      ladderKey: 'committee-role-ladder',
+      entity: 'Person',
+      binding: {
+        mode: 'childEntity',
+        childEntity: 'CommitteeMembership',
+        foreignKey: 'PersonID',
+        stateField: 'RoleID',
+        stateValues: {
+          'committee-member': roleMemberId,
+          'vice-chair': roleViceChairId,
+          'chair': roleChairId,
+        },
+        fixedFields: {
+          IsActive: true,
+        },
+      },
+      cohortShare: 0.8,
+      states: [
+        {
+          name: 'committee-member',
+          durationCycles: 1,
+          effects: [],
+          exitEffects: [],
+        },
+        {
+          name: 'vice-chair',
+          durationCycles: 2,
+          effects: [],
+          exitEffects: [],
+        },
+        {
+          name: 'chair',
+          durationCycles: 1,
+          effects: [],
+          exitEffects: [],
+        },
+      ],
+    };
+
+    const engine = new StateLadderEngine([committeeRoleLadder]);
+
+    // Forward resolution (state name -> stored value)
+    expect(engine.GetStoredValueForState('committee-role-ladder', 'committee-member')).toBe(roleMemberId);
+    expect(engine.GetStoredValueForState('committee-role-ladder', 'vice-chair')).toBe(roleViceChairId);
+    expect(engine.GetStoredValueForState('committee-role-ladder', 'chair')).toBe(roleChairId);
+
+    // Backward resolution (stored value -> state name)
+    expect(engine.GetStateForStoredValue('committee-role-ladder', roleMemberId)).toBe('committee-member');
+    expect(engine.GetStateForStoredValue('committee-role-ladder', roleViceChairId)).toBe('vice-chair');
+    expect(engine.GetStateForStoredValue('committee-role-ladder', roleChairId)).toBe('chair');
+
+    // Case-insensitive round trip
+    expect(engine.GetStateForStoredValue('committee-role-ladder', roleMemberId.toLowerCase())).toBe('committee-member');
+
+    // Unknown value returns undefined
+    expect(engine.GetStateForStoredValue('committee-role-ladder', 'UNKNOWN-ROLE')).toBeUndefined();
+  });
+
+  it('A6 (R7-4): StateLadderConfigSchema strictly rejects ladder files carrying cycleUnit', async () => {
+    const { StateLadderConfigSchema } = await import('@memberjunction/loom-contracts');
+
+    const invalidLadder = {
+      ladderKey: 'bad-ladder',
+      entity: 'Member',
+      binding: { mode: 'field', field: 'Status' },
+      cohortShare: 1,
+      cycleUnit: 'week', // Illegal under single-cycle-unit architecture
+      states: [
+        { name: 'Active', durationCycles: 1, effects: [], exitEffects: [] },
+      ],
+    };
+
+    const parsed = StateLadderConfigSchema.safeParse(invalidLadder);
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues[0]?.message).toContain('cycleUnit');
+    }
+  });
 });

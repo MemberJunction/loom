@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import { executeBuild } from '../src/commands/build.js';
 import { executeAccumulate } from '../src/commands/accumulate.js';
 import { executeValidate } from '../src/commands/validate.js';
+import { readEntityMetadata } from '@memberjunction/loom-engine';
 
 describe('Loom E2E Fixture Pipeline', () => {
   const fixturePath = path.resolve(__dirname, '../../../projects/fixture');
@@ -25,14 +26,16 @@ describe('Loom E2E Fixture Pipeline', () => {
       project: fixturePath,
       seed: '101',
       output: tempMetadataDir,
-      migrationsOutput: path.join(tempOutputDir, 'migrations'),
     });
 
-    const orgFile = path.join(tempMetadataDir, 'common', 'Organization.json');
-    const personFile = path.join(tempMetadataDir, 'common', 'Person.json');
-
-    const orgs = JSON.parse(await fs.readFile(orgFile, 'utf8'));
-    const people = JSON.parse(await fs.readFile(personFile, 'utf8'));
+    const { records: orgs } = await readEntityMetadata(
+      path.join(tempMetadataDir, 'Organization'),
+      'Fixture: Organizations'
+    );
+    const { records: people } = await readEntityMetadata(
+      path.join(tempMetadataDir, 'Person'),
+      'Fixture: People'
+    );
 
     expect(orgs.length).toBe(10);
     expect(people.length).toBe(10);
@@ -50,15 +53,17 @@ describe('Loom E2E Fixture Pipeline', () => {
       project: fixturePath,
       priorState: tempMetadataDir,
       output: tempMetadataDir,
-      migrationsOutput: path.join(tempOutputDir, 'migrations'),
       weeks: '1',
       seed: '101',
     });
 
-    const updatedPeople = JSON.parse(await fs.readFile(personFile, 'utf8'));
+    const { records: updatedPeople } = await readEntityMetadata(
+      path.join(tempMetadataDir, 'Person'),
+      'Fixture: People'
+    );
     expect(updatedPeople.length).toBe(12); // 10 baseline + 2 accumulated
 
-    // 4. Re-validate accumulated dataset
+    // 4. Validate accumulated dataset
     const report2 = await executeValidate({
       project: fixturePath,
       data: tempMetadataDir,

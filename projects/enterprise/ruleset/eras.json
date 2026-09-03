@@ -14,13 +14,27 @@
     },
     {
       "eraKey": "era-supply-disruption",
-      "scope": "tagged",
+      "scope": "all",
       "cycles": [2024],
       "factorAdjustments": [
         { "factor": "factor-membership-renewal", "deltaIntercept": -1.2 }
       ],
       "volumeMultipliers": [
         { "entity": "OrderHeader", "multiplier": 0.50 }
+      ]
+    },
+    {
+      "eraKey": "era-virtual-only-2024",
+      "scope": "all",
+      "cycles": [2024],
+      "volumeMultipliers": [
+        {
+          "entity": "OrderLine",
+          "multiplier": 0,
+          "where": {
+            "Category": "Hardware"
+          }
+        }
       ]
     }
   ]

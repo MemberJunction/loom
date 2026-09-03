@@ -28,11 +28,13 @@ export const ForeignKeyConfigSchema = z.object({
   targetEntity: z.string().min(1),
   targetField: z.string().min(1),
   cardinality: z.enum(['one-to-one', 'many-to-one', 'one-to-many']).default('many-to-one'),
+  dependent: z.boolean().default(false),
 });
 export type ForeignKeyConfig = z.infer<typeof ForeignKeyConfigSchema>;
 
 export const EntityConfigSchema = z.object({
   name: z.string().min(1),
+  entityName: z.string().min(1),
   targetTable: z.string().min(1),
   schema: z.string().min(1),
   pack: z.string().min(1),
@@ -122,6 +124,7 @@ export function createDomainConfigFromMJEntities(
           targetEntity: field.RelatedEntity,
           targetField: field.RelatedEntityFieldName,
           cardinality: 'many-to-one',
+          dependent: false,
         };
       }
     }
@@ -139,6 +142,7 @@ export function createDomainConfigFromMJEntities(
 
     entityConfigs[entity.Name] = {
       name: entity.Name,
+      entityName: entity.Name,
       targetTable: entity.BaseTable ?? entity.Name,
       schema: entity.SchemaName ?? 'dbo',
       pack: defaultPack,

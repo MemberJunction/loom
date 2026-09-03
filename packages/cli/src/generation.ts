@@ -74,7 +74,7 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
     } else if (fieldName === 'Industry') {
       row[fieldName] = 'Technology';
     } else if (fieldName === 'Category') {
-      row[fieldName] = 'Software';
+      row[fieldName] = i % 2 === 0 ? 'Hardware' : 'Software';
     } else if (fieldName === 'Title') {
       row[fieldName] = 'Director';
     } else if (fieldName === 'PaymentMethod') {

@@ -1,4 +1,5 @@
 import * as fs from 'node:fs/promises';
+import * as syncFs from 'node:fs';
 import * as path from 'node:path';
 import { loadProject } from '../project.js';
 import {
@@ -6,7 +7,7 @@ import {
   IdentityService,
   createRng,
   emitMetadata,
-  emitSkywayMigration,
+  readEntityMetadata,
   FactorEngine,
   StateLadderEngine,
 } from '@memberjunction/loom-engine';
@@ -18,32 +19,31 @@ import { generateEntityRecord } from '../generation.js';
 
 export interface AccumulateCommandOptions {
   project: string;
-  priorState: string;
+  priorState?: string;
   weeks?: string;
   seed?: string;
   asOf?: string;
   output?: string;
-  migrationsOutput?: string;
 }
 
-function advanceDateByWeeks(baseDateStr: string, weeks: number): string {
+function advanceDate(baseDateStr: string, days: number): string {
   const d = new Date(baseDateStr);
-  d.setUTCDate(d.getUTCDate() + weeks * 7);
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
 export async function executeAccumulate(options: AccumulateCommandOptions): Promise<void> {
   const loaded = await loadProject(options.project);
   const weeksToAdd = options.weeks ? parseInt(options.weeks, 10) : 1;
-  const priorDir = path.resolve(process.cwd(), options.priorState);
   const outputDir = options.output
     ? path.resolve(process.cwd(), options.output)
     : path.resolve(loaded.projectDir, loaded.manifest.output.metadataDir);
-  const migrationsDir = options.migrationsOutput
-    ? path.resolve(process.cwd(), options.migrationsOutput)
-    : path.resolve(loaded.projectDir, loaded.manifest.output.migrationsDir);
 
-  // 1. Read prior checkpoint.json
+  const priorDir = options.priorState
+    ? path.resolve(process.cwd(), options.priorState)
+    : outputDir;
+
+  // 1. Read prior checkpoint if available
   const checkpointPath = path.join(priorDir, 'checkpoint.json');
   let priorCheckpoint: SimulationCheckpoint | null = null;
   try {
@@ -58,19 +58,18 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       );
     }
   } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-      console.log(`   ℹ️ No prior checkpoint.json found in ${priorDir}; starting fresh accumulation cycle.`);
-    } else {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
       throw err;
     }
   }
 
   const cycleIndex = (priorCheckpoint?.cycleIndex ?? 0) + 1;
-  const asOfDate =
-    options.asOf ??
-    (priorCheckpoint
-      ? advanceDateByWeeks(priorCheckpoint.releaseDate, weeksToAdd)
-      : (loaded.manifest.releaseDate ?? '2026-09-02'));
+  const asOfDate = options.asOf
+    ? options.asOf
+    : priorCheckpoint
+    ? advanceDate(priorCheckpoint.continuity.asOfDate, weeksToAdd * 7)
+    : (loaded.manifest.releaseDate ?? '2026-09-02');
+
   const seed = options.seed
     ? parseInt(options.seed, 10)
     : priorCheckpoint?.seed ?? 42;
@@ -82,28 +81,16 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
   // 2. Read existing entity records from priorState
   const priorRecords: Record<string, Record<string, unknown>[]> = {};
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
-    const filePath = path.join(priorDir, entityCfg.pack, `${entityName}.json`);
-    try {
-      const content = await fs.readFile(filePath, 'utf8');
-      try {
-        const parsed = JSON.parse(content);
-        if (!Array.isArray(parsed)) {
-          throw new Error(`Expected array of records in '${filePath}', got ${typeof parsed}`);
-        }
-        priorRecords[entityName] = parsed;
-      } catch (jsonErr) {
-        throw new Error(
-          `Accumulate: failed to parse '${filePath}': ${
-            jsonErr instanceof Error ? jsonErr.message : String(jsonErr)
-          }`
-        );
-      }
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        priorRecords[entityName] = [];
-      } else {
-        throw err;
-      }
+    const entityDir = path.join(priorDir, entityName);
+
+    // Only swallow if the entity directory itself does not exist (new entity added to domain)
+    if (!syncFs.existsSync(entityDir)) {
+      priorRecords[entityName] = [];
+    } else {
+      // Must NOT catch or swallow missing .mj-sync.json or corrupt files!
+      // If entity directory exists, readEntityMetadata will throw if invalid.
+      const { records: unwrapped } = await readEntityMetadata(entityDir, entityCfg.entityName);
+      priorRecords[entityName] = unwrapped;
     }
   }
 
@@ -167,7 +154,7 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       const curState = ladderEngine.GetEntityState(ladder.ladderKey, entityId);
       if (curState) {
         const dials = updatedLatentStates[entityId] ?? {};
-        const cycleUnit = ladder.cycleUnit ?? 'year';
+        const cycleUnit = loaded.manifest?.cycleUnit ?? 'year';
         let stepAmount = 1;
         let cyclesSinceBirth = 0;
         let stepCycle = cycleIndex;
@@ -270,6 +257,26 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       }
     }
 
+    // Check if this entity is a structural dependent child of another entity
+    let isChild = false;
+    for (const [pName] of Object.entries(loaded.domain.entities)) {
+      if (pName === entityName) continue;
+      for (const fk of Object.values(entityCfg.foreignKeys ?? {})) {
+        if (fk.targetEntity === pName) {
+          const isDependent = fk.dependent === true;
+          if (isDependent) {
+            isChild = true;
+            break;
+          }
+        }
+      }
+      if (isChild) break;
+    }
+    if (isChild) {
+      // Dependent child records are generated in cascade with their parent entity
+      continue;
+    }
+
     const startIdx = list.length + 1;
     const rng = createRng(seed, `accumulate:${entityName}:cycle:${cycleIndex}`);
 
@@ -283,6 +290,81 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
         identityService,
       });
       list.push(row);
+
+      // Cascade structural dependent children matching domain schema
+      for (const [childName, childCfg] of Object.entries(loaded.domain.entities)) {
+        if (childName === entityName) continue;
+        for (const [fkKey, fk] of Object.entries(childCfg.foreignKeys ?? {})) {
+          if (fk.targetEntity === entityName) {
+            const isDependent = fk.dependent === true;
+            if (!isDependent) continue;
+            const fkFieldName = fk.fieldName ?? fkKey;
+
+            if (!currentRecords[childName]) currentRecords[childName] = [];
+
+            const rowId = String(row['ID'] ?? row['id']);
+            const otherFks = Object.values(childCfg.foreignKeys ?? {}).filter((f) => f.targetEntity !== entityName);
+
+            if (otherFks.length > 0) {
+              const lookupFk = otherFks[0]!;
+              const targetCatalog = currentRecords[lookupFk.targetEntity] ?? [];
+              if (targetCatalog.length > 0) {
+                const item = targetCatalog[(i - 1) % targetCatalog.length]!;
+                const childId = identityService.MintId(loaded.domain.name, childName, [rowId, String(item[lookupFk.targetField])]);
+                const priceVal = typeof item['UnitPrice'] === 'number' ? item['UnitPrice'] : (typeof item['Price'] === 'number' ? item['Price'] : 100);
+                const childRow: Record<string, unknown> = {
+                  ID: childId,
+                  [fkFieldName]: rowId,
+                  [lookupFk.fieldName]: item[lookupFk.targetField],
+                };
+                for (const [fName, fDef] of Object.entries(childCfg.fields)) {
+                  if (fName === 'ID' || fName === fkFieldName || fName === lookupFk.fieldName) continue;
+                  if (fName.toLowerCase().includes('quantity') || fName.toLowerCase().includes('qty')) {
+                    childRow[fName] = 1;
+                  } else if (fName.toLowerCase().includes('unitprice')) {
+                    childRow[fName] = priceVal;
+                  } else if (fName.toLowerCase().includes('extended') || fName.toLowerCase().includes('total')) {
+                    childRow[fName] = priceVal;
+                  } else if (fDef.type === 'string') {
+                    childRow[fName] = 'Standard';
+                  }
+                }
+                currentRecords[childName]!.push(childRow);
+                for (const fName of Object.keys(entityCfg.fields)) {
+                  if (fName.toLowerCase().includes('total') || fName.toLowerCase().includes('amount')) {
+                    row[fName] = priceVal;
+                  }
+                }
+              }
+            } else {
+              const dateField = Object.keys(childCfg.fields).find(
+                (f) => f.toLowerCase().includes('date') || f.toLowerCase().includes('time')
+              );
+              const childId = identityService.MintId(loaded.domain.name, childName, [rowId, asOfDate]);
+              const childRow: Record<string, unknown> = {
+                ID: childId,
+                [fkFieldName]: rowId,
+              };
+              for (const [fName, fDef] of Object.entries(childCfg.fields)) {
+                if (fName === 'ID' || fName === fkFieldName) continue;
+                if (fName === dateField) {
+                  childRow[fName] = asOfDate;
+                } else if (fName.toLowerCase().includes('amount') || fName.toLowerCase().includes('total')) {
+                  const totalField = Object.keys(entityCfg.fields).find(
+                    (f) => f.toLowerCase().includes('total') || f.toLowerCase().includes('amount')
+                  );
+                  childRow[fName] = totalField && typeof row[totalField] === 'number' ? row[totalField] : 100;
+                } else if (fName.toLowerCase().includes('status')) {
+                  childRow[fName] = 'Completed';
+                } else if (fDef.type === 'string') {
+                  childRow[fName] = 'Standard';
+                }
+              }
+              currentRecords[childName]!.push(childRow);
+            }
+          }
+        }
+      }
     }
 
     currentRecords[entityName] = list;
@@ -346,17 +428,6 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     data: currentRecords,
   });
 
-  // 9. Emit additive Skyway delta migration with status transitions
-  const migrationVersion = `${asOfDate.replace(/-/g, '')}${String(cycleIndex).padStart(4, '0')}`;
-  const migrationPath = await emitSkywayMigration({
-    outputDir: migrationsDir,
-    version: migrationVersion,
-    description: `Delta_Cycle_${cycleIndex}_${loaded.domain.name}`,
-    domain: loaded.domain,
-    data: diff.delta.generatedRecords,
-    statusTransitions,
-  });
-
   // 10. Update simulation checkpoint.json with advanced continuity
   const totalRecordCounts: Record<string, number> = {};
   const activeEntityIds: Record<string, string[]> = {};
@@ -393,7 +464,6 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     'utf8'
   );
 
-  console.log(`   ✓ Emitted additive migration: ${path.basename(migrationPath)}`);
   console.log(`   ✓ Saved checkpoint to: ${path.join(outputDir, 'checkpoint.json')}`);
   console.log(`✨ Accumulation complete.`);
 }

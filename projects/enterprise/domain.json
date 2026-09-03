@@ -17,6 +17,7 @@
   "entities": {
     "Company": {
       "name": "Company",
+      "entityName": "Enterprise: Companies",
       "targetTable": "Company",
       "schema": "enterprise",
       "pack": "core",
@@ -35,6 +36,7 @@
     },
     "Product": {
       "name": "Product",
+      "entityName": "Enterprise: Products",
       "targetTable": "Product",
       "schema": "enterprise",
       "pack": "commerce",
@@ -52,6 +54,7 @@
     },
     "Member": {
       "name": "Member",
+      "entityName": "Enterprise: Members",
       "targetTable": "Member",
       "schema": "enterprise",
       "pack": "core",
@@ -79,6 +82,7 @@
     },
     "Subscription": {
       "name": "Subscription",
+      "entityName": "Enterprise: Subscriptions",
       "targetTable": "Subscription",
       "schema": "enterprise",
       "pack": "commerce",
@@ -111,6 +115,7 @@
     },
     "OrderHeader": {
       "name": "OrderHeader",
+      "entityName": "Enterprise: Order Headers",
       "targetTable": "OrderHeader",
       "schema": "enterprise",
       "pack": "commerce",
@@ -136,6 +141,7 @@
     },
     "OrderLine": {
       "name": "OrderLine",
+      "entityName": "Enterprise: Order Lines",
       "targetTable": "OrderLine",
       "schema": "enterprise",
       "pack": "commerce",
@@ -153,7 +159,7 @@
           "fieldName": "OrderID",
           "targetEntity": "OrderHeader",
           "targetField": "ID",
-          "cardinality": "many-to-one"
+          "dependent": true
         },
         "FK_OrderLine_Product": {
           "fieldName": "ProductID",
@@ -166,6 +172,7 @@
     },
     "Payment": {
       "name": "Payment",
+      "entityName": "Enterprise: Payments",
       "targetTable": "Payment",
       "schema": "enterprise",
       "pack": "commerce",
@@ -183,7 +190,7 @@
           "fieldName": "OrderID",
           "targetEntity": "OrderHeader",
           "targetField": "ID",
-          "cardinality": "many-to-one"
+          "dependent": true
         }
       },
       "isImmutable": true

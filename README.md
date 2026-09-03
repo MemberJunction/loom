@@ -48,7 +48,7 @@ flowchart TD
     subgraph OutputStack ["3. MemberJunction Ecosystem Delivery"]
         OA["Open App Schemas<br/>(Common, Orders, Accounting, Tasks, etc.)"]
         SYNC["Metadata Sync JSON<br/>(/metadata/** Tree)"]
-        SK["Skyway Migrations<br/>(Pure Additive spCreate)"]
+        BE["Full BaseEntity Lifecycle<br/>(Hooks, Audits, Embeddings via mj sync push)"]
         UI["In-App Residue<br/>(Dashboards, Views, Conversations)"]
     end
 
@@ -57,6 +57,7 @@ flowchart TD
     HD --> DAG
     DAG --> ACC
     ACC --> OutputStack
+    SYNC --> BE
 ```
 
 ### 1. Narrative-Driven Ground Truth
@@ -67,15 +68,20 @@ Loom follows the **Disney Principle**: the story comes first, and the data is ge
 ### 2. First-Class Accumulation (Never Wipe, Always Advance)
 Real businesses do not drop their database and re-seed every quarter; they accumulate operational history.
 - Loom is stateful: `(project, seed, releaseDate, ruleset, priorState) → deltaRecords`.
-- Each weekly simulation run reads the committed prior state, respects continuity boundaries (active terms, open support tickets, pending renewals), and emits **only new records**.
-- Every delta is naturally a pure, additive Skyway migration (`spCreate`), eliminating brittle wipe scripts and 100MB+ migration captures.
+- Each simulation cycle reads the committed prior state, respects continuity boundaries (active terms, open support tickets, pending renewals), and emits **only new records** into the metadata tree.
+- Prior IDs remain permanently stable across accumulation cycles.
 
-### 3. Fully Metadata- & Configuration-Driven
+### 3. Sole Delivery Invariant: Exclusive Metadata Ingestion (BaseEntity Lifecycle)
+Loom enforces an absolute architectural invariant: **Metadata is the sole, exclusive engine for synthetic data delivery.**
+- All simulated records are emitted as declarative MemberJunction metadata trees (`metadata/` JSON format) and ingested via `mj sync push`.
+- **Zero Direct-SQL Bypasses**: Direct transactional SQL execution for synthetic data delivery is strictly prohibited. In MemberJunction, operational integrity relies on strongly typed `BaseEntity` subclasses, which execute server-side validation rules, permission checks, custom lifecycle overrides, status transitions, vector embeddings, and audit trails. Bypassing `BaseEntity` produces silent corruption and breaks platform guarantees. All synthetic data ingestion goes through `BaseEntity.Save()` (validation, hooks, audit).
+
+### 4. Fully Metadata- & Configuration-Driven
 - The Loom engine contains **zero hardcoded domain procedures**.
-- Domain schemas, entity graphs, relational references, and factor dependencies are authored in declarative JSON/YAML metadata and validated against strict Zod contracts.
+- Domain schemas, entity graphs, relational references, and factor dependencies are authored in declarative JSON metadata and validated against strict Zod contracts.
 - Expanding to a new business domain requires authoring declarative configs, not editing engine source code.
 
-### 4. Deterministic Identity & Byte-Level Reproducibility
+### 5. Deterministic Identity & Byte-Level Reproducibility
 - Every record's primary key is generated deterministically via `uuidv5(namespace, "entity:businessKey")`.
 - Identical configuration + identical seed = byte-identical output across runs, machines, and architectures.
 - Prior IDs remain permanently stable across accumulation cycles.
@@ -124,19 +130,16 @@ Loom provides an ergonomic, scriptable CLI designed for both human engineers and
 
 ```bash
 # Generate complete world baseline from declarative metadata
-loom build --project=morecheese --seed=42 --release=2026-09-01
+loom build --project=projects/enterprise --seed=42 --release=2026-09-02
 
 # Advance simulation by one cycle (Accumulation mode)
-loom accumulate --project=morecheese --prior-state=./metadata --weeks=1
+loom accumulate --project=projects/enterprise --prior-state=./metadata --weeks=1
 
 # Execute 300+ statistical, referential, and factor verification gates
-loom validate --project=morecheese
+loom validate --project=projects/enterprise
 
 # Inspect causal graph and factor dependencies
-loom inspect factors --project=morecheese
-
-# Emit delta metadata sync JSON and versioned Skyway migrations
-loom emit migrations --output=./migrations
+loom inspect factors --project=projects/enterprise
 ```
 
 ---
@@ -157,7 +160,7 @@ Loom includes an autonomous **Agent Skill** designed to run recurring weekly sim
 | Tool | Focus | Role in Ecosystem |
 |---|---|---|
 | **`Loom`** | Data & World Simulation | Weaves causal, deterministic enterprise data and living operational history |
-| **`Skyway`** | Database Migrations | TypeScript-native, multi-dialect migration engine (SQL Server & PostgreSQL) managing schema DDL, versioning, and transactional execution |
+| **`MetadataSync`** | Declarative Data Sync | Bidirectional declarative metadata and seed synchronization for MemberJunction |
 | **`Forge`** | Database Administration IDE | AI-native SQL Server & database administration client for macOS and Windows — query, explore, visualize, and manage data |
 | **`Sonar`** | Engagement Scoring & Data Quality | Declarative engagement scoring, health monitoring, and anomaly detection across entities with explainable factor rubrics |
 

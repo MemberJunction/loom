@@ -30,7 +30,8 @@ The simulation engine strictly adheres to the canonical invariant list defined i
 - **Invariant 4 (The LLM Boundary)**: Runtime simulation is strictly zero-LLM math. LLM capabilities are confined entirely to an authoring-time companion package (`@memberjunction/loom-author`) that outputs validated JSON metadata.
 - **Invariant 5 (Deep Immutability)**: Emitted transaction history from earlier cycles is never mutated in subsequent cycles.
 - **Invariant 6 (Factor Recovery)**: Statistical logistic regression over emitted crowd data recovers authored $\beta$ weights within defined tolerance bounds ($\pm 0.15$ at $N \ge 5000$).
-- **Invariant 7 (Topological & Referential Closure)**: Emitted datasets and Skyway migrations strictly preserve foreign key closure in topological DAG dependency order with zero orphaned records.
+- **Invariant 7 (Topological & Referential Closure)**: Emitted datasets strictly preserve foreign key closure in topological DAG dependency order with zero orphaned records.
+- **Invariant 8 (Metadata Sole Delivery & BaseEntity Integrity)**: Metadata is the sole, exclusive engine for synthetic data delivery. All simulated records are emitted as partitioned declarative metadata files (`metadata/` tree) and ingested exclusively via MemberJunction's metadata sync push (`mj sync push`), ensuring every record triggers the complete `BaseEntity` subclass lifecycle, server hooks, validation rules, status transitions, vector embeddings, and audit tracking. Direct SQL `INSERT` bypasses are strictly prohibited.
 
 ---
 
@@ -64,7 +65,6 @@ flowchart TD
     subgraph Outputs ["3. Emitters & Validators"]
         GEN --> VAL["loom validate<br/>(Gate 0: Pins Evaluated True via FeatureCompiler)"]
         GEN --> MSYNC["MetadataSync JSON Emitter<br/>(mj sync push)"]
-        GEN --> SKY["Topological Skyway SQL Emitter<br/>(PostgreSQL & SQL Server)"]
     end
 ```
 
@@ -397,7 +397,7 @@ loom-author suggest \
 - **Gate 2 (Motif Quotas)**: Motif assignments match declared counts ($\pm 0$) and rounded percentages ($\pm 0$).
 - **Gate 3 (State Ladder Integrity)**: Zero gaps, zero overlapping terms, and 100% prerequisite compliance across all ladder transitions.
 - **Gate 4 (Factor Recovery)**: Statistical logistic regression over simulated history recovers authored $\beta$ weights within $\pm 0.15$ at $N \ge 5000$.
-- **Gate 5 (Dual-Dialect SQL Migrations)**: [MERGED in PR 4] Topological table ordering and valid transaction blocks in PostgreSQL and SQL Server.
+- **Gate 5 (Metadata Sole Delivery & Ingestibility)**: Emitted metadata tree conforms strictly to MemberJunction `MetadataSync` expectations (`.mj-sync.json` per entity, `{ primaryKey, fields }` wrapped records, and zero SQL emission).
 - **Gate 6 (Schema-Agnostic Enterprise Proof)**: `projects/enterprise` authors at least one hero, one motif, and one ladder with the exact same contracts, and passes all tests in CI.
 - **Gate 7 (Texture Band)**: For each factor with a declared `texture` band $[R_{\min}, R_{\max}]$, the realized per-cycle rate must fall inside the band for every cycle and must exhibit non-zero variance (never a flat series).
 
@@ -405,9 +405,9 @@ loom-author suggest \
 
 ## 7. Non-Goals for Plan 02
 
-To preserve focus on delivering the core metadata contracts and retrospective simulation engine, the following capabilities are explicitly declared as non-goals for Plan 02:
-1. **Scenarios (Parameter Overlays via `--scenario <key>`)**: Deferred to Plan 03. Plan 02 establishes the foundational persona, motif, ladder, and retrospective unroll simulation. Parameter overlays (e.g. `--scenario decliningOrg` overriding baseline factor weights and macro era multipliers) layer cleanly on top once the core contracts exist.
-2. **Three Authoring Vocabularies (`liftPts` / `groupTarget` / `strength` compiled to $\beta$)**: Deferred to Plan 03 / `@memberjunction/loom-author`. Plan 02 standardizes on direct log-odds $\beta$ coefficients and target rates ($R_c$) calibrated via `calibrateIntercept`. High-level human unit compilation (`liftPts` $\to$ $\beta$) belongs in the authoring compiler layer.
+To preserve focus on delivering the core metadata contracts and retrospective simulation engine, the following capabilities are explicitly dropped and will not be carried forward:
+1. **Scenarios (Parameter Overlays via `--scenario <key>`)**: Dropped. The retrospective engine operates on explicit ruleset manifests and active era configurations.
+2. **Three Authoring Vocabularies (`liftPts` / `groupTarget` / `strength` compiled to $\beta$)**: Dropped. The engine standardizes uniformly on direct log-odds $\beta$ coefficients and target rates ($R_c$) calibrated via `calibrateIntercept`.
 
 ---
 
@@ -417,10 +417,25 @@ To preserve focus on delivering the core metadata contracts and retrospective si
 |---|---|---|---|---|
 | **Phase 02.1: Strict Schemas & Domain Validation** | L4a, N1, N2, N9 | `.strict()` on all Zod schemas (`heroes.ts`, `motifs.ts`, `ladders.ts`, `eras.ts`). Authored `validate*AgainstDomain` functions reporting unknown `entity.field` by name. Supported `ne` and `neq` (N1). Normalizes `fieldName = fieldName ?? fkKey` (N2). Percentage quotas as fraction $\in [0, 1]$. Dial arrows with strict union `DialArrowSchema \| FeatureArrowSchema` (N9). | Gate 0 / L4a suite: rejects unexpected keys, validates field existence, N9 dial arrow test. | `MemberJunction/loom#6` |
 | **Phase 02.2: Unified Factor Engine & Retrospective Simulation** | L2, L3, L4b, L7, N3, R4-1, R3-2 | Composed `RetrospectiveUnroller` with `FactorEngine` profiles and `calibrateIntercept`. Absolute cycle convention (`[2021..2026]`). Scripted hero ladder transitions (`ForceTransition`/`ExitLadder`). Era conditioning on motif factor overrides. Single unified world unroller with `DomainConfig` foreignKey closure (R4-1). Hero `baseRow` overlay populating all schema columns (R3-2). Cites empirical measurements: at $N = 400$, $\beta = 1.2$ recovered within $\pm 0.08$; at $N = 5000$, $\beta = 0.50$ recovered at $0.485$ ($\Delta = 0.015 \le 0.15$). Factor gate $N$ floor established at $N \ge 250$ in enterprise simulation. | Gate 4: $\beta$ recovery $\pm 0.15$ at $N \ge 5000$. 400-person cohort test with $\beta = 6.0$. Invariant 3 byte-compare idempotency. | `MemberJunction/loom#6` |
-| **Phase 02.3: CLI Generation Wiring & Continuity** | L1, R3-4, R5-4 | `loom build` and `loom accumulate` run generation through `FactorEngine` + `RetrospectiveUnroller` + ruleset volumes. Continuity populated and asserted non-empty. Strict file reading throwing on corrupt checkpoint/metadata files with ENOENT-vs-parse discrimination (R5-4). Delta migrations emit transactional SQL `UPDATE`s for status transitions. | `integration-enterprise.test.ts`: non-empty continuity, `UPDATE` statements in delta migrations, removing/altering factor alters distribution and fails gate. | `MemberJunction/loom#6` |
+| **Phase 02.3: CLI Generation Wiring & Continuity** | L1, R3-4, R5-4, Invariant 8 | `loom build` and `loom accumulate` run generation through `FactorEngine` + `RetrospectiveUnroller` + ruleset volumes. Continuity populated and asserted non-empty. Strict file reading throwing on corrupt checkpoint/metadata files with ENOENT-vs-parse discrimination (R5-4). Delta updates emit pure in-place metadata record diffs for status transitions (SQL UPDATE emission superseded by Invariant 8). | `integration-enterprise.test.ts`: non-empty continuity, Invariant 5 differential metadata loading, removing/altering factor alters distribution and fails gate. | `MemberJunction/loom#6` |
 | **Phase 02.4: Validator Gate 0 & Empirical Factor Tolerance** | L3, L5, R3-1, R5-1, R6-3 | `Validator.Validate` implements Gate 0 evaluating all three pin kinds (field, outcome, feature via `compileRawFeature` without numeric coercion) per hero per pin. `executeValidate` in CLI passes loaded heroes and rejects empty datasets. Hero child feature pins generically conditioned in `build.ts` (R5-1). Factor tolerance reverted to 0.10 with $N \ge 250$ (R6-3). | `validator.test.ts`, `integration-enterprise.test.ts`: Gate 0 pass/fail tests, factor tolerance breach checks. | `MemberJunction/loom#6` |
 | **Phase 02.5: Enterprise Fixtures & Dynamic Domain Vocabulary Gate** | L5, R3-3, R5-2, Gate 6 | Committed §3 enterprise fixtures (`heroes.json`, `motifs.json`, `ladders.json`, `eras.json`) under `projects/enterprise/ruleset/`. Added dynamic `scripts/check-domain-vocabulary.mjs` deriving domain words from ruleset files and checking whole-word boundaries with self-test (R5-2). | Gate 6: Enterprise 7-entity, 4-tier simulation passing 19 gates and 12-cycle accumulation. CI domain vocabulary grep passing with 'Cancelled' proof test. | `MemberJunction/loom#6` |
 | **Phase 02.6: Flagship Consumer Schema & Conformance** | M1, M2, M5, R2-H1, R2-L1 | Real schema fields and business keys matching committed metadata in `more-cheese/data/domain.json`. Role catalog vocabulary (`Member`, `Vice Chair`, `Chair`) in ladders. Elena 2-term ladder match and Jamie null title match. Acceptance verified via `validate-loom-data.mjs` running against real Loom contracts with mutation testing. | `more-cheese#21` acceptance: `check-metadata-closure.mjs` (0 orphans across 177,518 FKs) + `validate-loom-data.mjs` mutation tests passing. | `MemberJunction/more-cheese#21` |
-| **Phase 02.7: Multi-Cycle Child Row Generation from Motifs & Ladders (Deferred)** | Follow-up | Generate discrete child rows per cycle from `motif.childRates` and ladder bindings (`childRates[].fixedFields`). Enables child-aggregation feature pins across multi-cycle history. | Integration test verifying child row counts match rates per cycle. | Follow-up PR |
-| **Phase 02.8: Single Cycle Unit & Manifest Typed Fields** | N6, R5-3, R5-5 | Single `cycleUnit` declared in `ProjectManifestSchema` (`year`, `week`, `month`, `cycle`) and used consistently by `build` and `accumulate` (N6, R5-5). Ladders advance only when whole cycle elapsed; `cyclesSinceBirth` calculated from `birthCycle`. `startCycle` and `releaseDate` typed required fields in manifest; all `as Record<string, unknown>` casts eliminated (R5-3). | `integration-enterprise.test.ts`: 12-cycle test asserts 5 status transitions matching `durationCycles` prediction; `startCycle: 2015` unrolls from 2015. | `MemberJunction/loom#6` |
+| **Phase 02.7: Multi-Cycle Child Row Generation from Motifs & Ladders** | 02.7 | Generate discrete child rows per cycle from `motif.childRates` and ladder bindings (`childRates[].fixedFields`). Enables child-aggregation feature pins across multi-cycle history. | Integration test verifying child row counts match rates per cycle and cross-cycle feature pins pass Gate 0. | `MemberJunction/loom#7` |
+| **Phase 02.8: Single Cycle Unit & Manifest Typed Fields** | N6, R5-3, R5-5, R7-3, R7-4 | Single `cycleUnit` declared in `ProjectManifestSchema` (`year`, `week`, `month`, `cycle`) and used consistently by `build` and `accumulate` (N6, R5-5, R7-4). Ladders advance only when whole cycle elapsed; `cyclesSinceBirth` calculated from `birthCycle`. `startCycle` and `releaseDate` typed required fields in manifest; all `as Record<string, unknown>` casts eliminated (R5-3). Derived transition count formulas predict transitions from ladder duration cycles (R7-3). | `integration-enterprise.test.ts`: 12-cycle test asserts status transitions matching dynamic `durationCycles` prediction; `startCycle: 2015` unrolls from 2015. | `MemberJunction/loom#7` |
+
+---
+
+### 8. Implementation Work List & Verification Gates for PR #7 (Completed)
+
+| Item | Description | Verification Target | Status |
+|---|---|---|---|
+| **A1 (R7-1)** | Adding a hero must not change non-hero rows (identity-keyed generation, CLI Invariant 3). Non-hero rows between `heroes: []` and shipped heroes are 100% byte-identical. | Integration test: generating with vs without a hero produces byte-identical non-hero rows. | Completed (`integration-enterprise.test.ts: A1`) |
+| **A2 (R7-2)** | Hero outcomes emerge from factor evaluation path without synthetic post-hoc overwrite. Hero outcome pins condition draws via rejection sampling. | Emitter test: hero outcomes emerge from model evaluation path and pass Gate 0. | Completed (`integration-enterprise.test.ts: A2`) |
+| **A3 (02.7)** | Child rows per cycle: Generate discrete child rows per cycle from `motif.childRates` and ladder bindings. Cross-cycle feature pins satisfy Gate 0. | Integration test: child row counts match rates per cycle across multi-cycle history and pass Gate 0. | Completed (`integration-enterprise.test.ts: A3`) |
+| **A4 (N6)** | State ladder `stateValues` bidirectional mapping on field/childEntity bindings. | Engine & contract test: ladders enforce typed `stateValues` round-trip resolution. | Completed (`ladders.test.ts`) |
+| **A5 (R7-3)** | Dynamic transition count prediction: formula dynamically calculates expected transitions from ladders' `durationCycles`. | CLI test: non-hardcoded cycle advancement with dynamically computed transition count. | Completed (`integration-enterprise.test.ts: A5`) |
+| **A6 (R7-4)** | Single project-wide `cycleUnit` declared on manifest; removed `cycleUnit` from `StateLadderConfigSchema`. | Contract & CLI test: ladders strictly reject local `cycleUnit`; weekly vs yearly projects produce distinct schedules. | Completed (`ladders.test.ts`, `integration-enterprise.test.ts: A6`) |
+| **B1, B2, B3** | Realized Eras: active era volume multipliers evaluated inside cycle loop with scoped `where` matching via FK traversal, and verified via `loom validate` gate. | CLI test: 0 multiplier produces 0 rows, passes validation gate, and fails if multiplier edited to 1.0. | Completed (`integration-enterprise.test.ts: B`) |
+
 

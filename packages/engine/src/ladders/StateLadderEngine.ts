@@ -62,6 +62,40 @@ export class StateLadderEngine {
   }
 
   /**
+   * Resolves a state name to its configured stored value (e.g. role lookup, enum code, or ID)
+   */
+  public GetStoredValueForState(ladderKey: string, stateName: string): string | number {
+    const ladder = this.ladders.get(ladderKey);
+    if (!ladder) return stateName;
+    const binding = ladder.binding;
+    if (binding.stateValues && binding.stateValues[stateName] !== undefined) {
+      return binding.stateValues[stateName];
+    }
+    return stateName;
+  }
+
+  /**
+   * Resolves a stored value back to its ladder state name (bidirectional lookup).
+   */
+  public GetStateForStoredValue(ladderKey: string, storedValue: string | number): string | undefined {
+    const ladder = this.ladders.get(ladderKey);
+    if (!ladder) return undefined;
+    const binding = ladder.binding;
+    if (binding.stateValues) {
+      for (const [stateName, val] of Object.entries(binding.stateValues)) {
+        if (val === storedValue || String(val).toLowerCase() === String(storedValue).toLowerCase()) {
+          return stateName;
+        }
+      }
+    }
+    // Fallback: match by state name directly
+    const match = ladder.states.find(
+      (s) => s.name.toLowerCase() === String(storedValue).toLowerCase()
+    );
+    return match?.name;
+  }
+
+  /**
    * Enrolls an entity into a ladder at an initial state.
    */
   public Enroll(

@@ -12,6 +12,7 @@
   "entities": {
     "Organization": {
       "name": "Organization",
+      "entityName": "Fixture: Organizations",
       "targetTable": "Organization",
       "schema": "fixture",
       "pack": "common",
@@ -25,6 +26,7 @@
     },
     "Person": {
       "name": "Person",
+      "entityName": "Fixture: People",
       "targetTable": "Person",
       "schema": "fixture",
       "pack": "common",

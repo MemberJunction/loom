@@ -11,15 +11,11 @@ export const ProjectManifestSchema = z.object({
   banksPath: z.string().optional(),
   startCycle: z.number().int(),
   releaseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  cycleUnit: z.enum(['year', 'week', 'month', 'cycle']).default('year'),
+  cycleUnit: z.enum(['year', 'week']).default('year'),
   output: z.object({
     metadataDir: z.string().default('./metadata'),
-    migrationsDir: z.string().default('./migrations'),
-    sqlDialect: z.enum(['sqlserver', 'postgres']).default('sqlserver'),
-  }).default({
+  }).strict().default({
     metadataDir: './metadata',
-    migrationsDir: './migrations',
-    sqlDialect: 'sqlserver',
   }),
 });
 export type ProjectManifest = z.infer<typeof ProjectManifestSchema>;

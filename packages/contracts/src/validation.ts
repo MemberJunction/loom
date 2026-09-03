@@ -244,8 +244,24 @@ export function validateErasAgainstDomain(
 
   for (const era of manifest.eras) {
     for (const vm of era.volumeMultipliers) {
-      if (!domain.entities[vm.entity]) {
+      const entityCfg = domain.entities[vm.entity];
+      if (!entityCfg) {
         errors.push(`Era '${era.eraKey}': unknown entity '${vm.entity}' in volumeMultipliers`);
+      } else if (vm.where) {
+        for (const whereField of Object.keys(vm.where)) {
+          if (!entityCfg.fields[whereField]) {
+            const resolvedThroughFk = Object.values(entityCfg.foreignKeys ?? {}).some((fk) => {
+              if (fk.fieldName === whereField) return true;
+              const targetEntityCfg = domain.entities[fk.targetEntity];
+              return targetEntityCfg && Boolean(targetEntityCfg.fields[whereField]);
+            });
+            if (!resolvedThroughFk) {
+              errors.push(
+                `Era '${era.eraKey}': field '${whereField}' not found on entity '${vm.entity}' or its related entities in volumeMultipliers where condition`
+              );
+            }
+          }
+        }
       }
     }
   }
