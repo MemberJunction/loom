@@ -40,6 +40,13 @@ export const EntityConfigSchema = z.object({
   fields: z.record(z.string(), FieldConfigSchema),
   foreignKeys: z.record(z.string(), ForeignKeyConfigSchema).default({}),
   isImmutable: z.boolean().default(false),
+}).transform((entity) => {
+  for (const [fkKey, fk] of Object.entries(entity.foreignKeys)) {
+    if (!fk.fieldName) {
+      fk.fieldName = fkKey;
+    }
+  }
+  return entity;
 });
 export type EntityConfig = z.infer<typeof EntityConfigSchema>;
 

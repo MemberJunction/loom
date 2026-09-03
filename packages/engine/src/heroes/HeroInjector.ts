@@ -110,6 +110,7 @@ export class HeroInjector {
     switch (op) {
       case 'eq':
         return actual === expected;
+      case 'ne':
       case 'neq':
         return actual !== expected;
       case 'gt':

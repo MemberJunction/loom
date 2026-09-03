@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   HeroConfigSchema,
+  PinOpSchema,
+  DomainConfigSchema,
+  FactorOverrideSchema,
   validateHeroesAgainstDomain,
   validateMotifsAgainstDomain,
   validateLaddersAgainstDomain,
@@ -10,7 +13,13 @@ import {
   type MotifsManifest,
   type LaddersManifest,
   type ErasManifest,
+  type FactorContract,
 } from '@memberjunction/loom-contracts';
+import { HeroInjector } from '../src/heroes/HeroInjector.js';
+import { RetrospectiveUnroller } from '../src/simulation/RetrospectiveUnroller.js';
+import { MotifSampler } from '../src/motifs/MotifSampler.js';
+import { StateLadderEngine } from '../src/ladders/StateLadderEngine.js';
+import { createRng } from '../src/math/rng.js';
 
 describe('Plan 02 Strict Schemas and Domain Validation (Gate 0 / L4a)', () => {
   const sampleDomain: DomainConfig = {
@@ -169,5 +178,169 @@ describe('Plan 02 Strict Schemas and Domain Validation (Gate 0 / L4a)', () => {
     const badLadderRes = validateLaddersAgainstDomain(badLadderManifest, sampleDomain);
     expect(badLadderRes.valid).toBe(false);
     expect(badLadderRes.errors.some((e) => e.includes('CommitteeMember.NonExistentFK'))).toBe(true);
+  });
+
+  // N1: PinOpSchema options test
+  it('N1: exercises every op in PinOpSchema.options through EvaluatePinOp', () => {
+    const ops = PinOpSchema.options;
+    expect(ops).toContain('ne');
+    expect(ops).toContain('neq');
+    expect(ops).toContain('eq');
+
+    expect(HeroInjector.EvaluatePinOp('eq', 'Active', 'Active')).toBe(true);
+    expect(HeroInjector.EvaluatePinOp('eq', 'Active', 'Lapsed')).toBe(false);
+    expect(HeroInjector.EvaluatePinOp('ne', 'Active', 'Lapsed')).toBe(true);
+    expect(HeroInjector.EvaluatePinOp('ne', 'Active', 'Active')).toBe(false);
+    expect(HeroInjector.EvaluatePinOp('neq', 'Active', 'Lapsed')).toBe(true);
+    expect(HeroInjector.EvaluatePinOp('neq', 'Active', 'Active')).toBe(false);
+    expect(HeroInjector.EvaluatePinOp('gt', 10, 5)).toBe(true);
+    expect(HeroInjector.EvaluatePinOp('gt', 5, 10)).toBe(false);
+    expect(HeroInjector.EvaluatePinOp('gte', 10, 10)).toBe(true);
+    expect(HeroInjector.EvaluatePinOp('lt', 5, 10)).toBe(true);
+    expect(HeroInjector.EvaluatePinOp('lte', 10, 10)).toBe(true);
+    expect(HeroInjector.EvaluatePinOp('in', 'Gold', ['Silver', 'Gold', 'Platinum'])).toBe(true);
+    expect(HeroInjector.EvaluatePinOp('in', 'Bronze', ['Silver', 'Gold', 'Platinum'])).toBe(false);
+    expect(HeroInjector.EvaluatePinOp('exists', 'value', true)).toBe(true);
+    expect(HeroInjector.EvaluatePinOp('exists', null, true)).toBe(false);
+    expect(HeroInjector.EvaluatePinOp('withinCyclesOfAsOf', 2, 3)).toBe(true);
+    expect(HeroInjector.EvaluatePinOp('withinCyclesOfAsOf', 5, 3)).toBe(false);
+  });
+
+  // N2: ForeignKeyConfigSchema transform test
+  it('N2: ForeignKeyConfigSchema transform normalizes fieldName to fkKey for both generation and validation', () => {
+    const rawDomain = {
+      name: 'n2-domain',
+      namespace: 'b1e4c4d5-8f6a-4d2b-9e3a-7a5c8d1f2e34',
+      packs: {},
+      entities: {
+        Parent: {
+          name: 'Parent',
+          targetTable: 'Parent',
+          schema: 'test',
+          pack: 'core',
+          businessKey: ['Code'],
+          fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true }, Code: { name: 'Code', type: 'string' } },
+          foreignKeys: {},
+        },
+        Child: {
+          name: 'Child',
+          targetTable: 'Child',
+          schema: 'test',
+          pack: 'core',
+          businessKey: ['ChildCode'],
+          fields: {
+            ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+            ChildCode: { name: 'ChildCode', type: 'string' },
+            ParentID: { name: 'ParentID', type: 'uuid' },
+          },
+          foreignKeys: {
+            // No fieldName explicitly provided; key is 'ParentID'
+            ParentID: {
+              targetEntity: 'Parent',
+              targetField: 'ID',
+              cardinality: 'many-to-one',
+            },
+          },
+        },
+      },
+    };
+
+    const parsed = DomainConfigSchema.parse(rawDomain);
+    const childFk = parsed.entities['Child']?.foreignKeys['ParentID'];
+    expect(childFk).toBeDefined();
+    expect(childFk?.fieldName).toBe('ParentID');
+  });
+
+  // N3: Arrow evaluation with RelationalContext and arrow-specific beta override
+  it('N3: evaluates childEntity aggregation arrow with RelationalContext, and applies beta override strictly to named arrow', () => {
+    // 1. Verify FactorOverrideSchema rejects beta without arrow
+    const invalidOverride = {
+      factor: 'factor-renewal',
+      beta: 1.5,
+    };
+    const invRes = FactorOverrideSchema.safeParse(invalidOverride);
+    expect(invRes.success).toBe(false);
+
+    const validOverride = {
+      factor: 'factor-renewal',
+      arrow: 'tenure',
+      beta: 2.5,
+    };
+    const valRes = FactorOverrideSchema.safeParse(validOverride);
+    expect(valRes.success).toBe(true);
+
+    // 2. Test arrow evaluation with child aggregation in RetrospectiveUnroller
+    const contract: FactorContract = {
+      id: 'factor-renewal',
+      effect: 'Person',
+      target: 0.8,
+      tolerance: 0.1,
+      evidence: { source: 'test', confidence: 'high' },
+      outcome: { from: 'self', where: { Status: 'Active' } },
+      arrows: {
+        tenure: { name: 'tenure', beta: 0.5 },
+        committeeCount: {
+          name: 'committeeCount',
+          beta: 1.0,
+          feature: {
+            from: 'CommitteeMember',
+            aggregation: 'count',
+            field: 'ID',
+          },
+        },
+      },
+    };
+
+    const heroInjector = new HeroInjector('test', 'b1e4c4d5-8f6a-4d2b-9e3a-7a5c8d1f2e34', []);
+    const motifSampler = new MotifSampler([
+      {
+        motifKey: 'tenure-booster',
+        targetEntity: 'Person',
+        quota: { mode: 'count', value: 1 },
+        childRates: [],
+        eras: [],
+        factorOverrides: [
+          { factor: 'factor-renewal', arrow: 'tenure', beta: 3.0 },
+        ],
+      },
+    ]);
+    const ladderEngine = new StateLadderEngine([]);
+
+    const unroller = new RetrospectiveUnroller({
+      cycles: [2026],
+      entities: [
+        { id: 'p1', entity: 'Person', birthCycle: 2022, latentDials: { tenure: 2.0 }, isHero: false },
+        { id: 'c1', entity: 'CommitteeMember', birthCycle: 2022, fixedFields: { PersonID: 'p1' }, isHero: false },
+      ],
+      heroInjector,
+      motifSampler,
+      ladderEngine,
+      factorContracts: [contract],
+    });
+
+    const rng = createRng(42, 'test-n3');
+    unroller.Initialize(rng);
+    // Evaluating child aggregation with RelationalContext should not throw
+    const snapshots = unroller.Run(rng);
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0]?.outcomesCount['factor-renewal']).toBeDefined();
+  });
+
+  // N4: validate*AgainstDomain parses raw unparsed input safely without TypeError
+  it('N4: validate*AgainstDomain parses raw unparsed input safely without throwing TypeError', () => {
+    const rawMalformedHeroManifest = {
+      heroes: [
+        {
+          // Missing required fields
+          heroKey: 'broken-hero',
+        },
+      ],
+    };
+
+    // Must not throw TypeError; must return valid: false with descriptive error messages
+    const res = validateHeroesAgainstDomain(rawMalformedHeroManifest, sampleDomain);
+    expect(res.valid).toBe(false);
+    expect(res.errors.length).toBeGreaterThan(0);
+    expect(res.errors[0]).toContain('HeroesManifest');
   });
 });

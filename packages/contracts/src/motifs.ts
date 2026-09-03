@@ -36,10 +36,18 @@ export type ChildRate = z.infer<typeof ChildRateSchema>;
 
 export const FactorOverrideSchema = z.object({
   factor: z.string().min(1),
+  arrow: z.string().min(1).optional(),
   beta: z.number().optional(),
   probability: z.number().min(0).max(1).optional(),
 }).strict().refine((o) => o.beta !== undefined || o.probability !== undefined, {
   message: "FactorOverride must specify at least one of 'beta' or 'probability'",
+}).refine((o) => {
+  if (o.beta !== undefined && !o.arrow) {
+    return false;
+  }
+  return true;
+}, {
+  message: "FactorOverride specifying 'beta' must name target 'arrow'",
 });
 export type FactorOverride = z.infer<typeof FactorOverrideSchema>;
 

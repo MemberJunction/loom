@@ -1,8 +1,8 @@
-import type { DomainConfig } from './domain.js';
-import type { HeroesManifest } from './heroes.js';
-import type { MotifsManifest } from './motifs.js';
-import type { LaddersManifest } from './ladders.js';
-import type { ErasManifest } from './eras.js';
+import { DomainConfigSchema, type DomainConfig } from './domain.js';
+import { HeroesManifestSchema, type HeroesManifest } from './heroes.js';
+import { MotifsManifestSchema, type MotifsManifest } from './motifs.js';
+import { LaddersManifestSchema, type LaddersManifest } from './ladders.js';
+import { ErasManifestSchema, type ErasManifest } from './eras.js';
 
 export interface DomainValidationResult {
   valid: boolean;
@@ -11,13 +11,32 @@ export interface DomainValidationResult {
 
 /**
  * Validates a hero persona manifest against a DomainConfig schema.
- * Rejects unknown entities, undeclared fixed fields, invalid pin fields, and missing child entities.
+ * Parses input with strict Zod schemas first, then verifies all entities,
+ * fixed fields, and pin predicates against declared domain entities.
  */
 export function validateHeroesAgainstDomain(
-  manifest: HeroesManifest,
-  domain: DomainConfig
+  rawManifest: unknown,
+  rawDomain: unknown
 ): DomainValidationResult {
   const errors: string[] = [];
+
+  const domainParsed = DomainConfigSchema.safeParse(rawDomain);
+  if (!domainParsed.success) {
+    return {
+      valid: false,
+      errors: domainParsed.error.issues.map((i) => `DomainConfig: ${i.path.join('.')}: ${i.message}`),
+    };
+  }
+  const domain: DomainConfig = domainParsed.data;
+
+  const manifestParsed = HeroesManifestSchema.safeParse(rawManifest);
+  if (!manifestParsed.success) {
+    return {
+      valid: false,
+      errors: manifestParsed.error.issues.map((i) => `HeroesManifest: ${i.path.join('.')}: ${i.message}`),
+    };
+  }
+  const manifest: HeroesManifest = manifestParsed.data;
 
   for (const hero of manifest.heroes) {
     const entityCfg = domain.entities[hero.entity];
@@ -83,10 +102,28 @@ export function validateHeroesAgainstDomain(
  * Validates a motifs manifest against a DomainConfig schema.
  */
 export function validateMotifsAgainstDomain(
-  manifest: MotifsManifest,
-  domain: DomainConfig
+  rawManifest: unknown,
+  rawDomain: unknown
 ): DomainValidationResult {
   const errors: string[] = [];
+
+  const domainParsed = DomainConfigSchema.safeParse(rawDomain);
+  if (!domainParsed.success) {
+    return {
+      valid: false,
+      errors: domainParsed.error.issues.map((i) => `DomainConfig: ${i.path.join('.')}: ${i.message}`),
+    };
+  }
+  const domain: DomainConfig = domainParsed.data;
+
+  const manifestParsed = MotifsManifestSchema.safeParse(rawManifest);
+  if (!manifestParsed.success) {
+    return {
+      valid: false,
+      errors: manifestParsed.error.issues.map((i) => `MotifsManifest: ${i.path.join('.')}: ${i.message}`),
+    };
+  }
+  const manifest: MotifsManifest = manifestParsed.data;
 
   for (const motif of manifest.motifs) {
     const entityCfg = domain.entities[motif.targetEntity];
@@ -120,10 +157,28 @@ export function validateMotifsAgainstDomain(
  * Validates a ladders manifest against a DomainConfig schema.
  */
 export function validateLaddersAgainstDomain(
-  manifest: LaddersManifest,
-  domain: DomainConfig
+  rawManifest: unknown,
+  rawDomain: unknown
 ): DomainValidationResult {
   const errors: string[] = [];
+
+  const domainParsed = DomainConfigSchema.safeParse(rawDomain);
+  if (!domainParsed.success) {
+    return {
+      valid: false,
+      errors: domainParsed.error.issues.map((i) => `DomainConfig: ${i.path.join('.')}: ${i.message}`),
+    };
+  }
+  const domain: DomainConfig = domainParsed.data;
+
+  const manifestParsed = LaddersManifestSchema.safeParse(rawManifest);
+  if (!manifestParsed.success) {
+    return {
+      valid: false,
+      errors: manifestParsed.error.issues.map((i) => `LaddersManifest: ${i.path.join('.')}: ${i.message}`),
+    };
+  }
+  const manifest: LaddersManifest = manifestParsed.data;
 
   for (const ladder of manifest.ladders) {
     const entityCfg = domain.entities[ladder.entity];
@@ -164,10 +219,28 @@ export function validateLaddersAgainstDomain(
  * Validates an eras manifest against a DomainConfig schema.
  */
 export function validateErasAgainstDomain(
-  manifest: ErasManifest,
-  domain: DomainConfig
+  rawManifest: unknown,
+  rawDomain: unknown
 ): DomainValidationResult {
   const errors: string[] = [];
+
+  const domainParsed = DomainConfigSchema.safeParse(rawDomain);
+  if (!domainParsed.success) {
+    return {
+      valid: false,
+      errors: domainParsed.error.issues.map((i) => `DomainConfig: ${i.path.join('.')}: ${i.message}`),
+    };
+  }
+  const domain: DomainConfig = domainParsed.data;
+
+  const manifestParsed = ErasManifestSchema.safeParse(rawManifest);
+  if (!manifestParsed.success) {
+    return {
+      valid: false,
+      errors: manifestParsed.error.issues.map((i) => `ErasManifest: ${i.path.join('.')}: ${i.message}`),
+    };
+  }
+  const manifest: ErasManifest = manifestParsed.data;
 
   for (const era of manifest.eras) {
     for (const vm of era.volumeMultipliers) {

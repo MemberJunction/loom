@@ -5,7 +5,12 @@ import type {
 import { RngStream } from '../math/rng.js';
 import { calibrateIntercept, sigmoid } from '../math/calibration.js';
 import { FactorEngine, type LatentProfile } from '../factors/engine.js';
-import { compileFeature } from '../features/compiler.js';
+import {
+  compileFeature,
+  type FeatureEvaluator,
+  type RelationalContext,
+  type EntityRecord,
+} from '../features/compiler.js';
 import { HeroInjector } from '../heroes/HeroInjector.js';
 import { MotifSampler, EntityCandidate, MotifAssignment } from '../motifs/MotifSampler.js';
 import { StateLadderEngine } from '../ladders/StateLadderEngine.js';
@@ -56,6 +61,7 @@ export class RetrospectiveUnroller {
   private entityStates = new Map<string, UnrollEntityState>();
   private motifAssignments = new Map<string, MotifAssignment[]>();
   private factorEngine: FactorEngine;
+  private compiledFeatures = new Map<string, FeatureEvaluator>();
   public readonly cycles: number[];
 
   constructor(private config: UnrollConfig) {
@@ -67,6 +73,15 @@ export class RetrospectiveUnroller {
       const start = config.startCycle ?? 0;
       const count = config.totalCycles ?? 1;
       this.cycles = Array.from({ length: count }, (_, i) => start + i);
+    }
+
+    // Precompile feature queries on contract arrows (hoisted for performance)
+    for (const contract of config.factorContracts ?? []) {
+      for (const arrow of Object.values(contract.arrows)) {
+        if (arrow.feature && !this.compiledFeatures.has(arrow.name)) {
+          this.compiledFeatures.set(arrow.name, compileFeature(arrow.feature));
+        }
+      }
     }
   }
 
@@ -246,6 +261,30 @@ export class RetrospectiveUnroller {
       // 5. Evaluate factor contracts with calibrateIntercept and era adjustments
       const outcomesCount: Record<string, number> = {};
 
+      // Build relational context for child aggregations and multi-hop traversal in feature queries (N3a)
+      const relationalCtx: RelationalContext = {
+        getEntity: (entityName: string, id: string) => {
+          const s = this.entityStates.get(id);
+          if (!s || s.entity !== entityName) return undefined;
+          return { ID: s.id, id: s.id, ...s.fixedFields, ...s.latentDials, ...s.ladderStates };
+        },
+        getChildren: (_parentEntity: string, parentId: string, childEntity: string, foreignKeyField: string) => {
+          const results: EntityRecord[] = [];
+          for (const s of this.entityStates.values()) {
+            if (s.entity === childEntity) {
+              const fkVal =
+                s.fixedFields[foreignKeyField] ??
+                s.fixedFields[`${_parentEntity}ID`] ??
+                s.fixedFields['ParentID'];
+              if (String(fkVal) === String(parentId)) {
+                results.push({ ID: s.id, id: s.id, ...s.fixedFields, ...s.latentDials, ...s.ladderStates });
+              }
+            }
+          }
+          return results;
+        },
+      };
+
       for (const contract of factorContracts) {
         let positiveCount = 0;
 
@@ -255,9 +294,8 @@ export class RetrospectiveUnroller {
         for (const entity of activeEntities) {
           const assignments = this.motifAssignments.get(entity.id) ?? [];
 
-          // Check motif factor override
+          // Check motif factor override (intercept or probability)
           let overrideProb: number | undefined;
-          let overrideBeta: number | undefined;
           for (const a of assignments) {
             const eraApplies = !a.eras || a.eras.length === 0 || a.eras.some((k) => activeEraKeys.has(k));
             if (!eraApplies) continue;
@@ -265,7 +303,6 @@ export class RetrospectiveUnroller {
             const fo = a.factorOverrides.find((o) => o.factor === contract.id);
             if (fo) {
               if (fo.probability !== undefined) overrideProb = fo.probability;
-              if (fo.beta !== undefined) overrideBeta = fo.beta;
             }
           }
 
@@ -281,11 +318,32 @@ export class RetrospectiveUnroller {
             if (arrow.name in entity.latentDials) {
               featureVal = entity.latentDials[arrow.name] ?? 0;
             } else if (arrow.feature) {
-              const evaluator = compileFeature(arrow.feature);
-              featureVal = evaluator({ ...entity.fixedFields, ...entity.latentDials });
+              let evaluator = this.compiledFeatures.get(arrow.name);
+              if (!evaluator) {
+                evaluator = compileFeature(arrow.feature);
+                this.compiledFeatures.set(arrow.name, evaluator);
+              }
+              featureVal = evaluator(
+                { ID: entity.id, id: entity.id, ...entity.fixedFields, ...entity.latentDials, ...entity.ladderStates },
+                relationalCtx
+              );
             }
 
-            const beta = overrideBeta !== undefined ? overrideBeta : arrow.beta;
+            // Beta override per arrow (N3b: honor fo.arrow)
+            let beta = arrow.beta;
+            for (const a of assignments) {
+              const eraApplies = !a.eras || a.eras.length === 0 || a.eras.some((k) => activeEraKeys.has(k));
+              if (!eraApplies) continue;
+
+              const fo = a.factorOverrides.find(
+                (o) => o.factor === contract.id && (!o.arrow || o.arrow === arrow.name)
+              );
+              if (fo && fo.beta !== undefined) {
+                beta = fo.beta;
+                break;
+              }
+            }
+
             score += beta * featureVal;
           }
 

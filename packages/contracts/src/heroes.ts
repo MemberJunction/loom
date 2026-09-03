@@ -3,6 +3,7 @@ import { FeatureQuerySchema } from './factors.js';
 
 export const PinOpSchema = z.enum([
   'eq',
+  'ne',
   'neq',
   'gt',
   'gte',
