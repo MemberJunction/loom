@@ -64,11 +64,11 @@ export async function emitSkywayMigration(options: SkywayMigrationOptions): Prom
       ? `"${schemaName}"."${tableName}"`
       : `[${schemaName}].[${tableName}]`;
 
-    // Sort records deterministically by primary key (ID)
+    // Sort records deterministically by primary key (ID) using code-point comparison
     const records = [...rawRecords].sort((a, b) => {
       const idA = String(a['ID'] ?? a['id'] ?? '');
       const idB = String(b['ID'] ?? b['id'] ?? '');
-      return idA.localeCompare(idB);
+      return idA < idB ? -1 : idA > idB ? 1 : 0;
     });
 
     lines.push(`-- Entity: ${entityName} (${records.length} records)`);
@@ -89,9 +89,7 @@ export async function emitSkywayMigration(options: SkywayMigrationOptions): Prom
         ? cols.map((c) => `"${c}"`).join(', ')
         : cols.map((c) => `[${c}]`).join(', ');
 
-      const valList = cols
-        .map((col) => formatSqlValue(record[col], isPostgres))
-        .join(', ');
+      const valList = cols.map((c) => formatSqlValue(record[c], isPostgres)).join(', ');
 
       if (options.useSpCreate) {
         if (isPostgres) {
@@ -120,9 +118,14 @@ export async function emitSkywayMigration(options: SkywayMigrationOptions): Prom
 }
 
 /**
- * Sorts entities in topological DAG order where parent tables precede child tables.
+ * Topologically sorts entity names so that parent entities precede child entities
+ * in generated SQL insertion statements.
+ * Throws if a cyclic foreign key dependency is detected.
  */
-function sortEntitiesTopologically(entityNames: readonly string[], domain: DomainConfig): string[] {
+export function sortEntitiesTopologically(
+  entityNames: string[],
+  domain: DomainConfig
+): string[] {
   const set = new Set(entityNames);
   const inDegree = new Map<string, number>();
   const adj = new Map<string, Set<string>>();
@@ -133,9 +136,10 @@ function sortEntitiesTopologically(entityNames: readonly string[], domain: Domai
   }
 
   for (const name of entityNames) {
-    const cfg = domain.entities[name];
-    if (!cfg) continue;
-    for (const fk of Object.values(cfg.foreignKeys)) {
+    const entityCfg = domain.entities[name];
+    if (!entityCfg || !entityCfg.foreignKeys) continue;
+
+    for (const fk of Object.values(entityCfg.foreignKeys)) {
       const parent = fk.targetEntity;
       if (set.has(parent) && parent !== name) {
         // parent -> name (parent must precede child)
@@ -148,25 +152,36 @@ function sortEntitiesTopologically(entityNames: readonly string[], domain: Domai
     }
   }
 
-  const queue: string[] = [];
-  for (const [name, deg] of inDegree.entries()) {
-    if (deg === 0) queue.push(name);
-  }
+  // Seed Kahn queue in deterministic code-point order
+  const zeroInDegree = entityNames
+    .filter((name) => inDegree.get(name) === 0)
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
+  const queue: string[] = [...zeroInDegree];
   const sorted: string[] = [];
+
   while (queue.length > 0) {
     const curr = queue.shift()!;
     sorted.push(curr);
-    for (const child of adj.get(curr) ?? []) {
+
+    const children = Array.from(adj.get(curr) ?? []).sort((a, b) =>
+      a < b ? -1 : a > b ? 1 : 0
+    );
+    for (const child of children) {
       const newDeg = inDegree.get(child)! - 1;
       inDegree.set(child, newDeg);
       if (newDeg === 0) queue.push(child);
     }
   }
 
-  // If any cycles or disconnected entities remain, append them
-  for (const name of entityNames) {
-    if (!sorted.includes(name)) sorted.push(name);
+  if (sorted.length !== entityNames.length) {
+    const sortedSet = new Set(sorted);
+    const unresolved = entityNames
+      .filter((name) => !sortedSet.has(name))
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    throw new Error(
+      `Cyclic foreign key dependency detected among entities: ${unresolved.join(', ')}`
+    );
   }
 
   return sorted;

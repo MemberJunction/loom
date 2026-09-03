@@ -25,6 +25,7 @@ describe('Loom E2E Fixture Pipeline', () => {
       project: fixturePath,
       seed: '101',
       output: tempMetadataDir,
+      migrationsOutput: path.join(tempOutputDir, 'migrations'),
     });
 
     const orgFile = path.join(tempMetadataDir, 'common', 'Organization.json');
@@ -49,6 +50,7 @@ describe('Loom E2E Fixture Pipeline', () => {
       project: fixturePath,
       priorState: tempMetadataDir,
       output: tempMetadataDir,
+      migrationsOutput: path.join(tempOutputDir, 'migrations'),
       weeks: '1',
       seed: '101',
     });

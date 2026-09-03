@@ -1,0 +1,151 @@
+import { IdentityService, type RngStream } from '@memberjunction/loom-engine';
+import type { DomainConfig } from '@memberjunction/loom-contracts';
+
+export interface GenerateEntityRecordOptions {
+  domain: DomainConfig;
+  entity: string;
+  i: number;
+  declaredFields: Record<string, unknown>;
+  parentPool: Record<string, Record<string, unknown>[]>;
+  rng: RngStream;
+  identityService: IdentityService;
+}
+
+/**
+ * Generates a single strongly-typed record for an entity.
+ * - Populates only declared fields in domain.entities[entity].fields
+ * - Throws if required foreign key parent records are missing
+ * - Mints deterministic primary key UUIDs from declared business keys
+ */
+export function generateEntityRecord(options: GenerateEntityRecordOptions): Record<string, unknown> {
+  const { domain, entity, i, declaredFields, parentPool, rng, identityService } = options;
+  const entityCfg = domain.entities[entity];
+  if (!entityCfg) {
+    throw new Error(`generateEntityRecord: entity '${entity}' not found in domain`);
+  }
+
+  const row: Record<string, unknown> = {};
+
+  // 1. Populate all declared non-PK fields first
+  for (const [fieldName, fieldDef] of Object.entries(declaredFields)) {
+    if (fieldName === 'ID' || fieldName === 'id') continue;
+
+    const fDef = fieldDef as {
+      type?: string;
+      foreignKey?: { targetEntity: string; targetField: string };
+    };
+
+    // Check field-level FK or entity-level foreignKeys
+    let targetEntity: string | undefined = fDef.foreignKey?.targetEntity;
+    if (!targetEntity && entityCfg.foreignKeys) {
+      const matchingFk = Object.values(entityCfg.foreignKeys).find(
+        (fk) => fk.fieldName === fieldName
+      );
+      if (matchingFk) targetEntity = matchingFk.targetEntity;
+    }
+
+    if (targetEntity) {
+      const targetRows = parentPool[targetEntity];
+      if (!targetRows || targetRows.length === 0) {
+        throw new Error(
+          `No parent records available for foreign key ${entity}.${fieldName} -> ${targetEntity}`
+        );
+      }
+      const parentIndex =
+        targetEntity === 'Product' && (entity === 'OrderLine' || entity === 'Subscription')
+          ? Math.floor((i - 1) / targetRows.length) % targetRows.length
+          : (i - 1) % targetRows.length;
+      const parent = targetRows[parentIndex];
+      if (!parent) {
+        throw new Error(`Parent record at index ${parentIndex} not found in ${targetEntity}`);
+      }
+      const parentId = parent['ID'] ?? parent['id'];
+      if (!parentId) {
+        throw new Error(`Parent record in ${targetEntity} missing primary key ID`);
+      }
+      row[fieldName] = parentId;
+      continue;
+    }
+
+    // Dynamic field mapping based on semantic domain names
+    if (fieldName === 'Name') {
+      row[fieldName] = `${entity} Corp ${i}`;
+    } else if (fieldName === 'FirstName') {
+      row[fieldName] = `MemberFirst${i}`;
+    } else if (fieldName === 'LastName') {
+      row[fieldName] = `MemberLast${i}`;
+    } else if (fieldName === 'Email') {
+      row[fieldName] = `user${i}@enterprise${i}.com`;
+    } else if (fieldName === 'SKU') {
+      row[fieldName] = `SKU-${1000 + i}`;
+    } else if (fieldName === 'OrderNumber') {
+      row[fieldName] = `ORD-${20260000 + i}`;
+    } else if (fieldName === 'Industry') {
+      row[fieldName] = 'Technology';
+    } else if (fieldName === 'Category') {
+      row[fieldName] = 'Software';
+    } else if (fieldName === 'Title') {
+      row[fieldName] = 'Director';
+    } else if (fieldName === 'PaymentMethod') {
+      row[fieldName] = 'CreditCard';
+    } else if (fieldName === 'Status') {
+      row[fieldName] = i % 5 !== 0 ? 'Active' : 'Lapsed';
+    } else if (fieldName === 'Tier') {
+      row[fieldName] =
+        i % 10 === 1 || i % 10 === 4 || i % 10 === 7
+          ? 'Enterprise'
+          : i % 2 === 0
+            ? 'MidMarket'
+            : 'SMB';
+    } else if (fieldName === 'AutoRenew') {
+      row[fieldName] = i % 10 !== 4 && i % 10 !== 8 && i % 10 !== 0;
+    } else if (fieldName === 'IsActive') {
+      row[fieldName] = true;
+    } else if (fieldName === 'Quantity') {
+      row[fieldName] = rng.int(1, 4);
+    } else if (
+      fieldName.includes('Fee') ||
+      fieldName.includes('Price') ||
+      fieldName.includes('Amount')
+    ) {
+      row[fieldName] = 100 + (i % 50) * 10;
+    } else if (fieldName === 'Employees') {
+      row[fieldName] = 50 + (i % 100);
+    } else if (fieldName === 'AnnualRevenue') {
+      row[fieldName] = 1000000 + (i % 20) * 50000;
+    } else if (fDef.type === 'number') {
+      row[fieldName] = i * 10;
+    } else if (fDef.type === 'boolean') {
+      row[fieldName] = true;
+    } else if (fDef.type === 'date') {
+      const year = 2026;
+      const month = String(1 + (i % 12)).padStart(2, '0');
+      const day = String(1 + (i % 28)).padStart(2, '0');
+      row[fieldName] = `${year}-${month}-${day}`;
+    } else {
+      row[fieldName] = `${entity}_${fieldName}_${i}`;
+    }
+  }
+
+  // 2. Mint primary key ID using declared business key
+  const domainName = domain.name;
+  const businessKeys = (entityCfg.businessKey ?? []).filter(
+    (k) => k !== 'ID' && k !== 'id'
+  );
+  if (businessKeys.length > 0) {
+    const keyParts = businessKeys.map((keyField) => {
+      const val = row[keyField];
+      if (val === undefined || val === null) {
+        throw new Error(
+          `Business key field '${keyField}' missing on entity '${entity}' row`
+        );
+      }
+      return String(val);
+    });
+    row['ID'] = identityService.MintId(domainName, entity, keyParts);
+  } else {
+    row['ID'] = identityService.MintId(domainName, entity, [`${entity}-${i}`]);
+  }
+
+  return row;
+}

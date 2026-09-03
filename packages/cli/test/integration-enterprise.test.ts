@@ -36,6 +36,7 @@ describe('Loom Enterprise Integration Test Suite', () => {
       project: enterpriseProjectPath,
       seed: '42',
       output: metaDirA,
+      migrationsOutput: migrDirA,
     });
 
     // 2. Validate all 7 entities generated
@@ -94,6 +95,7 @@ describe('Loom Enterprise Integration Test Suite', () => {
         project: enterpriseProjectPath,
         priorState: metaDirA,
         output: metaDirA,
+        migrationsOutput: migrDirA,
         weeks: '1',
         seed: '42',
       });
@@ -147,6 +149,7 @@ describe('Loom Enterprise Integration Test Suite', () => {
       project: enterpriseProjectPath,
       seed: '42',
       output: metaDirB,
+      migrationsOutput: migrDirB,
     });
 
     for (let cycle = 1; cycle <= 12; cycle++) {
@@ -154,12 +157,13 @@ describe('Loom Enterprise Integration Test Suite', () => {
         project: enterpriseProjectPath,
         priorState: metaDirB,
         output: metaDirB,
+        migrationsOutput: migrDirB,
         weeks: '1',
         seed: '42',
       });
     }
 
-    // Compare all files between tempDirA and tempDirB
+    // Compare all files between tempDirA and tempDirB (includes both JSON metadata and Skyway SQL migrations)
     const filesA = await getAllFilesRecursively(tempDirA);
     const filesB = await getAllFilesRecursively(tempDirB);
 
@@ -167,6 +171,12 @@ describe('Loom Enterprise Integration Test Suite', () => {
     const relativeB = filesB.map((f) => path.relative(tempDirB, f)).sort();
 
     expect(relativeA).toEqual(relativeB);
+
+    // Verify 13 SQL migrations exist (1 baseline + 12 deltas) in both directories
+    const sqlFilesA = relativeA.filter((f) => f.endsWith('.sql'));
+    const sqlFilesB = relativeB.filter((f) => f.endsWith('.sql'));
+    expect(sqlFilesA.length).toBe(13);
+    expect(sqlFilesB.length).toBe(13);
 
     for (const rel of relativeA) {
       const fileA = path.join(tempDirA, rel);
@@ -179,10 +189,12 @@ describe('Loom Enterprise Integration Test Suite', () => {
     }
   });
 
-  it('verifies topological ordering and dual-dialect migration emission', async () => {
+  it('verifies topological ordering (parents precede children) and dual-dialect migration emission', async () => {
     const loaded = await loadProject(enterpriseProjectPath);
     const sampleData: Record<string, Record<string, unknown>[]> = {
       OrderLine: [{ ID: 'ol-1', OrderID: 'ord-1', ProductID: 'prod-1', Quantity: 2, UnitPrice: 100, ExtendedPrice: 200 }],
+      Payment: [{ ID: 'pay-1', OrderID: 'ord-1', PaymentMethod: 'CreditCard', Amount: 200, PaymentDate: '2026-09-02', Status: 'Settled' }],
+      Subscription: [{ ID: 'sub-1', MemberID: 'mem-1', ProductID: 'prod-1', Status: 'Active', MonthlyFee: 100, AutoRenew: true, StartDate: '2026-09-02', EndDate: '2027-09-02' }],
       OrderHeader: [{ ID: 'ord-1', MemberID: 'mem-1', OrderNumber: 'ORD-001', OrderDate: '2026-09-02', TotalAmount: 200, Status: 'Completed', CreatedAt: '2026-09-02' }],
       Member: [{ ID: 'mem-1', CompanyID: 'comp-1', FirstName: 'John', LastName: 'Doe', Email: 'john@example.com', Title: 'VP', Status: 'Active', JoinDate: '2026-09-02', CreatedAt: '2026-09-02' }],
       Company: [{ ID: 'comp-1', Name: 'Acme Corp', Industry: 'Tech', Tier: 'Enterprise', Employees: 500, AnnualRevenue: 10000000, CreatedAt: '2026-09-02' }],
@@ -205,13 +217,26 @@ describe('Loom Enterprise Integration Test Suite', () => {
 
     // Verify parent tables are emitted BEFORE child tables in SQL Server
     const companyPos = sqlServerContent.indexOf('-- Entity: Company');
+    const productPos = sqlServerContent.indexOf('-- Entity: Product');
     const memberPos = sqlServerContent.indexOf('-- Entity: Member');
+    const subPos = sqlServerContent.indexOf('-- Entity: Subscription');
     const orderHeaderPos = sqlServerContent.indexOf('-- Entity: OrderHeader');
     const orderLinePos = sqlServerContent.indexOf('-- Entity: OrderLine');
+    const paymentPos = sqlServerContent.indexOf('-- Entity: Payment');
 
+    // Single parent relationships
     expect(companyPos).toBeLessThan(memberPos);
     expect(memberPos).toBeLessThan(orderHeaderPos);
+    expect(orderHeaderPos).toBeLessThan(paymentPos);
+
+    // Two-parent relationships:
+    // OrderLine has parents (OrderHeader, Product)
     expect(orderHeaderPos).toBeLessThan(orderLinePos);
+    expect(productPos).toBeLessThan(orderLinePos);
+
+    // Subscription has parents (Member, Product)
+    expect(memberPos).toBeLessThan(subPos);
+    expect(productPos).toBeLessThan(subPos);
 
     // 2. Emit PostgreSQL migration
     const pgFile = await emitSkywayMigration({
@@ -228,6 +253,8 @@ describe('Loom Enterprise Integration Test Suite', () => {
     expect(pgContent).toContain('COMMIT;');
     expect(pgContent).toContain('"enterprise"."Company"');
     expect(pgContent).toContain('"enterprise"."OrderLine"');
+    expect(pgContent).toContain('"enterprise"."Subscription"');
+    expect(pgContent).toContain('"enterprise"."Payment"');
   });
 });
 

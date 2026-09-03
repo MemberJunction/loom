@@ -1,28 +1,7 @@
 {
   "name": "common",
   "domain": "enterprise",
-  "catalog": {
-    "dials": {
-      "theta_engagement": {
-        "name": "theta_engagement",
-        "mean": 0,
-        "stdDev": 1.0,
-        "annualWanderStdDev": 0.12,
-        "correlations": {
-          "phi_affluence": 0.45
-        }
-      },
-      "phi_affluence": {
-        "name": "phi_affluence",
-        "mean": 0,
-        "stdDev": 1.0,
-        "annualWanderStdDev": 0.08,
-        "correlations": {
-          "theta_engagement": 0.45
-        }
-      }
-    }
-  },
+  "catalog": {},
   "params": {
     "baseRenewalTarget": 0.80,
     "autoRenewTarget": 0.70,
@@ -45,16 +24,7 @@
           "Status": "Active"
         }
       },
-      "arrows": {
-        "engagement": {
-          "name": "engagement",
-          "beta": 1.2,
-          "feature": {
-            "from": "self",
-            "field": "Title"
-          }
-        }
-      }
+      "arrows": {}
     },
     "factor-subscription-autorenew": {
       "id": "factor-subscription-autorenew",
