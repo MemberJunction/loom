@@ -41,12 +41,17 @@ export const EntityConfigSchema = z.object({
   foreignKeys: z.record(z.string(), ForeignKeyConfigSchema).default({}),
   isImmutable: z.boolean().default(false),
 }).transform((entity) => {
+  const normalizedFKs: Record<string, Omit<ForeignKeyConfig, 'fieldName'> & { fieldName: string }> = {};
   for (const [fkKey, fk] of Object.entries(entity.foreignKeys)) {
-    if (!fk.fieldName) {
-      fk.fieldName = fkKey;
-    }
+    normalizedFKs[fkKey] = {
+      ...fk,
+      fieldName: fk.fieldName ?? fkKey,
+    };
   }
-  return entity;
+  return {
+    ...entity,
+    foreignKeys: normalizedFKs,
+  };
 });
 export type EntityConfig = z.infer<typeof EntityConfigSchema>;
 
@@ -89,7 +94,7 @@ export function createDomainConfigFromMJEntities(
 
   for (const entity of entities) {
     const fields: Record<string, FieldConfig> = {};
-    const foreignKeys: Record<string, ForeignKeyConfig> = {};
+    const foreignKeys: EntityConfig['foreignKeys'] = {};
     const candidateBusinessKeys: string[] = [];
 
     for (const field of entity.Fields ?? []) {

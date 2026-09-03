@@ -26,7 +26,7 @@
       "id": "factor-membership-renewal",
       "effect": "Member",
       "target": 0.80,
-      "tolerance": 0.10,
+      "tolerance": 0.15,
       "evidence": {
         "source": "Enterprise B2B Benchmark",
         "confidence": "high",

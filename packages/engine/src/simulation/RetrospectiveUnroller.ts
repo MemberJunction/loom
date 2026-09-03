@@ -1,4 +1,5 @@
 import type {
+  DomainConfig,
   EraConfig,
   FactorContract,
 } from '@memberjunction/loom-contracts';
@@ -41,6 +42,7 @@ export interface UnrollConfig {
   ladderEngine: StateLadderEngine;
   factorEngine?: FactorEngine;
   eras?: EraConfig[];
+  domain?: DomainConfig;
   factorContracts?: FactorContract[];
   annualWanderStdDev?: number;
 }
@@ -79,7 +81,7 @@ export class RetrospectiveUnroller {
     for (const contract of config.factorContracts ?? []) {
       for (const arrow of Object.values(contract.arrows)) {
         if (arrow.feature && !this.compiledFeatures.has(arrow.name)) {
-          this.compiledFeatures.set(arrow.name, compileFeature(arrow.feature));
+          this.compiledFeatures.set(arrow.name, compileFeature(arrow.feature, contract.effect));
         }
       }
     }
@@ -216,7 +218,7 @@ export class RetrospectiveUnroller {
       for (const entity of activeEntities) {
         const cyclesSinceBirth = c - entity.birthCycle;
         const assignments = this.motifAssignments.get(entity.id) ?? [];
-        const entityRng = rng.substream(`${entity.id}:${c}:profile`);
+        const entityRng = rng.substream(`entity:${entity.entity}`).substream(`${entity.id}:${c}:profile`);
 
         // Advance latent dials via FactorEngine profile or motif trajectory
         const profile: LatentProfile = { entityId: entity.id, dials: { ...entity.latentDials } };
@@ -261,23 +263,39 @@ export class RetrospectiveUnroller {
       // 5. Evaluate factor contracts with calibrateIntercept and era adjustments
       const outcomesCount: Record<string, number> = {};
 
-      // Build relational context for child aggregations and multi-hop traversal in feature queries (N3a)
+      // Build relational context for child aggregations and multi-hop traversal in feature queries (R4-1)
       const relationalCtx: RelationalContext = {
         getEntity: (entityName: string, id: string) => {
           const s = this.entityStates.get(id);
           if (!s || s.entity !== entityName) return undefined;
-          return { ID: s.id, id: s.id, ...s.fixedFields, ...s.latentDials, ...s.ladderStates };
+          return { ID: s.id, id: s.id, __entityName: s.entity, ...s.fixedFields, ...s.latentDials, ...s.ladderStates };
         },
-        getChildren: (_parentEntity: string, parentId: string, childEntity: string, foreignKeyField: string) => {
+        getChildren: (parentEntity: string, parentId: string, childEntity: string, foreignKeyField: string) => {
           const results: EntityRecord[] = [];
+          const parentNorm = parentId.toLowerCase();
+          const childCfg = this.config.domain?.entities[childEntity];
+
           for (const s of this.entityStates.values()) {
-            if (s.entity === childEntity) {
-              const fkVal =
-                s.fixedFields[foreignKeyField] ??
-                s.fixedFields[`${_parentEntity}ID`] ??
-                s.fixedFields['ParentID'];
-              if (String(fkVal) === String(parentId)) {
-                results.push({ ID: s.id, id: s.id, ...s.fixedFields, ...s.latentDials, ...s.ladderStates });
+            if (s.entity !== childEntity) continue;
+
+            if (foreignKeyField) {
+              const val = s.fixedFields[foreignKeyField];
+              if (val && String(val).toLowerCase() === parentNorm) {
+                results.push({ ID: s.id, id: s.id, __entityName: s.entity, ...s.fixedFields, ...s.latentDials, ...s.ladderStates });
+              }
+              continue;
+            }
+
+            if (childCfg) {
+              for (const [fkKey, fk] of Object.entries(childCfg.foreignKeys)) {
+                if (!parentEntity || fk.targetEntity === parentEntity) {
+                  const fieldName = fk.fieldName ?? fkKey;
+                  const val = s.fixedFields[fieldName];
+                  if (val && String(val).toLowerCase() === parentNorm) {
+                    results.push({ ID: s.id, id: s.id, __entityName: s.entity, ...s.fixedFields, ...s.latentDials, ...s.ladderStates });
+                    break;
+                  }
+                }
               }
             }
           }
@@ -288,10 +306,14 @@ export class RetrospectiveUnroller {
       for (const contract of factorContracts) {
         let positiveCount = 0;
 
-        // A. Compute linear scores for all active entities
+        // A. Compute linear scores for active entities matching contract.effect
         const entityScores: { entity: UnrollEntityState; score: number; overrideProb?: number }[] = [];
+        const hasMatchingEffect = activeEntities.some((e) => e.entity === contract.effect);
+        const targetEntities = hasMatchingEffect
+          ? activeEntities.filter((e) => e.entity === contract.effect)
+          : activeEntities;
 
-        for (const entity of activeEntities) {
+        for (const entity of targetEntities) {
           const assignments = this.motifAssignments.get(entity.id) ?? [];
 
           // Check motif factor override (intercept or probability)
@@ -320,11 +342,11 @@ export class RetrospectiveUnroller {
             } else if (arrow.feature) {
               let evaluator = this.compiledFeatures.get(arrow.name);
               if (!evaluator) {
-                evaluator = compileFeature(arrow.feature);
+                evaluator = compileFeature(arrow.feature, contract.effect);
                 this.compiledFeatures.set(arrow.name, evaluator);
               }
               featureVal = evaluator(
-                { ID: entity.id, id: entity.id, ...entity.fixedFields, ...entity.latentDials, ...entity.ladderStates },
+                { ID: entity.id, id: entity.id, __entityName: entity.entity, ...entity.fixedFields, ...entity.latentDials, ...entity.ladderStates },
                 relationalCtx
               );
             }
@@ -389,7 +411,9 @@ export class RetrospectiveUnroller {
             }
           }
 
-          const entityDrawRng = rng.substream(`${entity.id}:${c}:${contract.id}`);
+          const entityDrawRng = rng
+            .substream(`entity:${entity.entity}`)
+            .substream(`${entity.id}:${c}:${contract.id}`);
 
           // 2. Motif probability override
           if (overrideProb !== undefined) {

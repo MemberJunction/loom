@@ -269,19 +269,55 @@ describe('Plan 02 Strict Schemas and Domain Validation (Gate 0 / L4a)', () => {
     const valRes = FactorOverrideSchema.safeParse(validOverride);
     expect(valRes.success).toBe(true);
 
-    // 2. Test arrow evaluation with child aggregation in RetrospectiveUnroller
+    // 2. Test arrow evaluation with child aggregation in RetrospectiveUnroller using conventional FK PersonID
+    const domainWithFK = DomainConfigSchema.parse({
+      name: 'test-domain',
+      namespace: '11111111-1111-1111-1111-111111111111',
+      packs: { core: { name: 'core' } },
+      entities: {
+        Person: {
+          name: 'Person',
+          targetTable: 'Person',
+          schema: 'dbo',
+          pack: 'core',
+          businessKey: ['ID'],
+          fields: {
+            ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+            Status: { name: 'Status', type: 'string' },
+          },
+        },
+        CommitteeMember: {
+          name: 'CommitteeMember',
+          targetTable: 'CommitteeMember',
+          schema: 'dbo',
+          pack: 'core',
+          businessKey: ['ID'],
+          fields: {
+            ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+            PersonID: { name: 'PersonID', type: 'uuid' },
+          },
+          foreignKeys: {
+            FK_CommitteeMember_Person: {
+              targetEntity: 'Person',
+              targetField: 'ID',
+              fieldName: 'PersonID',
+            },
+          },
+        },
+      },
+    });
+
     const contract: FactorContract = {
       id: 'factor-renewal',
       effect: 'Person',
-      target: 0.8,
+      target: 0.5,
       tolerance: 0.1,
       evidence: { source: 'test', confidence: 'high' },
       outcome: { from: 'self', where: { Status: 'Active' } },
       arrows: {
-        tenure: { name: 'tenure', beta: 0.5 },
         committeeCount: {
           name: 'committeeCount',
-          beta: 1.0,
+          beta: 6.0,
           feature: {
             from: 'CommitteeMember',
             aggregation: 'count',
@@ -291,39 +327,73 @@ describe('Plan 02 Strict Schemas and Domain Validation (Gate 0 / L4a)', () => {
       },
     };
 
-    const heroInjector = new HeroInjector('test', 'b1e4c4d5-8f6a-4d2b-9e3a-7a5c8d1f2e34', []);
-    const motifSampler = new MotifSampler([
-      {
-        motifKey: 'tenure-booster',
-        targetEntity: 'Person',
-        quota: { mode: 'count', value: 1 },
-        childRates: [],
-        eras: [],
-        factorOverrides: [
-          { factor: 'factor-renewal', arrow: 'tenure', beta: 3.0 },
-        ],
-      },
-    ]);
+    // 400 persons: 200 with 1 CommitteeMember child (linked via PersonID), 200 without
+    const entities: EntityCandidate[] = [];
+    for (let i = 0; i < 200; i++) {
+      const pidWith = `person-with-${i}`;
+      entities.push({
+        id: pidWith,
+        entity: 'Person',
+        birthCycle: 2020,
+        latentDials: {},
+        fixedFields: { ID: pidWith },
+        isHero: false,
+      });
+      entities.push({
+        id: `cm-${i}`,
+        entity: 'CommitteeMember',
+        birthCycle: 2020,
+        latentDials: {},
+        fixedFields: { ID: `cm-${i}`, PersonID: pidWith },
+        isHero: false,
+      });
+
+      const pidWithout = `person-without-${i}`;
+      entities.push({
+        id: pidWithout,
+        entity: 'Person',
+        birthCycle: 2020,
+        latentDials: {},
+        fixedFields: { ID: pidWithout },
+        isHero: false,
+      });
+    }
+
+    const heroInjector = new HeroInjector('test', '11111111-1111-1111-1111-111111111111', []);
+    const motifSampler = new MotifSampler([]);
     const ladderEngine = new StateLadderEngine([]);
 
     const unroller = new RetrospectiveUnroller({
       cycles: [2026],
-      entities: [
-        { id: 'p1', entity: 'Person', birthCycle: 2022, latentDials: { tenure: 2.0 }, isHero: false },
-        { id: 'c1', entity: 'CommitteeMember', birthCycle: 2022, fixedFields: { PersonID: 'p1' }, isHero: false },
-      ],
+      entities,
       heroInjector,
       motifSampler,
       ladderEngine,
       factorContracts: [contract],
+      domain: domainWithFK,
     });
 
     const rng = createRng(42, 'test-n3');
     unroller.Initialize(rng);
-    // Evaluating child aggregation with RelationalContext should not throw
-    const snapshots = unroller.Run(rng);
-    expect(snapshots).toHaveLength(1);
-    expect(snapshots[0]?.outcomesCount['factor-renewal']).toBeDefined();
+    unroller.Run(rng);
+
+    let positiveWithChild = 0;
+    let positiveWithoutChild = 0;
+
+    for (let i = 0; i < 200; i++) {
+      const stWith = unroller.GetEntityState(`person-with-${i}`);
+      const stWithout = unroller.GetEntityState(`person-without-${i}`);
+      if (stWith?.outcomesByCycle.get(2026)?.['factor-renewal']) positiveWithChild++;
+      if (stWithout?.outcomesByCycle.get(2026)?.['factor-renewal']) positiveWithoutChild++;
+    }
+
+    const rateWith = positiveWithChild / 200;
+    const rateWithout = positiveWithoutChild / 200;
+
+    // Rate with child must heavily exceed rate without child (e.g. ~0.99 vs ~0.26)
+    expect(rateWith).toBeGreaterThan(0.9);
+    expect(rateWithout).toBeLessThan(0.4);
+    expect(rateWith - rateWithout).toBeGreaterThan(contract.tolerance);
   });
 
   // N4: validate*AgainstDomain parses raw unparsed input safely without TypeError

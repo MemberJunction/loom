@@ -62,9 +62,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
   const factorContracts = Object.values(loaded.rulesetModules).flatMap((mod) =>
     Object.values(mod.effects)
   );
-
   const resolver = new CausalGraphResolver();
-  const unrollerMap = new Map<string, RetrospectiveUnroller>();
 
   // Create simulation DAG nodes for each entity defined in domain.json
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
@@ -74,8 +72,6 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
       produces: [entityName],
       description: `Generates ${entityName} records with causal factor calibration`,
       execute: async (ctx) => {
-        const rng = createRng(ctx.seed, `entity:${entityName}`);
-
         // Read authored volume from ruleset params, falling back to default 10
         let targetCount = 10;
         for (const mod of Object.values(loaded.rulesetModules)) {
@@ -84,8 +80,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
           if (typeof directVol === 'number') {
             targetCount = directVol;
             break;
-          }
-          if (typeof lowerVol === 'number') {
+          } else if (typeof lowerVol === 'number') {
             targetCount = lowerVol;
             break;
           }
@@ -113,93 +108,17 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
 
         // 2. Generate remaining background entities up to targetCount
         const needed = Math.max(0, targetCount - records.length);
+        const entityRng = createRng(ctx.seed, `entity:${entityName}`);
         for (let i = 1; i <= needed; i++) {
           const row = generateEntityRecord({
             domain: loaded.domain,
             entity: entityName,
             i: records.length + 1,
             parentPool,
-            rng,
+            rng: entityRng,
             identityService,
           });
           records.push(row);
-        }
-
-        // 3. Multi-cycle retrospective simulation for entities subject to factors or heroes
-        const startCycle =
-          typeof (loaded.manifest as Record<string, unknown>).startCycle === 'number'
-            ? ((loaded.manifest as Record<string, unknown>).startCycle as number)
-            : asOfYear - 4;
-        const cycles: number[] = [];
-        for (let y = startCycle; y <= asOfYear; y++) {
-          cycles.push(y);
-        }
-
-        const unrollCandidates: EntityCandidate[] = records.map((r, idx) => {
-          const id = String(r['ID'] ?? r['id']);
-          const hero = heroInjector.GetHeroById(id);
-          return {
-            id,
-            entity: entityName,
-            birthCycle: hero?.birthCycle ?? (asOfYear - (idx % 4)),
-            latentDials: hero ? { ...hero.latentDials } : { theta: 0.0, phi: 0.0 },
-            fixedFields: hero ? { ...hero.fixedFields } : {},
-            isHero: hero !== undefined,
-            heroKey: hero?.heroKey,
-          };
-        });
-
-        const unroller = new RetrospectiveUnroller({
-          cycles,
-          entities: unrollCandidates,
-          heroInjector,
-          motifSampler,
-          ladderEngine,
-          factorEngine,
-          factorContracts: factorContracts.filter((f) => f.effect === entityName),
-          eras: loaded.erasManifest?.eras ?? [],
-        });
-
-        unroller.Initialize(rng);
-        unroller.Run(rng);
-        unrollerMap.set(entityName, unroller);
-
-        // 4. Calibrate entity record fields against factor outcomes (domain-agnostic)
-        const entityFactors = factorContracts.filter((f) => f.effect === entityName);
-        for (const row of records) {
-          const id = String(row['ID'] ?? row['id']);
-          const state = unroller.GetEntityState(id);
-          if (state) {
-            const outcomes = state.outcomesByCycle.get(asOfYear);
-            for (const contract of entityFactors) {
-              const realized = outcomes ? outcomes[contract.id] : undefined;
-              if (realized !== undefined && contract.outcome && contract.outcome.where) {
-                const otherwise = (contract.outcome as Record<string, unknown>).otherwise as Record<string, unknown> | undefined;
-                const hero = heroInjector.GetHeroById(id);
-                for (const [field, targetVal] of Object.entries(contract.outcome.where)) {
-                  if (hero && hero.fixedFields && field in hero.fixedFields) {
-                    // Invariant: hero fixedFields take precedence over factor outcome calibration
-                    continue;
-                  }
-                  if (realized) {
-                    row[field] = targetVal;
-                  } else {
-                    if (typeof targetVal === 'boolean') {
-                      row[field] = !targetVal;
-                    } else if (otherwise && otherwise[field] !== undefined) {
-                      row[field] = otherwise[field];
-                    } else if (row[field] !== targetVal) {
-                      // Row already has an alternative non-target value from base generation; keep it
-                    } else {
-                      throw new Error(
-                        `Factor '${contract.id}': negative outcome for field '${entityName}.${field}' cannot be resolved. Specify an explicit 'otherwise' clause in the factor outcome.`
-                      );
-                    }
-                  }
-                }
-              }
-            }
-          }
         }
 
         return { [entityName]: records };
@@ -225,6 +144,96 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
     for (const [entity, rows] of Object.entries(result)) {
       generatedData.set(entity, rows);
       allRecords[entity] = rows;
+    }
+  }
+
+  // 3. Multi-cycle retrospective simulation across the unified relational world (R4-1)
+  const rng = createRng(seed);
+  const startCycle =
+    typeof (loaded.manifest as Record<string, unknown>).startCycle === 'number'
+      ? ((loaded.manifest as Record<string, unknown>).startCycle as number)
+      : asOfYear - 4;
+  const cycles: number[] = [];
+  for (let y = startCycle; y <= asOfYear; y++) {
+    cycles.push(y);
+  }
+
+  const allUnrollCandidates: EntityCandidate[] = [];
+  for (const [entityName, records] of Object.entries(allRecords)) {
+    for (let idx = 0; idx < records.length; idx++) {
+      const r = records[idx]!;
+      const id = String(r['ID'] ?? r['id']);
+      const hero = heroInjector.GetHeroById(id);
+      allUnrollCandidates.push({
+        id,
+        entity: entityName,
+        birthCycle: hero?.birthCycle ?? (asOfYear - (idx % 4)),
+        latentDials: hero ? { ...hero.latentDials } : { theta: 0.0, phi: 0.0 },
+        fixedFields: {
+          ...(hero ? hero.fixedFields : {}),
+          ...(Object.fromEntries(
+            Object.entries(r).filter(
+              ([_, v]) => v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'
+            )
+          ) as Record<string, string | number | boolean | null>),
+        },
+        isHero: hero !== undefined,
+      });
+    }
+  }
+
+  const worldUnroller = new RetrospectiveUnroller({
+    cycles,
+    entities: allUnrollCandidates,
+    heroInjector,
+    motifSampler,
+    ladderEngine,
+    factorEngine,
+    factorContracts,
+    eras: loaded.erasManifest?.eras ?? [],
+    domain: loaded.domain,
+  });
+
+  worldUnroller.Initialize(rng);
+  worldUnroller.Run(rng);
+
+  // 4. Calibrate entity record fields against factor outcomes (domain-agnostic)
+  for (const [entityName, records] of Object.entries(allRecords)) {
+    const entityFactors = factorContracts.filter((f) => f.effect === entityName);
+    for (const row of records) {
+      const id = String(row['ID'] ?? row['id']);
+      const state = worldUnroller.GetEntityState(id);
+      if (state) {
+        const outcomes = state.outcomesByCycle.get(asOfYear);
+        for (const contract of entityFactors) {
+          const realized = outcomes ? outcomes[contract.id] : undefined;
+          if (realized !== undefined && contract.outcome && contract.outcome.where) {
+            const otherwise = (contract.outcome as Record<string, unknown>).otherwise as Record<string, unknown> | undefined;
+            const hero = heroInjector.GetHeroById(id);
+            for (const [field, targetVal] of Object.entries(contract.outcome.where)) {
+              if (hero && hero.fixedFields && field in hero.fixedFields) {
+                // Invariant: hero fixedFields take precedence over factor outcome calibration
+                continue;
+              }
+              if (realized) {
+                row[field] = targetVal;
+              } else {
+                if (typeof targetVal === 'boolean') {
+                  row[field] = !targetVal;
+                } else if (otherwise && otherwise[field] !== undefined) {
+                  row[field] = otherwise[field];
+                } else if (row[field] !== targetVal) {
+                  // Row already has an alternative non-target value from base generation; keep it
+                } else {
+                  throw new Error(
+                    `Factor '${contract.id}': negative outcome for field '${entityName}.${field}' cannot be resolved. Specify an explicit 'otherwise' clause in the factor outcome.`
+                  );
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 
@@ -257,10 +266,9 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
     totalRecordCounts[e] = rows.length;
     activeEntityIds[e] = rows.map((r) => String(r['ID'] ?? r['id']));
 
-    const unroller = unrollerMap.get(e);
     for (const r of rows) {
       const id = String(r['ID'] ?? r['id']);
-      const state = unroller?.GetEntityState(id);
+      const state = worldUnroller.GetEntityState(id);
       if (state) {
         latentStates[id] = { ...state.latentDials };
       }

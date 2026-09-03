@@ -16,7 +16,7 @@ export type FeatureEvaluator = (
  * Compiles a declarative FeatureQuery into a high-performance evaluator function.
  * Supports self-entity queries, multi-hop foreign key traversal, and child aggregations.
  */
-export function compileFeature(query: FeatureQuery): FeatureEvaluator {
+export function compileFeature(query: FeatureQuery, parentEntity?: string): FeatureEvaluator {
   // Case 1: Simple self-entity evaluation
   if (query.from === 'self') {
     if (query.field) {
@@ -56,8 +56,9 @@ export function compileFeature(query: FeatureQuery): FeatureEvaluator {
         throw new Error(`compileFeature: aggregation query for '${childEntity}' requires a RelationalContext`);
       }
       const parentId = String(e['ID'] ?? e['id']);
+      const actualParentEntity = parentEntity ?? (e['__entityName'] as string) ?? '';
       // Look up children linked to this parent
-      let children = ctx.getChildren('', parentId, childEntity, '');
+      let children = ctx.getChildren(actualParentEntity, parentId, childEntity, '');
 
       if (criteria) {
         children = children.filter((child) => criteria.every(([k, v]) => child[k] === v));

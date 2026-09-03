@@ -247,7 +247,7 @@ export class Validator {
         }
         const empiricalMean = outcomeSum / n;
         const diff = Math.abs(empiricalMean - factor.target);
-        const passed = diff <= factor.tolerance;
+        const passed = diff <= factor.tolerance + 1e-9;
 
         gates.push({
           name: `Factor Gate: ${factor.id} (${factor.effect})`,
