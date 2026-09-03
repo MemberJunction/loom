@@ -34,6 +34,16 @@ Real organizations do not drop their database and re-seed every quarter; they ac
 - Each simulation cycle ingests the committed prior state (`metadata/` JSON tree), respects continuity boundaries (active committee terms, open billing tickets, pending renewal grace periods), and emits **only new records**.
 - Every delta is naturally a pure, additive Skyway migration (`spCreate`), eliminating destructive wipe scripts and massive migration captures.
 
+### 1.4 Canonical Engine Invariants
+The Loom simulation engine strictly preserves seven architectural invariants across all packages, seeds, and execution modes:
+- **Invariant 1 (Deterministic Identity)**: Primary keys are derived deterministically via `IdentityService.MintId(domain, entity, businessKeys)` (uuidv5). Identical business key values yield the exact same UUID across all cycles and seeds.
+- **Invariant 2 (No Unseeded Dice)**: Generation is 100% deterministic and reproducible. Personal pseudo-random streams are keyed via `seed:entity:id:cycle`.
+- **Invariant 3 (No Index Overwriting)**: Heroes are additive records minted from business keys, never index overwrites of crowd slots. Adding or removing a hero changes no other generated record in the dataset.
+- **Invariant 4 (The LLM Boundary)**: Runtime simulation is strictly zero-LLM math. LLM capabilities are confined entirely to an authoring-time companion package (`@memberjunction/loom-author`) that outputs validated JSON metadata.
+- **Invariant 5 (Deep Immutability)**: Emitted transaction history from earlier cycles is never mutated in subsequent cycles.
+- **Invariant 6 (Factor Recovery)**: Statistical logistic regression over emitted crowd data recovers authored $\beta$ weights within defined tolerance bounds ($\pm 0.15$ at $N \ge 5000$).
+- **Invariant 7 (Topological & Referential Closure)**: Emitted datasets and Skyway migrations strictly preserve foreign key closure in topological DAG dependency order with zero orphaned records.
+
 ---
 
 ## 2. Re-architecting Loom: From Procedural Script to Metadata Engine
