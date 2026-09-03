@@ -24,7 +24,7 @@ export const FieldConfigSchema = z.object({
 export type FieldConfig = z.infer<typeof FieldConfigSchema>;
 
 export const ForeignKeyConfigSchema = z.object({
-  fieldName: z.string().min(1),
+  fieldName: z.string().min(1).optional(),
   targetEntity: z.string().min(1),
   targetField: z.string().min(1),
   cardinality: z.enum(['one-to-one', 'many-to-one', 'one-to-many']).default('many-to-one'),

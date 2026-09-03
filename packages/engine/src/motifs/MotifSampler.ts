@@ -62,7 +62,7 @@ export class MotifSampler {
       return Math.min(totalCount, Math.round(quota.value));
     }
 
-    const raw = (quota.value / 100) * totalCount;
+    const raw = quota.value * totalCount;
     switch (quota.rounding) {
       case 'floor':
         return Math.floor(raw);

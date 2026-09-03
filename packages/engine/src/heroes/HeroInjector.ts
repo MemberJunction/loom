@@ -102,11 +102,15 @@ export class HeroInjector {
   /**
    * Evaluates an operator predicate against a realized record value.
    */
-  public static EvaluatePinOp(op: PinOp, actual: unknown, expected: PinPrimitiveValue): boolean {
+  public static EvaluatePinOp(
+    op: PinOp,
+    actual: unknown,
+    expected: PinPrimitiveValue | PinPrimitiveValue[]
+  ): boolean {
     switch (op) {
       case 'eq':
         return actual === expected;
-      case 'ne':
+      case 'neq':
         return actual !== expected;
       case 'gt':
         return typeof actual === 'number' && typeof expected === 'number' && actual > expected;
@@ -118,7 +122,7 @@ export class HeroInjector {
         return typeof actual === 'number' && typeof expected === 'number' && actual <= expected;
       case 'in':
         if (Array.isArray(expected)) {
-          return expected.includes(actual as never);
+          return (expected as unknown[]).includes(actual);
         }
         return false;
       case 'exists':

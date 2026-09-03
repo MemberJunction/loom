@@ -94,4 +94,25 @@ describe('StateLadderEngine', () => {
     expect(step.transitioned).toBe(false);
     expect(engine.GetEntityState('gov-ladder', 'contender')?.currentState).toBe('vice-chair');
   });
+
+  it('supports scripted hero transitions via ForceTransition and ExitLadder', () => {
+    const engine = new StateLadderEngine([ladderMock]);
+    const heroId = 'hero-gwen';
+
+    // Gwen enters as CommitteeMember at 2022
+    engine.ForceTransition('gov-ladder', heroId, 'committee-member', 2022);
+    expect(engine.GetEntityState('gov-ladder', heroId)?.currentState).toBe('committee-member');
+
+    // Gwen advances to vice-chair at 2024
+    engine.ForceTransition('gov-ladder', heroId, 'vice-chair', 2024);
+    expect(engine.GetEntityState('gov-ladder', heroId)?.currentState).toBe('vice-chair');
+
+    // Gwen advances to chair at 2026
+    engine.ForceTransition('gov-ladder', heroId, 'chair', 2026);
+    expect(engine.GetEntityState('gov-ladder', heroId)?.currentState).toBe('chair');
+
+    // Gwen exits at 2028
+    engine.ExitLadder('gov-ladder', heroId, 2028);
+    expect(engine.GetEntityState('gov-ladder', heroId)).toBeUndefined();
+  });
 });

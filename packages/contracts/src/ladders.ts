@@ -1,19 +1,41 @@
 import { z } from 'zod';
 
-export const StateLadderBindingModeSchema = z.enum(['field', 'childEntity']);
-export type StateLadderBindingMode = z.infer<typeof StateLadderBindingModeSchema>;
+export const StateLadderFieldBindingSchema = z.object({
+  mode: z.literal('field'),
+  field: z.string().min(1),
+}).strict();
+export type StateLadderFieldBinding = z.infer<typeof StateLadderFieldBindingSchema>;
 
-export const StateLadderBindingSchema = z.object({
-  mode: StateLadderBindingModeSchema,
-  field: z.string().optional(),
-  childEntity: z.string().optional(),
-  foreignKey: z.string().optional(),
-  stateField: z.string().optional(),
-  termField: z.string().optional(),
-});
+export const StateLadderChildEntityBindingSchema = z.object({
+  mode: z.literal('childEntity'),
+  childEntity: z.string().min(1),
+  foreignKey: z.string().min(1),
+  stateField: z.string().min(1),
+  termField: z.string().min(1).optional(),
+  startDateField: z.string().min(1).optional(),
+  endDateField: z.string().min(1).optional(),
+}).strict();
+export type StateLadderChildEntityBinding = z.infer<typeof StateLadderChildEntityBindingSchema>;
+
+export const StateLadderBindingSchema = z.discriminatedUnion('mode', [
+  StateLadderFieldBindingSchema,
+  StateLadderChildEntityBindingSchema,
+]);
 export type StateLadderBinding = z.infer<typeof StateLadderBindingSchema>;
 
-export const LadderPrerequisiteSchema = z.object({
+export const LadderEffectSchema = z.object({
+  factor: z.string().min(1),
+  beta: z.number(),
+}).strict();
+export type LadderEffect = z.infer<typeof LadderEffectSchema>;
+
+export const LadderExitEffectSchema = z.object({
+  dial: z.string().min(1),
+  delta: z.number(),
+}).strict();
+export type LadderExitEffect = z.infer<typeof LadderExitEffectSchema>;
+
+export const StateLadderPrerequisiteSchema = z.object({
   priorState: z.string().optional(),
   minCyclesSinceBirth: z.number().int().optional(),
   dials: z.record(
@@ -21,31 +43,19 @@ export const LadderPrerequisiteSchema = z.object({
     z.object({
       min: z.number().optional(),
       max: z.number().optional(),
-    })
+    }).strict()
   ).optional(),
-});
-export type LadderPrerequisite = z.infer<typeof LadderPrerequisiteSchema>;
-
-export const LadderEffectSchema = z.object({
-  factor: z.string().min(1),
-  beta: z.number(),
-});
-export type LadderEffect = z.infer<typeof LadderEffectSchema>;
-
-export const LadderExitEffectSchema = z.object({
-  dial: z.string().min(1),
-  delta: z.number(),
-});
-export type LadderExitEffect = z.infer<typeof LadderExitEffectSchema>;
+}).strict();
+export type StateLadderPrerequisite = z.infer<typeof StateLadderPrerequisiteSchema>;
 
 export const StateLadderStateSchema = z.object({
   name: z.string().min(1),
-  capacity: z.number().int().positive().optional(),
-  durationCycles: z.number().int().positive(),
-  prerequisites: LadderPrerequisiteSchema.optional(),
+  durationCycles: z.number().int().min(1).default(1),
+  capacity: z.number().int().min(1).optional(),
+  prerequisites: StateLadderPrerequisiteSchema.optional(),
   effects: z.array(LadderEffectSchema).default([]),
   exitEffects: z.array(LadderExitEffectSchema).default([]),
-});
+}).strict();
 export type StateLadderState = z.infer<typeof StateLadderStateSchema>;
 
 export const StateLadderConfigSchema = z.object({
@@ -53,13 +63,13 @@ export const StateLadderConfigSchema = z.object({
   entity: z.string().min(1),
   binding: StateLadderBindingSchema,
   cohortShare: z.number().min(0).max(1).default(1),
-  states: z.array(StateLadderStateSchema),
+  states: z.array(StateLadderStateSchema).min(1),
   description: z.string().optional(),
-});
+}).strict();
 export type StateLadderConfig = z.infer<typeof StateLadderConfigSchema>;
 
 export const LaddersManifestSchema = z.object({
   $schema: z.string().optional(),
   ladders: z.array(StateLadderConfigSchema),
-});
+}).strict();
 export type LaddersManifest = z.infer<typeof LaddersManifestSchema>;

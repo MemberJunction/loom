@@ -55,9 +55,10 @@ export class Validator {
           }
           const entityCfg = domain.entities[childEntity];
           if (entityCfg) {
-            for (const fk of Object.values(entityCfg.foreignKeys)) {
+            for (const [fkKey, fk] of Object.entries(entityCfg.foreignKeys)) {
               if (fk.targetEntity === parentEntity || !parentEntity) {
-                const val = r[fk.fieldName];
+                const fieldName = fk.fieldName ?? fkKey;
+                const val = r[fieldName];
                 if (val && String(val).toLowerCase() === parentNorm) return true;
               }
             }
@@ -97,10 +98,11 @@ export class Validator {
   ): void {
     for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
       const records = data[entityName] ?? [];
-      for (const fk of Object.values(entityCfg.foreignKeys)) {
+      for (const [fkKey, fk] of Object.entries(entityCfg.foreignKeys)) {
+        const fieldName = fk.fieldName ?? fkKey;
         if (!fk.targetField) {
           throw new Error(
-            `Validator: FK '${fk.fieldName}' on entity '${entityName}' must explicitly declare 'targetField'`
+            `Validator: FK '${fieldName}' on entity '${entityName}' must explicitly declare 'targetField'`
           );
         }
 
@@ -114,11 +116,11 @@ export class Validator {
 
         let danglingCount = 0;
         let examinedFkCount = 0;
-        const fieldCfg = entityCfg.fields[fk.fieldName];
+        const fieldCfg = entityCfg.fields[fieldName];
         const isNullable = fieldCfg?.nullable ?? true;
 
         for (const row of records) {
-          const rawVal = row[fk.fieldName];
+          const rawVal = row[fieldName];
           if (rawVal !== undefined && rawVal !== null && rawVal !== '') {
             examinedFkCount++;
             const normalized = typeof rawVal === 'string' ? rawVal.toLowerCase() : String(rawVal);
@@ -131,7 +133,7 @@ export class Validator {
         }
 
         gates.push({
-          name: `FK Closure: ${entityName}.${fk.fieldName} -> ${fk.targetEntity}.${fk.targetField}`,
+          name: `FK Closure: ${entityName}.${fieldName} -> ${fk.targetEntity}.${fk.targetField}`,
           category: 'referential',
           passed: danglingCount === 0,
           populationCount: records.length,

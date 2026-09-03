@@ -3,6 +3,9 @@ import type {
   FactorContract,
 } from '@memberjunction/loom-contracts';
 import { RngStream } from '../math/rng.js';
+import { calibrateIntercept, sigmoid } from '../math/calibration.js';
+import { FactorEngine, type LatentProfile } from '../factors/engine.js';
+import { compileFeature } from '../features/compiler.js';
 import { HeroInjector } from '../heroes/HeroInjector.js';
 import { MotifSampler, EntityCandidate, MotifAssignment } from '../motifs/MotifSampler.js';
 import { StateLadderEngine } from '../ladders/StateLadderEngine.js';
@@ -21,11 +24,17 @@ export interface UnrollEntityState {
 }
 
 export interface UnrollConfig {
-  totalCycles: number;
+  /** Array of absolute cycles to simulate (e.g. [2021, 2022, 2023, 2024, 2025, 2026]) */
+  cycles?: number[];
+  /** Starting cycle (e.g. 2021) if cycles array is not provided */
+  startCycle?: number;
+  /** Total number of cycles to advance */
+  totalCycles?: number;
   entities: EntityCandidate[];
   heroInjector: HeroInjector;
   motifSampler: MotifSampler;
   ladderEngine: StateLadderEngine;
+  factorEngine?: FactorEngine;
   eras?: EraConfig[];
   factorContracts?: FactorContract[];
   annualWanderStdDev?: number;
@@ -46,8 +55,20 @@ export interface CycleSnapshot {
 export class RetrospectiveUnroller {
   private entityStates = new Map<string, UnrollEntityState>();
   private motifAssignments = new Map<string, MotifAssignment[]>();
+  private factorEngine: FactorEngine;
+  public readonly cycles: number[];
 
-  constructor(private config: UnrollConfig) {}
+  constructor(private config: UnrollConfig) {
+    this.factorEngine = config.factorEngine ?? new FactorEngine();
+
+    if (config.cycles && config.cycles.length > 0) {
+      this.cycles = [...config.cycles];
+    } else {
+      const start = config.startCycle ?? 0;
+      const count = config.totalCycles ?? 1;
+      this.cycles = Array.from({ length: count }, (_, i) => start + i);
+    }
+  }
 
   /**
    * Initializes all entity states, hero overrides, and motif assignments.
@@ -69,12 +90,6 @@ export class RetrospectiveUnroller {
         outcomesByCycle: new Map(),
         ladderStates: {},
       };
-
-      // Enroll in initial ladder entries
-      for (const entry of hero.ladderEntries) {
-        ladderEngine.Enroll(entry.ladderKey, hero.id, entry.state, entry.enterCycle);
-        heroState.ladderStates[entry.ladderKey] = entry.state;
-      }
 
       this.entityStates.set(hero.id, heroState);
     }
@@ -99,7 +114,7 @@ export class RetrospectiveUnroller {
     // 3. Sample and assign motifs across non-hero population
     this.motifAssignments = motifSampler.SamplePopulation(entities, rng);
 
-    // Apply initial motif ladder progressions
+    // Apply initial motif ladder progressions for non-heroes
     for (const [entityId, assignments] of this.motifAssignments.entries()) {
       const state = this.entityStates.get(entityId);
       if (!state) continue;
@@ -120,15 +135,14 @@ export class RetrospectiveUnroller {
   }
 
   /**
-   * Runs the multi-cycle retrospective simulation.
+   * Runs the multi-cycle retrospective simulation across absolute cycles.
    */
   public Run(rng: RngStream): CycleSnapshot[] {
     const snapshots: CycleSnapshot[] = [];
-    const wanderStdDev = this.config.annualWanderStdDev ?? 0.15;
-    const wanderCoeff = Math.sqrt(Math.max(0, 1 - wanderStdDev * wanderStdDev));
+    const { ladderEngine, factorContracts = [] } = this.config;
 
-    for (let c = 0; c < this.config.totalCycles; c++) {
-      // 1. Identify active eras for cycle c
+    for (const c of this.cycles) {
+      // 1. Identify active eras for absolute cycle c
       const activeEras = (this.config.eras ?? []).filter((era) => era.cycles.includes(c));
       const eraFactorAdjustments = new Map<string, number>();
       for (const era of activeEras) {
@@ -138,69 +152,89 @@ export class RetrospectiveUnroller {
         }
       }
 
-      let activeCount = 0;
-      const outcomesCount: Record<string, number> = {};
+      // 2. Advance hero scripted ladder progressions
+      for (const hero of this.config.heroInjector.GetAllHeroes()) {
+        const state = this.entityStates.get(hero.id);
+        if (!state || c < state.birthCycle) continue;
 
-      // 2. Advance each entity
+        const laddersInvolved = new Set(hero.ladderEntries.map((e) => e.ladderKey));
+        for (const ladderKey of laddersInvolved) {
+          const entering = hero.ladderEntries.find((e) => e.ladderKey === ladderKey && e.enterCycle === c);
+          const exiting = hero.ladderEntries.find((e) => e.ladderKey === ladderKey && e.exitCycle === c);
+          if (entering) {
+            ladderEngine.ForceTransition(entering.ladderKey, hero.id, entering.state, c);
+            state.ladderStates[entering.ladderKey] = entering.state;
+          } else if (exiting) {
+            ladderEngine.ExitLadder(exiting.ladderKey, hero.id, c);
+            delete state.ladderStates[exiting.ladderKey];
+          }
+        }
+      }
+
+      // 3. Filter active entities for cycle c
+      const activeEntities: UnrollEntityState[] = [];
       for (const entity of this.entityStates.values()) {
-        if (c < entity.birthCycle) {
-          continue; // Entity not born yet
+        if (c >= entity.birthCycle) {
+          activeEntities.push(entity);
         }
-        activeCount++;
+      }
+
+      // 4. Advance latent dials and non-hero ladders
+      for (const entity of activeEntities) {
         const cyclesSinceBirth = c - entity.birthCycle;
-
-        // A. Advance latent dials
         const assignments = this.motifAssignments.get(entity.id) ?? [];
-        for (const [dialName, currentVal] of Object.entries(entity.latentDials)) {
-          // Check if any motif specifies a deterministic trajectory for this dial
-          const trajectory = assignments.find((a) => a.latentTrajectory?.dial === dialName)?.latentTrajectory;
-          if (trajectory) {
-            entity.latentDials[dialName] = currentVal + trajectory.deltaPerCycle;
-          } else {
-            // Apply AR(1) wander
-            const shock = rng.normal();
-            entity.latentDials[dialName] = currentVal * wanderCoeff + shock * wanderStdDev;
+        const entityRng = rng.substream(`${entity.id}:${c}:profile`);
+
+        // Advance latent dials via FactorEngine profile or motif trajectory
+        const profile: LatentProfile = { entityId: entity.id, dials: { ...entity.latentDials } };
+        const advanced = this.factorEngine.AdvanceProfile(entityRng, profile, 1);
+        entity.latentDials = advanced.dials;
+
+        // Apply motif deterministic trajectory adjustments
+        for (const a of assignments) {
+          if (a.latentTrajectory) {
+            const cur = entity.latentDials[a.latentTrajectory.dial] ?? 0;
+            entity.latentDials[a.latentTrajectory.dial] = cur + a.latentTrajectory.deltaPerCycle;
           }
         }
 
-        // B. Step ladders
-        for (const ladder of this.config.ladderEngine.GetAllLadders()) {
-          const stepResult = this.config.ladderEngine.StepEntity(ladder.ladderKey, entity.id, {
-            cycle: c,
-            cyclesSinceBirth,
-            latentDials: entity.latentDials,
-          });
+        // Step non-hero ladders
+        if (!entity.isHero) {
+          for (const ladder of ladderEngine.GetAllLadders()) {
+            const stepResult = ladderEngine.StepEntity(ladder.ladderKey, entity.id, {
+              cycle: c,
+              cyclesSinceBirth,
+              latentDials: entity.latentDials,
+            });
 
-          if (stepResult.newState) {
-            entity.ladderStates[ladder.ladderKey] = stepResult.newState;
-          } else if (stepResult.transitioned && !stepResult.newState) {
-            delete entity.ladderStates[ladder.ladderKey];
-          }
+            if (stepResult.newState) {
+              entity.ladderStates[ladder.ladderKey] = stepResult.newState;
+            } else if (stepResult.transitioned && !stepResult.newState) {
+              delete entity.ladderStates[ladder.ladderKey];
+            }
 
-          // Apply exit effects to dials
-          for (const exitEffect of stepResult.exitEffects) {
-            const cur = entity.latentDials[exitEffect.dial] ?? 0;
-            entity.latentDials[exitEffect.dial] = cur + exitEffect.delta;
-          }
-        }
-
-        // C. Evaluate factors for this cycle
-        const cycleOutcomes: Record<string, boolean> = {};
-        for (const contract of this.config.factorContracts ?? []) {
-          let realizedOutcome: boolean;
-
-          // 1. Check Hero outcome pins (Invariant 2)
-          if (entity.isHero && entity.heroKey) {
-            const pinned = this.config.heroInjector.GetOutcomePin(entity.heroKey, contract.id, c);
-            if (pinned !== undefined) {
-              realizedOutcome = pinned;
-              cycleOutcomes[contract.id] = realizedOutcome;
-              if (realizedOutcome) outcomesCount[contract.id] = (outcomesCount[contract.id] ?? 0) + 1;
-              continue;
+            // Apply exit effects to dials
+            for (const exitEffect of stepResult.exitEffects) {
+              const cur = entity.latentDials[exitEffect.dial] ?? 0;
+              entity.latentDials[exitEffect.dial] = cur + exitEffect.delta;
             }
           }
+        }
+      }
 
-          // 2. Check Motif factor overrides
+      // 5. Evaluate factor contracts with calibrateIntercept and era adjustments
+      const outcomesCount: Record<string, number> = {};
+
+      for (const contract of factorContracts) {
+        let positiveCount = 0;
+
+        // A. Compute linear scores for all active entities
+        const entityScores: { entity: UnrollEntityState; score: number; overrideProb?: number }[] = [];
+
+        for (const entity of activeEntities) {
+          const assignments = this.motifAssignments.get(entity.id) ?? [];
+
+          // Check motif factor override
           let overrideProb: number | undefined;
           let overrideBeta: number | undefined;
           for (const a of assignments) {
@@ -212,41 +246,108 @@ export class RetrospectiveUnroller {
           }
 
           if (overrideProb !== undefined) {
-            realizedOutcome = rng.next() < overrideProb;
-          } else {
-            // Evaluate standard logit model with era intercept adjustment
-            let logit = Math.log(contract.target / (1 - Math.max(1e-5, contract.target)));
-            logit += eraFactorAdjustments.get(contract.id) ?? 0;
+            entityScores.push({ entity, score: 0, overrideProb });
+            continue;
+          }
 
-            // Add dial effects
-            for (const arrow of Object.values(contract.arrows)) {
-              const dialVal = entity.latentDials[arrow.name] ?? 0;
-              const beta = overrideBeta !== undefined ? overrideBeta : arrow.beta;
-              logit += beta * dialVal;
+          // Evaluate linear logit score: arrows + ladder state effects
+          let score = 0;
+          for (const arrow of Object.values(contract.arrows)) {
+            let featureVal = 0;
+            if (arrow.name in entity.latentDials) {
+              featureVal = entity.latentDials[arrow.name] ?? 0;
+            } else if (arrow.feature) {
+              const evaluator = compileFeature(arrow.feature);
+              featureVal = evaluator({ ...entity.fixedFields, ...entity.latentDials });
             }
 
-            const prob = 1 / (1 + Math.exp(-logit));
-            realizedOutcome = rng.next() < prob;
+            const beta = overrideBeta !== undefined ? overrideBeta : arrow.beta;
+            score += beta * featureVal;
           }
 
-          cycleOutcomes[contract.id] = realizedOutcome;
-          if (realizedOutcome) {
-            outcomesCount[contract.id] = (outcomesCount[contract.id] ?? 0) + 1;
+          // Ladder effect adjustment
+          for (const [ladderKey, currentState] of Object.entries(entity.ladderStates)) {
+            const ladder = ladderEngine.GetLadder(ladderKey);
+            const stateCfg = ladder?.states.find((s) => s.name === currentState);
+            const effect = stateCfg?.effects.find((e) => e.factor === contract.id);
+            if (effect) {
+              score += effect.beta;
+            }
           }
+
+          entityScores.push({ entity, score });
         }
 
-        entity.outcomesByCycle.set(c, cycleOutcomes);
+        // B. Calibrate base intercept so background active population matches contract.target
+        let nonHeroScores = entityScores
+          .filter((e) => !e.entity.isHero && e.overrideProb === undefined)
+          .map((e) => e.score);
+        if (nonHeroScores.length === 0) {
+          nonHeroScores = entityScores.filter((e) => e.overrideProb === undefined).map((e) => e.score);
+        }
+        const baseIntercept = calibrateIntercept(nonHeroScores, contract.target);
+
+        // Add era macroeconomic delta intercept
+        const eraDelta = eraFactorAdjustments.get(contract.id) ?? 0;
+        const finalIntercept = baseIntercept + eraDelta;
+
+        // C. Evaluate realized outcomes
+        for (const item of entityScores) {
+          const { entity, score, overrideProb } = item;
+          let realizedOutcome: boolean;
+
+          // 1. Hero outcome pin conditioning (Invariant 2)
+          if (entity.isHero && entity.heroKey) {
+            const pinned = this.config.heroInjector.GetOutcomePin(entity.heroKey, contract.id, c);
+            if (pinned !== undefined) {
+              realizedOutcome = pinned;
+              this.recordOutcome(entity, c, contract.id, realizedOutcome);
+              if (realizedOutcome) positiveCount++;
+              continue;
+            }
+          }
+
+          const entityDrawRng = rng.substream(`${entity.id}:${c}:${contract.id}`);
+
+          // 2. Motif probability override
+          if (overrideProb !== undefined) {
+            realizedOutcome = entityDrawRng.bernoulli(overrideProb);
+          } else {
+            // 3. Calibrated logistic draw
+            const prob = sigmoid(finalIntercept + score);
+            realizedOutcome = entityDrawRng.bernoulli(prob);
+          }
+
+          this.recordOutcome(entity, c, contract.id, realizedOutcome);
+          if (realizedOutcome) positiveCount++;
+        }
+
+        outcomesCount[contract.id] = positiveCount;
       }
 
       snapshots.push({
         cycle: c,
-        activePopulation: activeCount,
+        activePopulation: activeEntities.length,
         activeEras: activeEras.map((e) => e.eraKey),
         outcomesCount,
       });
     }
 
     return snapshots;
+  }
+
+  private recordOutcome(
+    entity: UnrollEntityState,
+    cycle: number,
+    factorId: string,
+    outcome: boolean
+  ): void {
+    let cycleOutcomes = entity.outcomesByCycle.get(cycle);
+    if (!cycleOutcomes) {
+      cycleOutcomes = {};
+      entity.outcomesByCycle.set(cycle, cycleOutcomes);
+    }
+    cycleOutcomes[factorId] = outcome;
   }
 
   public GetEntityState(entityId: string): UnrollEntityState | undefined {

@@ -92,6 +92,47 @@ export class StateLadderEngine {
     return entityState;
   }
 
+  /**
+   * Forces an entity into a specific ladder state at a given cycle, bypassing prerequisites/capacity.
+   * Used for scripted hero ladder entries.
+   */
+  public ForceTransition(
+    ladderKey: string,
+    entityId: string,
+    stateName: string,
+    cycle: number
+  ): EntityLadderState {
+    const existing = this.activeStates.get(ladderKey)?.get(entityId);
+    if (!existing) {
+      return this.Enroll(ladderKey, entityId, stateName, cycle);
+    }
+
+    const lastHistory = existing.history[existing.history.length - 1];
+    if (lastHistory && lastHistory.exitCycle === undefined) {
+      lastHistory.exitCycle = cycle;
+    }
+
+    existing.currentState = stateName;
+    existing.tenureInCurrentState = 0;
+    existing.enteredCycle = cycle;
+    existing.history.push({ state: stateName, enterCycle: cycle });
+    return existing;
+  }
+
+  /**
+   * Exits an entity from a ladder at a given cycle.
+   */
+  public ExitLadder(ladderKey: string, entityId: string, cycle: number): void {
+    const existing = this.activeStates.get(ladderKey)?.get(entityId);
+    if (existing) {
+      const lastHistory = existing.history[existing.history.length - 1];
+      if (lastHistory && lastHistory.exitCycle === undefined) {
+        lastHistory.exitCycle = cycle;
+      }
+      this.activeStates.get(ladderKey)!.delete(entityId);
+    }
+  }
+
   public GetEntityState(ladderKey: string, entityId: string): EntityLadderState | undefined {
     return this.activeStates.get(ladderKey)?.get(entityId);
   }

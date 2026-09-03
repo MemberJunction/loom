@@ -8,6 +8,7 @@ export const ProjectManifestSchema = z.object({
   description: z.string().optional(),
   entrypoint: z.string().default('./index.ts'),
   rulesetPath: z.string().default('./ruleset'),
+  banksPath: z.string().optional(),
   narrativePath: z.string().optional(),
   output: z.object({
     metadataDir: z.string().default('./metadata'),

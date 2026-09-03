@@ -17,7 +17,7 @@ describe('MotifSampler', () => {
   const motifPctMock: MotifConfig = {
     motifKey: 'corporate-ghost',
     targetEntity: 'Person',
-    quota: { mode: 'percentage', value: 50, rounding: 'round' },
+    quota: { mode: 'percentage', value: 0.50, rounding: 'round' },
     childRates: [],
     eras: [],
     factorOverrides: [],
