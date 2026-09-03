@@ -878,12 +878,15 @@ describe('Loom Enterprise Integration Test Suite', () => {
       products.filter((p) => p['Category'] === 'Hardware').map((p) => String(p['ID'] ?? p['id']))
     );
 
-    // In era build: cycle 2024 has exactly 0 Hardware order lines
-    const era2024HardwareLines = orderLines.filter((ol) => {
-      const yr = orderYears.get(String(ol['OrderID']));
-      return yr === 2024 && hardwareProductIds.has(String(ol['ProductID']));
-    });
+    // In era build: cycle 2024 has exactly 0 Hardware order lines, 14 Software lines, 14 total lines, and 14 orders (R12-1)
+    const era2024Orders = orders.filter((o) => orderYears.get(String(o['ID'] ?? o['id'])) === 2024);
+    const era2024Lines = orderLines.filter((ol) => orderYears.get(String(ol['OrderID'])) === 2024);
+    const era2024HardwareLines = era2024Lines.filter((ol) => hardwareProductIds.has(String(ol['ProductID'])));
+    const era2024Software = era2024Lines.filter((ol) => !hardwareProductIds.has(String(ol['ProductID'])));
     expect(era2024HardwareLines.length).toBe(0);
+    expect(era2024Software.length).toBe(14);
+    expect(era2024Lines.length).toBe(14);
+    expect(era2024Orders.length).toBeLessThanOrEqual(14);
 
     // But other cycles have Hardware lines
     const otherHardwareLines = orderLines.filter((ol) => {
@@ -961,6 +964,36 @@ describe('Loom Enterprise Integration Test Suite', () => {
     const failFactorGate = reportFail2.gates.find((g) => g.name.includes('era-recession-2023 [factor-membership-renewal in 2023]'));
     expect(failFactorGate).toBeDefined();
     expect(failFactorGate?.passed).toBe(false);
+
+    // 5. Acceptance 2: zeroing every category yields 0 lines and 0 orders
+    const tempProjZeroAll = path.join(os.tmpdir(), `loom-proj-zero-all-${Date.now()}`);
+    const tempMetaZeroAll = path.join(os.tmpdir(), `loom-meta-zero-all-${Date.now()}`);
+    await fs.cp(enterpriseProjectPath, tempProjZeroAll, { recursive: true });
+    const erasZeroPath = path.join(tempProjZeroAll, 'ruleset', 'eras.json');
+    const erasConfigZero = JSON.parse(await fs.readFile(erasZeroPath, 'utf8'));
+    erasConfigZero.eras = [
+      {
+        eraKey: 'era-zero-all-categories',
+        scope: 'all',
+        cycles: [2024],
+        volumeMultipliers: [
+          { entity: 'OrderLine', multiplier: 0 }
+        ]
+      }
+    ];
+    await fs.writeFile(erasZeroPath, JSON.stringify(erasConfigZero, null, 2), 'utf8');
+    await executeBuild({ project: tempProjZeroAll, seed: '42', output: tempMetaZeroAll });
+    const { records: zeroAllLines } = await readEntityMetadata(
+      path.join(tempMetaZeroAll, 'OrderLine'),
+      loaded.domain.entities['OrderLine']!.entityName
+    );
+    const { records: zeroAllOrders } = await readEntityMetadata(
+      path.join(tempMetaZeroAll, 'OrderHeader'),
+      loaded.domain.entities['OrderHeader']!.entityName
+    );
+    const zeroOrderYears = new Map(zeroAllOrders.map((o) => [String(o['ID'] ?? o['id']), new Date(String(o['OrderDate'])).getFullYear()]));
+    const zero2024Lines = zeroAllLines.filter((ol) => zeroOrderYears.get(String(ol['OrderID'])) === 2024);
+    expect(zero2024Lines.length).toBe(0);
   });
 
   it('A2 (R7-2): hero outcomes emerge from factor evaluation path without forced override, Gate 0 passes, and unsatisfiable pin throws (R11-1)', async () => {

@@ -261,10 +261,10 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     let isChild = false;
     for (const [pName] of Object.entries(loaded.domain.entities)) {
       if (pName === entityName) continue;
-      for (const [fkKey, fk] of Object.entries(entityCfg.foreignKeys ?? {})) {
+      for (const fk of Object.values(entityCfg.foreignKeys ?? {})) {
         if (fk.targetEntity === pName) {
-          const fkFieldName = fk.fieldName ?? fkKey;
-          if (entityCfg.isImmutable && entityCfg.businessKey && entityCfg.businessKey[0] === fkFieldName) {
+          const isDependent = fk.cardinality === 'required' || (fk as Record<string, unknown>).dependent === true;
+          if (isDependent) {
             isChild = true;
             break;
           }
@@ -293,12 +293,12 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
 
       // Cascade structural dependent children matching domain schema
       for (const [childName, childCfg] of Object.entries(loaded.domain.entities)) {
-        if (childName === entityName || !childCfg.isImmutable) continue;
+        if (childName === entityName) continue;
         for (const [fkKey, fk] of Object.entries(childCfg.foreignKeys ?? {})) {
           if (fk.targetEntity === entityName) {
+            const isDependent = fk.cardinality === 'required' || (fk as Record<string, unknown>).dependent === true;
+            if (!isDependent) continue;
             const fkFieldName = fk.fieldName ?? fkKey;
-            const isStructuralChild = childCfg.businessKey && childCfg.businessKey[0] === fkFieldName;
-            if (!isStructuralChild) continue;
 
             if (!currentRecords[childName]) currentRecords[childName] = [];
 

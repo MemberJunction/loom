@@ -60,57 +60,75 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
     parentRow: Record<string, unknown>;
     cycle: number;
     activeEras: readonly EraConfig[];
-  }): void {
+  }): { hasLineChild: boolean; lineCount: number } {
     const { parentEntity, parentRow, cycle, activeEras } = params;
     const parentId = String(parentRow['ID'] ?? parentRow['id']);
+    let hasLineChild = false;
+    let totalLinesGenerated = 0;
 
     for (const [childName, childCfg] of Object.entries(loaded.domain.entities)) {
-      if (childName === parentEntity || !childCfg.isImmutable) continue;
+      if (childName === parentEntity) continue;
       for (const [fkKey, fk] of Object.entries(childCfg.foreignKeys ?? {})) {
         if (fk.targetEntity === parentEntity) {
+          const isDependent = fk.cardinality === 'required' || (fk as Record<string, unknown>).dependent === true;
+          if (!isDependent) continue;
+
           const fkFieldName = fk.fieldName ?? fkKey;
-          const isStructuralChild = childCfg.businessKey && childCfg.businessKey[0] === fkFieldName;
-          if (!isStructuralChild) continue;
-
-          if (!allRecords[childName]) allRecords[childName] = [];
-
           const otherFks = Object.values(childCfg.foreignKeys ?? {}).filter(
             (f) => f.targetEntity !== parentEntity
           );
 
           if (otherFks.length > 0) {
+            hasLineChild = true;
             const lookupFk = otherFks[0]!;
             const targetCatalog = allRecords[lookupFk.targetEntity] ?? [];
-            if (targetCatalog.length === 0) continue;
-
-            let availableCatalog = [...targetCatalog];
-            for (const era of activeEras) {
-              for (const vm of era.volumeMultipliers) {
-                if (vm.entity === childName) {
-                  if (vm.multiplier === 0 && vm.where) {
-                    availableCatalog = availableCatalog.filter((p) => {
-                      for (const [wk, wv] of Object.entries(vm.where!)) {
-                        if (p[wk] !== undefined && String(p[wk]).toLowerCase() === String(wv).toLowerCase()) {
-                          return false;
-                        }
-                      }
-                      return true;
-                    });
-                  }
-                }
-              }
-            }
-            if (availableCatalog.length === 0) {
-              availableCatalog = targetCatalog;
+            if (targetCatalog.length === 0) {
+              return { hasLineChild: true, lineCount: 0 };
             }
 
             const parentHash = parentId.replace(/-/g, '').slice(0, 8);
-            const lineCount = 1 + (parseInt(parentHash, 16) % 2);
+            const candidateCount = 1 + (parseInt(parentHash, 16) % 2);
+            const generatedLines: Record<string, unknown>[] = [];
             let sumTotal = 0;
 
-            for (let l = 1; l <= lineCount; l++) {
-              const itemIdx = (parseInt(parentHash, 16) + l) % availableCatalog.length;
-              const item = availableCatalog[itemIdx]!;
+            for (let l = 1; l <= candidateCount; l++) {
+              const itemIdx = (parseInt(parentHash, 16) + l) % targetCatalog.length;
+              const item = targetCatalog[itemIdx]!;
+
+              // Evaluate active era volume multipliers on this candidate line (R12-1, R12-2)
+              let dropLine = false;
+              for (const era of activeEras) {
+                for (const vm of era.volumeMultipliers) {
+                  if (vm.entity === childName) {
+                    let matchesWhere = true;
+                    if (vm.where) {
+                      for (const [wk, wv] of Object.entries(vm.where)) {
+                        if (item[wk] === undefined || String(item[wk]).toLowerCase() !== String(wv).toLowerCase()) {
+                          matchesWhere = false;
+                          break;
+                        }
+                      }
+                    }
+                    if (matchesWhere) {
+                      if (vm.multiplier === 0) {
+                        dropLine = true;
+                        break;
+                      } else if (vm.multiplier > 0 && vm.multiplier < 1) {
+                        // Deterministic thinning using parent:cycle:l stream (R12-2)
+                        const thinRng = createRng(seed, `thin:${parentId}:${childName}:${cycle}:${l}`);
+                        if (!thinRng.bernoulli(vm.multiplier)) {
+                          dropLine = true;
+                          break;
+                        }
+                      }
+                    }
+                  }
+                }
+                if (dropLine) break;
+              }
+              if (dropLine) continue;
+
+              // Candidate line is kept
               const qty = 1 + (l % 2);
               const priceVal = typeof item['UnitPrice'] === 'number' ? item['UnitPrice'] : (typeof item['Price'] === 'number' ? item['Price'] : 100);
               const extVal = qty * priceVal;
@@ -134,8 +152,17 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
                   childRow[fName] = 'Standard';
                 }
               }
-              allRecords[childName]!.push(childRow);
+              generatedLines.push(childRow);
             }
+
+            if (generatedLines.length === 0) {
+              // All candidate lines suppressed by era multipliers (R12-1)
+              return { hasLineChild: true, lineCount: 0 };
+            }
+
+            if (!allRecords[childName]) allRecords[childName] = [];
+            allRecords[childName]!.push(...generatedLines);
+            totalLinesGenerated += generatedLines.length;
 
             for (const fName of Object.keys(loaded.domain.entities[parentEntity]!.fields)) {
               if (fName.toLowerCase().includes('total') || fName.toLowerCase().includes('amount')) {
@@ -143,6 +170,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
               }
             }
           } else {
+            // Payment / transaction audit child: only generated if parent was not suppressed
+            if (!allRecords[childName]) allRecords[childName] = [];
             const dateField = Object.keys(childCfg.fields).find(
               (f) => f.toLowerCase().includes('date') || f.toLowerCase().includes('time')
             );
@@ -175,6 +204,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         }
       }
     }
+    return { hasLineChild, lineCount: totalLinesGenerated };
   }
 
   // Create simulation DAG nodes for each entity defined in domain.json
@@ -491,12 +521,15 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
             }
             allRecords[cr.entity]!.push(childRow);
 
-            cascadeDependentChildren({
+            const cascadeRes = cascadeDependentChildren({
               parentEntity: cr.entity,
               parentRow: childRow,
               cycle: c,
               activeEras,
             });
+            if (cascadeRes.hasLineChild && cascadeRes.lineCount === 0) {
+              allRecords[cr.entity]!.pop();
+            }
           }
         }
       }
