@@ -850,7 +850,8 @@ describe('Loom Enterprise Integration Test Suite', () => {
     expect(yearTransitions).toBe(0);
   });
 
-  it('B (Realized Eras): scoped multiplier of 0 produces zero rows in target category in era cycle, passes Realized Era gate, and fails if multiplier is edited to 1.0', async () => {
+  it('B (Realized Eras): scoped multiplier of 0 produces zero rows in target category in era cycle, passes Realized Era gate, and fails if multiplier is edited to 1.0 or deltaIntercept sign is flipped', async () => {
+    // 1. Era build
     const tempMeta = path.join(os.tmpdir(), `loom-meta-era-test-${Date.now()}`);
     await executeBuild({
       project: enterpriseProjectPath,
@@ -863,24 +864,64 @@ describe('Loom Enterprise Integration Test Suite', () => {
       path.join(tempMeta, 'OrderLine'),
       loaded.domain.entities['OrderLine']!.entityName
     );
+    const { records: orders } = await readEntityMetadata(
+      path.join(tempMeta, 'OrderHeader'),
+      loaded.domain.entities['OrderHeader']!.entityName
+    );
     const { records: products } = await readEntityMetadata(
       path.join(tempMeta, 'Product'),
       loaded.domain.entities['Product']!.entityName
     );
 
-    // Find products in Hardware category
+    const orderYears = new Map(orders.map((o) => [String(o['ID'] ?? o['id']), new Date(String(o['OrderDate'])).getFullYear()]));
     const hardwareProductIds = new Set(
       products.filter((p) => p['Category'] === 'Hardware').map((p) => String(p['ID'] ?? p['id']))
     );
 
-    // In cycle 2024 (the era cycle), order lines with Hardware products must be exactly 0
-    const eraOrderLines = orderLines.filter((ol) => {
-      const orderDate = String(ol['CreatedAt'] ?? ol['OrderDate'] ?? '');
-      return orderDate.includes('2024') && hardwareProductIds.has(String(ol['ProductID']));
+    // In era build: cycle 2024 has exactly 0 Hardware order lines
+    const era2024HardwareLines = orderLines.filter((ol) => {
+      const yr = orderYears.get(String(ol['OrderID']));
+      return yr === 2024 && hardwareProductIds.has(String(ol['ProductID']));
     });
-    expect(eraOrderLines.length).toBe(0);
+    expect(era2024HardwareLines.length).toBe(0);
 
-    // Validate that the Realized Era gate passes
+    // But other cycles have Hardware lines
+    const otherHardwareLines = orderLines.filter((ol) => {
+      const yr = orderYears.get(String(ol['OrderID']));
+      return yr !== 2024 && hardwareProductIds.has(String(ol['ProductID']));
+    });
+    expect(otherHardwareLines.length).toBeGreaterThan(0);
+
+    // 2. Era-free build: verify Hardware lines exist in 2024 without the era
+    const tempProjNoEras = path.join(os.tmpdir(), `loom-proj-no-eras-${Date.now()}`);
+    const tempMetaNoEras = path.join(os.tmpdir(), `loom-meta-no-eras-${Date.now()}`);
+    await fs.cp(enterpriseProjectPath, tempProjNoEras, { recursive: true });
+    await fs.writeFile(
+      path.join(tempProjNoEras, 'ruleset', 'eras.json'),
+      JSON.stringify({ $schema: 'https://memberjunction.org/schemas/loom/eras.v1.json', eras: [] }, null, 2),
+      'utf8'
+    );
+    await executeBuild({
+      project: tempProjNoEras,
+      seed: '42',
+      output: tempMetaNoEras,
+    });
+    const { records: noEraLines } = await readEntityMetadata(
+      path.join(tempMetaNoEras, 'OrderLine'),
+      loaded.domain.entities['OrderLine']!.entityName
+    );
+    const { records: noEraOrders } = await readEntityMetadata(
+      path.join(tempMetaNoEras, 'OrderHeader'),
+      loaded.domain.entities['OrderHeader']!.entityName
+    );
+    const noEraOrderYears = new Map(noEraOrders.map((o) => [String(o['ID'] ?? o['id']), new Date(String(o['OrderDate'])).getFullYear()]));
+    const noEra2024Hardware = noEraLines.filter((ol) => {
+      const yr = noEraOrderYears.get(String(ol['OrderID']));
+      return yr === 2024 && hardwareProductIds.has(String(ol['ProductID']));
+    });
+    expect(noEra2024Hardware.length).toBeGreaterThan(0);
+
+    // Validate that the Realized Era gate passes on valid era build
     const reportValid = await executeValidate({
       project: enterpriseProjectPath,
       data: tempMeta,
@@ -889,25 +930,40 @@ describe('Loom Enterprise Integration Test Suite', () => {
     expect(eraGate).toBeDefined();
     expect(eraGate?.passed).toBe(true);
 
-    // Now test that editing the multiplier to 1.0 in a temp project causes the gate to fail
-    const tempProjDir = path.join(os.tmpdir(), `loom-proj-era-fail-${Date.now()}`);
-    await fs.cp(enterpriseProjectPath, tempProjDir, { recursive: true });
-    const erasJsonPath = path.join(tempProjDir, 'ruleset', 'eras.json');
-    const erasConfig = JSON.parse(await fs.readFile(erasJsonPath, 'utf8'));
-    const targetEra = erasConfig.eras.find((e: { eraKey: string }) => e.eraKey === 'era-virtual-only-2024');
-    targetEra.volumeMultipliers[0].multiplier = 1.0;
-    await fs.writeFile(erasJsonPath, JSON.stringify(erasConfig, null, 2), 'utf8');
+    // 3. Mutation 1: editing multiplier to 1.0 causes volume gate to fail
+    const tempProjFail1 = path.join(os.tmpdir(), `loom-proj-era-fail1-${Date.now()}`);
+    await fs.cp(enterpriseProjectPath, tempProjFail1, { recursive: true });
+    const eras1Path = path.join(tempProjFail1, 'ruleset', 'eras.json');
+    const erasConfig1 = JSON.parse(await fs.readFile(eras1Path, 'utf8'));
+    erasConfig1.eras.find((e: { eraKey: string }) => e.eraKey === 'era-supply-disruption').volumeMultipliers[0].multiplier = 1.0;
+    await fs.writeFile(eras1Path, JSON.stringify(erasConfig1, null, 2), 'utf8');
 
-    const reportFail = await executeValidate({
-      project: tempProjDir,
-      data: tempMeta, // validating metadata built with 0 rows against manifest expecting 1.0x baseline
+    const reportFail1 = await executeValidate({
+      project: tempProjFail1,
+      data: tempMeta,
     });
-    const failEraGate = reportFail.gates.find((g) => g.name.includes('era-virtual-only-2024'));
-    expect(failEraGate).toBeDefined();
-    expect(failEraGate?.passed).toBe(false);
+    const failVolumeGate = reportFail1.gates.find((g) => g.name.includes('era-supply-disruption [OrderHeader in 2024]'));
+    expect(failVolumeGate).toBeDefined();
+    expect(failVolumeGate?.passed).toBe(false);
+
+    // 4. Mutation 2: flipping sign of deltaIntercept from -0.85 to +0.85 causes factor gate to fail
+    const tempProjFail2 = path.join(os.tmpdir(), `loom-proj-era-fail2-${Date.now()}`);
+    await fs.cp(enterpriseProjectPath, tempProjFail2, { recursive: true });
+    const eras2Path = path.join(tempProjFail2, 'ruleset', 'eras.json');
+    const erasConfig2 = JSON.parse(await fs.readFile(eras2Path, 'utf8'));
+    erasConfig2.eras.find((e: { eraKey: string }) => e.eraKey === 'era-recession-2023').factorAdjustments[0].deltaIntercept = 0.85;
+    await fs.writeFile(eras2Path, JSON.stringify(erasConfig2, null, 2), 'utf8');
+
+    const reportFail2 = await executeValidate({
+      project: tempProjFail2,
+      data: tempMeta,
+    });
+    const failFactorGate = reportFail2.gates.find((g) => g.name.includes('era-recession-2023 [factor-membership-renewal in 2023]'));
+    expect(failFactorGate).toBeDefined();
+    expect(failFactorGate?.passed).toBe(false);
   });
 
-  it('A2 (R7-2): hero outcomes emerge from factor evaluation path without forced override and Gate 0 passes', async () => {
+  it('A2 (R7-2): hero outcomes emerge from factor evaluation path without forced override, Gate 0 passes, and unsatisfiable pin throws (R11-1)', async () => {
     const loaded = await loadProject(enterpriseProjectPath);
     const { records: members } = await readEntityMetadata(
       path.join(metaDirA, 'Member'),
@@ -935,13 +991,48 @@ describe('Loom Enterprise Integration Test Suite', () => {
     const gate0 = report.gates.filter((g) => g.name.includes('Gate 0 (Hero Pins)'));
     expect(gate0.length).toBe(2);
     expect(gate0.every((g) => g.passed)).toBe(true);
+
+    // R11-1 Probe: temp project with an era adding deltaIntercept: -60 to factor-membership-renewal across cycles
+    // must throw because Sarah's pin for Active cannot be drawn under rejection sampling
+    const tempProjUnsat = path.join(os.tmpdir(), `loom-proj-unsat-${Date.now()}`);
+    await fs.cp(enterpriseProjectPath, tempProjUnsat, { recursive: true });
+    const unsatErasPath = path.join(tempProjUnsat, 'ruleset', 'eras.json');
+    const unsatEras = {
+      $schema: 'https://memberjunction.org/schemas/loom/eras.v1.json',
+      eras: [
+        {
+          eraKey: 'impossible-depression',
+          scope: 'all',
+          cycles: [2021, 2022, 2023, 2024, 2025, 2026],
+          factorAdjustments: [{ factor: 'factor-membership-renewal', deltaIntercept: -60 }],
+          volumeMultipliers: [],
+        },
+      ],
+    };
+    await fs.writeFile(unsatErasPath, JSON.stringify(unsatEras, null, 2), 'utf8');
+
+    await expect(
+      executeBuild({
+        project: tempProjUnsat,
+        seed: '42',
+        output: path.join(os.tmpdir(), `loom-meta-unsat-${Date.now()}`),
+      })
+    ).rejects.toThrow(/Hero pin unsatisfiable under simulation ruleset/);
   });
 
-  it('A3 (02.7): discrete child rows are generated per cycle from motif childRates within stated tolerances and cross-cycle feature pins pass Gate 0', async () => {
+  it('A3 (02.7): discrete child rows are generated per cycle from motif childRates and every OrderHeader has >= 1 OrderLine and >= 1 Payment with gate (R11-3)', async () => {
     const loaded = await loadProject(enterpriseProjectPath);
     const { records: orderHeaders } = await readEntityMetadata(
       path.join(metaDirA, 'OrderHeader'),
       loaded.domain.entities['OrderHeader']!.entityName
+    );
+    const { records: orderLines } = await readEntityMetadata(
+      path.join(metaDirA, 'OrderLine'),
+      loaded.domain.entities['OrderLine']!.entityName
+    );
+    const { records: payments } = await readEntityMetadata(
+      path.join(metaDirA, 'Payment'),
+      loaded.domain.entities['Payment']!.entityName
     );
 
     // Motif child rates in enterprise/ruleset/motifs.json generate orders across cycles (2021..2026)
@@ -959,9 +1050,28 @@ describe('Loom Enterprise Integration Test Suite', () => {
       expect(ordersByYear[y]).toBeGreaterThan(0);
     }
 
+    // R11-3: Every single OrderHeader has >= 1 OrderLine and >= 1 Payment
+    const lineOrderIds = new Set(orderLines.map((ol) => String(ol['OrderID'])));
+    const paymentOrderIds = new Set(payments.map((p) => String(p['OrderID'])));
+
+    for (const oh of orderHeaders) {
+      const orderId = String(oh['ID'] ?? oh['id']);
+      expect(lineOrderIds.has(orderId)).toBe(true);
+      expect(paymentOrderIds.has(orderId)).toBe(true);
+    }
+
     // Sarah Connor has a cross-cycle feature pin for >= 2 completed orders that satisfies Gate 0
     const sarahOrders = orderHeaders.filter((oh) => oh['Status'] === 'Completed');
     expect(sarahOrders.length).toBeGreaterThanOrEqual(2);
+
+    // Validation report passes the Dependent Coverage gate
+    const report = await executeValidate({
+      project: enterpriseProjectPath,
+      data: metaDirA,
+    });
+    const depGate = report.gates.find((g) => g.name.includes('Dependent Coverage'));
+    expect(depGate).toBeDefined();
+    expect(depGate?.passed).toBe(true);
   });
 });
 

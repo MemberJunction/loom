@@ -14,7 +14,7 @@ import {
   type SimulationNode,
   type EntityCandidate,
 } from '@memberjunction/loom-engine';
-import type { SimulationCheckpoint, HeroOutcomePin } from '@memberjunction/loom-contracts';
+import type { SimulationCheckpoint, HeroOutcomePin, EraConfig } from '@memberjunction/loom-contracts';
 import { generateEntityRecord } from '../generation.js';
 
 export interface BuildCommandOptions {
@@ -55,8 +55,131 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
   );
   const resolver = new CausalGraphResolver();
 
+  function cascadeDependentChildren(params: {
+    parentEntity: string;
+    parentRow: Record<string, unknown>;
+    cycle: number;
+    activeEras: readonly EraConfig[];
+  }): void {
+    const { parentEntity, parentRow, cycle, activeEras } = params;
+    const parentId = String(parentRow['ID'] ?? parentRow['id']);
+
+    for (const [childName, childCfg] of Object.entries(loaded.domain.entities)) {
+      if (childName === parentEntity || !childCfg.isImmutable) continue;
+      for (const [fkKey, fk] of Object.entries(childCfg.foreignKeys ?? {})) {
+        if (fk.targetEntity === parentEntity) {
+          const fkFieldName = fk.fieldName ?? fkKey;
+          const isStructuralChild = childCfg.businessKey && childCfg.businessKey[0] === fkFieldName;
+          if (!isStructuralChild) continue;
+
+          if (!allRecords[childName]) allRecords[childName] = [];
+
+          const otherFks = Object.values(childCfg.foreignKeys ?? {}).filter(
+            (f) => f.targetEntity !== parentEntity
+          );
+
+          if (otherFks.length > 0) {
+            const lookupFk = otherFks[0]!;
+            const targetCatalog = allRecords[lookupFk.targetEntity] ?? [];
+            if (targetCatalog.length === 0) continue;
+
+            let availableCatalog = [...targetCatalog];
+            for (const era of activeEras) {
+              for (const vm of era.volumeMultipliers) {
+                if (vm.entity === childName) {
+                  if (vm.multiplier === 0 && vm.where) {
+                    availableCatalog = availableCatalog.filter((p) => {
+                      for (const [wk, wv] of Object.entries(vm.where!)) {
+                        if (p[wk] !== undefined && String(p[wk]).toLowerCase() === String(wv).toLowerCase()) {
+                          return false;
+                        }
+                      }
+                      return true;
+                    });
+                  }
+                }
+              }
+            }
+            if (availableCatalog.length === 0) {
+              availableCatalog = targetCatalog;
+            }
+
+            const parentHash = parentId.replace(/-/g, '').slice(0, 8);
+            const lineCount = 1 + (parseInt(parentHash, 16) % 2);
+            let sumTotal = 0;
+
+            for (let l = 1; l <= lineCount; l++) {
+              const itemIdx = (parseInt(parentHash, 16) + l) % availableCatalog.length;
+              const item = availableCatalog[itemIdx]!;
+              const qty = 1 + (l % 2);
+              const priceVal = typeof item['UnitPrice'] === 'number' ? item['UnitPrice'] : (typeof item['Price'] === 'number' ? item['Price'] : 100);
+              const extVal = qty * priceVal;
+              sumTotal += extVal;
+
+              const lineId = identityService.MintId(loaded.domain.name, childName, [parentId, String(item[lookupFk.targetField])]);
+              const childRow: Record<string, unknown> = {
+                ID: lineId,
+                [fkFieldName]: parentId,
+                [lookupFk.fieldName]: item[lookupFk.targetField],
+              };
+              for (const [fName, fDef] of Object.entries(childCfg.fields)) {
+                if (fName === 'ID' || fName === fkFieldName || fName === lookupFk.fieldName) continue;
+                if (fName.toLowerCase().includes('quantity') || fName.toLowerCase().includes('qty')) {
+                  childRow[fName] = qty;
+                } else if (fName.toLowerCase().includes('unitprice')) {
+                  childRow[fName] = priceVal;
+                } else if (fName.toLowerCase().includes('extended') || fName.toLowerCase().includes('total')) {
+                  childRow[fName] = extVal;
+                } else if (fDef.type === 'string') {
+                  childRow[fName] = 'Standard';
+                }
+              }
+              allRecords[childName]!.push(childRow);
+            }
+
+            for (const fName of Object.keys(loaded.domain.entities[parentEntity]!.fields)) {
+              if (fName.toLowerCase().includes('total') || fName.toLowerCase().includes('amount')) {
+                parentRow[fName] = sumTotal;
+              }
+            }
+          } else {
+            const dateField = Object.keys(childCfg.fields).find(
+              (f) => f.toLowerCase().includes('date') || f.toLowerCase().includes('time')
+            );
+            const parentDateField = Object.keys(loaded.domain.entities[parentEntity]!.fields).find(
+              (f) => f.toLowerCase().includes('date') || f.toLowerCase().includes('time')
+            );
+            const eventDate = String(parentDateField && parentRow[parentDateField] ? parentRow[parentDateField] : `${cycle}-06-15`);
+            const childId = identityService.MintId(loaded.domain.name, childName, [parentId, eventDate]);
+            const childRow: Record<string, unknown> = {
+              ID: childId,
+              [fkFieldName]: parentId,
+            };
+            for (const [fName, fDef] of Object.entries(childCfg.fields)) {
+              if (fName === 'ID' || fName === fkFieldName) continue;
+              if (fName === dateField) {
+                childRow[fName] = eventDate;
+              } else if (fName.toLowerCase().includes('amount') || fName.toLowerCase().includes('total')) {
+                const totalField = Object.keys(loaded.domain.entities[parentEntity]!.fields).find(
+                  (f) => f.toLowerCase().includes('total') || f.toLowerCase().includes('amount')
+                );
+                childRow[fName] = totalField && typeof parentRow[totalField] === 'number' ? parentRow[totalField] : 100;
+              } else if (fName.toLowerCase().includes('status')) {
+                childRow[fName] = 'Completed';
+              } else if (fDef.type === 'string') {
+                childRow[fName] = 'Standard';
+              }
+            }
+            allRecords[childName]!.push(childRow);
+          }
+        }
+      }
+    }
+  }
+
   // Create simulation DAG nodes for each entity defined in domain.json
   const bgRecordsByEntity = new Map<string, Record<string, unknown>[]>();
+  const allRecords: Record<string, Record<string, unknown>[]> = {};
 
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
     const node: SimulationNode = {
@@ -65,6 +188,12 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
       produces: [entityName],
       description: `Generates ${entityName} records with causal factor calibration`,
       execute: async (ctx) => {
+        // If records were already cascaded into allRecords (e.g. OrderLine, Payment), return them
+        if (allRecords[entityName] && allRecords[entityName]!.length > 0) {
+          bgRecordsByEntity.set(entityName, allRecords[entityName]!);
+          return { [entityName]: allRecords[entityName]! };
+        }
+
         // Read authored volume from ruleset params, falling back to default 10
         let targetCount = 10;
         for (const mod of Object.values(loaded.rulesetModules)) {
@@ -99,6 +228,16 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
           });
           backgroundRecords.push(row);
         }
+
+        for (const row of backgroundRecords) {
+          cascadeDependentChildren({
+            parentEntity: entityName,
+            parentRow: row,
+            cycle: asOfYear,
+            activeEras: (loaded.erasManifest?.eras ?? []).filter((e) => e.cycles.includes(asOfYear)),
+          });
+        }
+
         bgRecordsByEntity.set(entityName, backgroundRecords);
 
         return { [entityName]: backgroundRecords };
@@ -112,7 +251,6 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
   console.log(`   Execution DAG: ${executionOrder.map((n) => n.id).join(' -> ')}`);
 
   const generatedData = new Map<string, Record<string, unknown>[]>();
-  const allRecords: Record<string, Record<string, unknown>[]> = {};
 
   for (const node of executionOrder) {
     const result = await node.execute({
@@ -123,7 +261,9 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
     });
     for (const [entity, rows] of Object.entries(result)) {
       generatedData.set(entity, rows);
-      allRecords[entity] = rows;
+      if (!allRecords[entity] || allRecords[entity]!.length === 0) {
+        allRecords[entity] = rows;
+      }
     }
   }
 
@@ -157,10 +297,29 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         bgIdx++;
       }
 
+      // Spread temporal dates across birthCycle for cohort entities (entities with foreign keys)
+      const isCohortEntity = Object.keys(loaded.domain.entities[entityName]?.foreignKeys ?? {}).length > 0;
+      if (isCohortEntity) {
+        const month = String(1 + (bgIdx % 12)).padStart(2, '0');
+        const day = String(1 + (bgIdx % 28)).padStart(2, '0');
+        if (r['JoinDate'] !== undefined) {
+          filteredFields['JoinDate'] = `${birthCycle}-${month}-${day}`;
+          r['JoinDate'] = `${birthCycle}-${month}-${day}`;
+        }
+        if (r['CreatedAt'] !== undefined) {
+          filteredFields['CreatedAt'] = `${birthCycle}-${month}-${day}`;
+          r['CreatedAt'] = `${birthCycle}-${month}-${day}`;
+        }
+        if (r['StartDate'] !== undefined) {
+          filteredFields['StartDate'] = `${birthCycle}-${month}-${day}`;
+          r['StartDate'] = `${birthCycle}-${month}-${day}`;
+        }
+      }
+
       allUnrollCandidates.push({
         id,
         entity: entityName,
-        birthCycle,
+        birthCycle: isCohortEntity ? birthCycle : startCycle,
         latentDials: hero ? { ...hero.latentDials } : { theta: 0.0, phi: 0.0 },
         fixedFields: filteredFields,
         isHero: hero !== undefined,
@@ -191,7 +350,11 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
       const id = String(row['ID'] ?? row['id']);
       const state = worldUnroller.GetEntityState(id);
       if (state) {
-        const outcomes = state.outcomesByCycle.get(asOfYear);
+        const isCohortEntity = Object.keys(loaded.domain.entities[entityName]?.foreignKeys ?? {}).length > 0;
+        const rowYear = isCohortEntity && (row['JoinDate'] || row['CreatedAt'] || row['StartDate'])
+          ? new Date(String(row['JoinDate'] ?? row['CreatedAt'] ?? row['StartDate'])).getFullYear()
+          : asOfYear;
+        const outcomes = state.outcomesByCycle.get(rowYear) ?? state.outcomesByCycle.get(asOfYear);
         for (const contract of entityFactors) {
           const hero = heroInjector.GetHeroById(id);
           const realized = outcomes ? outcomes[contract.id] : undefined;
@@ -299,12 +462,19 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
             const childRow = generateEntityRecord({
               domain: loaded.domain,
               entity: cr.entity,
-              i: (allRecords[cr.entity]?.length ?? 0) + 1,
+              i: k,
               parentPool: allRecords,
               rng: rowRng,
               identityService,
             });
             childRow[fkFieldName] = parentId;
+            childRow['ID'] = identityService.MintId(loaded.domain.name, cr.entity, [parentId, String(c), String(k)]);
+            for (const fName of Object.keys(childCfg.fields)) {
+              if (fName.endsWith('Number') || fName.endsWith('Code')) {
+                const seq = Math.abs(createRng(seed, `seq:${parentId}:${c}:${k}`).int(10000, 99999));
+                childRow[fName] = `${fName.slice(0, 3).toUpperCase()}-${c}${seq}`;
+              }
+            }
             const cycleDateField = Object.keys(childCfg.fields).find(
               (f) => f === 'Cycle' || f === 'Year' || f.endsWith('Date') || f.endsWith('At')
             );
@@ -319,74 +489,16 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
             if (!allRecords[cr.entity]) {
               allRecords[cr.entity] = [];
             }
-            const destList = allRecords[cr.entity];
-            if (destList) {
-              destList.push(childRow);
-            }
+            allRecords[cr.entity]!.push(childRow);
+
+            cascadeDependentChildren({
+              parentEntity: cr.entity,
+              parentRow: childRow,
+              cycle: c,
+              activeEras,
+            });
           }
         }
-      }
-    }
-  }
-
-  // 7. Apply active era volume multipliers to transactional entities (B1, B2)
-  for (const era of loaded.erasManifest?.eras ?? []) {
-    for (const c of era.cycles) {
-      for (const vm of era.volumeMultipliers) {
-        const records = allRecords[vm.entity];
-        if (!records || records.length === 0) continue;
-        const entityCfg = loaded.domain.entities[vm.entity];
-        if (!entityCfg) continue;
-
-        const cycleField = Object.keys(entityCfg.fields).find(
-          (f) => f === 'Cycle' || f === 'Year' || f.endsWith('Date') || f.endsWith('At')
-        );
-
-        allRecords[vm.entity] = records.filter((r) => {
-          if (cycleField) {
-            const raw = r[cycleField];
-            if (raw) {
-              const yr = typeof raw === 'number' ? raw : new Date(String(raw)).getFullYear();
-              if (yr !== c) return true;
-            }
-          }
-          if (vm.where) {
-            let matches = true;
-            for (const [wKey, wVal] of Object.entries(vm.where)) {
-              if (r[wKey] !== undefined) {
-                if (String(r[wKey]).toLowerCase() !== String(wVal).toLowerCase()) {
-                  matches = false;
-                  break;
-                }
-              } else {
-                let matchedFk = false;
-                for (const fk of Object.values(entityCfg.foreignKeys ?? {})) {
-                  const targetList = allRecords[fk.targetEntity];
-                  if (targetList) {
-                    const fkVal = r[fk.fieldName ?? ''];
-                    const targetRow = targetList.find(
-                      (p) => String(p[fk.targetField]).toLowerCase() === String(fkVal).toLowerCase()
-                    );
-                    if (targetRow && targetRow[wKey] !== undefined) {
-                      if (String(targetRow[wKey]).toLowerCase() === String(wVal).toLowerCase()) {
-                        matchedFk = true;
-                        break;
-                      }
-                    }
-                  }
-                }
-                if (!matchedFk) {
-                  matches = false;
-                  break;
-                }
-              }
-            }
-            if (!matches) return true;
-          }
-
-          if (vm.multiplier === 0) return false;
-          return true;
-        });
       }
     }
   }
@@ -480,12 +592,19 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
             const childRow = generateEntityRecord({
               domain: loaded.domain,
               entity: entityName,
-              i: (allRecords[entityName]?.length ?? 0) + 1,
+              i: j,
               parentPool: allRecords,
               rng: childRng,
               identityService,
             });
             childRow[fkFieldName] = heroId;
+            childRow['ID'] = identityService.MintId(loaded.domain.name, entityName, [heroId, String(j)]);
+            for (const fName of Object.keys(entityCfg.fields)) {
+              if (fName.endsWith('Number') || fName.endsWith('Code')) {
+                const seq = Math.abs(createRng(seed, `seq:${hero.heroKey}:${j}`).int(10000, 99999));
+                childRow[fName] = `${fName.slice(0, 3).toUpperCase()}-${asOfYear}${seq}`;
+              }
+            }
             if (pin.feature.where) {
               for (const [wField, wVal] of Object.entries(pin.feature.where)) {
                 childRow[wField] = wVal;
@@ -493,6 +612,13 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
             }
             if (!allRecords[entityName]) allRecords[entityName] = [];
             allRecords[entityName]!.push(childRow);
+
+            cascadeDependentChildren({
+              parentEntity: entityName,
+              parentRow: childRow,
+              cycle: asOfYear,
+              activeEras: (loaded.erasManifest?.eras ?? []).filter((e) => e.cycles.includes(asOfYear)),
+            });
           }
         }
       }

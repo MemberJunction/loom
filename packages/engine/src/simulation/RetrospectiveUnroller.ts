@@ -45,7 +45,7 @@ export interface UnrollConfig {
   domain?: DomainConfig;
   factorContracts?: FactorContract[];
   annualWanderStdDev?: number;
-  cycleUnit?: 'year' | 'week' | 'month' | 'cycle';
+  cycleUnit?: 'year' | 'week';
 }
 
 export interface CycleSnapshot {
@@ -432,13 +432,20 @@ export class RetrospectiveUnroller {
                 .substream(`hero-outcome:${entity.id}:${c}:${contract.id}`);
               let attempt = 0;
               let drawn = false;
+              let lastProb = 0;
               do {
                 const drawSub = heroDrawRng.substream(`try:${attempt}`);
-                const prob = overrideProb !== undefined ? overrideProb : sigmoid(finalIntercept + score);
-                drawn = drawSub.bernoulli(prob);
+                lastProb = overrideProb !== undefined ? overrideProb : sigmoid(finalIntercept + score);
+                drawn = drawSub.bernoulli(lastProb);
                 attempt++;
               } while (drawn !== pinned && attempt < 100);
-              realizedOutcome = pinned;
+
+              if (drawn !== pinned) {
+                throw new Error(
+                  `Hero pin unsatisfiable under simulation ruleset: Hero '${entity.heroKey}' pinned outcome for factor '${contract.id}' to ${pinned} in cycle ${c}, but rejection sampling failed to draw ${pinned} after ${attempt} attempts (last probability: ${lastProb.toFixed(6)}).`
+                );
+              }
+              realizedOutcome = drawn;
               this.recordOutcome(entity, c, contract.id, realizedOutcome);
               if (realizedOutcome) positiveCount++;
               continue;

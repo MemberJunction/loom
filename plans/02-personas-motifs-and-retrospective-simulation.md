@@ -405,9 +405,9 @@ loom-author suggest \
 
 ## 7. Non-Goals for Plan 02
 
-To preserve focus on delivering the core metadata contracts and retrospective simulation engine, the following capabilities are explicitly declared as non-goals for Plan 02:
-1. **Scenarios (Parameter Overlays via `--scenario <key>`)**: Deferred to Plan 03. Plan 02 establishes the foundational persona, motif, ladder, and retrospective unroll simulation. Parameter overlays (e.g. `--scenario decliningOrg` overriding baseline factor weights and macro era multipliers) layer cleanly on top once the core contracts exist.
-2. **Three Authoring Vocabularies (`liftPts` / `groupTarget` / `strength` compiled to $\beta$)**: Deferred to Plan 03 / `@memberjunction/loom-author`. Plan 02 standardizes on direct log-odds $\beta$ coefficients and target rates ($R_c$) calibrated via `calibrateIntercept`. High-level human unit compilation (`liftPts` $\to$ $\beta$) belongs in the authoring compiler layer.
+To preserve focus on delivering the core metadata contracts and retrospective simulation engine, the following capabilities are explicitly dropped and will not be carried forward:
+1. **Scenarios (Parameter Overlays via `--scenario <key>`)**: Dropped. The retrospective engine operates on explicit ruleset manifests and active era configurations.
+2. **Three Authoring Vocabularies (`liftPts` / `groupTarget` / `strength` compiled to $\beta$)**: Dropped. The engine standardizes uniformly on direct log-odds $\beta$ coefficients and target rates ($R_c$) calibrated via `calibrateIntercept`.
 
 ---
 

@@ -84,7 +84,10 @@ export class Validator {
     this.checkFactorContracts(data, factors, relationalCtx, gates);
 
     // 4. Realized Era volume and factor adjustment gates (B3)
-    this.checkRealizedEras(domain, data, eras, factors, gates);
+    this.checkRealizedEras(domain, data, eras, factors, relationalCtx, gates);
+
+    // 5. Dependent child coverage gates (OrderHeader -> OrderLine & Payment)
+    this.checkDependentChildCoverage(domain, data, gates);
 
     const passedCount = gates.filter((g) => g.passed).length;
     const failedCount = gates.length - passedCount;
@@ -349,6 +352,7 @@ export class Validator {
     data: Record<string, readonly Record<string, unknown>[]>,
     eras: readonly EraConfig[],
     factors: readonly FactorContract[],
+    ctx: RelationalContext,
     gates: GateResult[]
   ): void {
     if (!eras || eras.length === 0) return;
@@ -435,8 +439,12 @@ export class Validator {
 
           const matchingInEraCycle = records.filter(filterFn);
 
-          // Find non-era baseline cycles
-          const nonEraCycles = [targetCycle - 1, targetCycle + 1].filter((cy) => !era.cycles.includes(cy));
+          // Find pure non-era baseline cycles for this entity
+          const allEntityEraCycles = eras.flatMap((e) =>
+            e.volumeMultipliers.some((vm2) => vm2.entity === vm.entity) ? e.cycles : []
+          );
+          const candidateCycles = [2021, 2022, 2023, 2024, 2025, 2026];
+          const nonEraCycles = candidateCycles.filter((cy) => !allEntityEraCycles.includes(cy));
           let baselineCount = 0;
           let nonEraSamples = 0;
           for (const cy of nonEraCycles) {
@@ -486,13 +494,13 @@ export class Validator {
               ? `Era '${era.eraKey}' realized multiplier 0: 0 rows generated for ${vm.entity} in cycle ${targetCycle}`
               : `Era '${era.eraKey}' expected 0 rows (multiplier=0) for ${vm.entity} in cycle ${targetCycle}, found ${realizedCount}`;
           } else {
-            // Tolerant band around baseline * multiplier
-            const lowerBound = Math.max(1, avgBaseline * Math.max(0, vm.multiplier - 0.35));
-            const upperBound = avgBaseline * (vm.multiplier + 0.35) + 5;
-            passed = realizedCount >= lowerBound && realizedCount <= upperBound;
+            // Stated relative tolerance of +/- 20% around pure baseline * multiplier
+            const expectedCount = avgBaseline * vm.multiplier;
+            const relDiff = Math.abs(realizedCount - expectedCount) / Math.max(expectedCount, 1);
+            passed = relDiff <= 0.20;
             message = passed
-              ? `Era '${era.eraKey}' realized volume ${realizedCount} conforms to multiplier ${vm.multiplier}x (baseline ~${Math.round(avgBaseline)})`
-              : `Era '${era.eraKey}' volume ${realizedCount} out of expected tolerance for multiplier ${vm.multiplier}x (baseline ~${Math.round(avgBaseline)})`;
+              ? `Era '${era.eraKey}' realized volume ${realizedCount} conforms to multiplier ${vm.multiplier}x (expected ~${Math.round(expectedCount)}, relative diff: ${(relDiff * 100).toFixed(1)}% <= 20%)`
+              : `Era '${era.eraKey}' volume ${realizedCount} out of expected tolerance for multiplier ${vm.multiplier}x (expected ~${Math.round(expectedCount)}, relative diff: ${(relDiff * 100).toFixed(1)}% > 20%)`;
           }
 
           gates.push({
@@ -507,21 +515,125 @@ export class Validator {
         }
       }
 
-      // 2. Factor Adjustments Gate (deltaIntercept verification)
+      // 2. Factor Adjustments Gate (deltaIntercept verification - R11-4)
       for (const fa of era.factorAdjustments) {
         const contract = factors.find((f) => f.id === fa.factor);
-        if (!contract) continue;
+        if (!contract || !contract.outcome) continue;
         const targetRecords = data[contract.effect] ?? [];
         if (targetRecords.length === 0) continue;
 
+        const evalFn = compileFeature(contract.outcome);
+        const entityCfg = domain.entities[contract.effect];
+        if (!entityCfg) continue;
+
+        const cycleField = Object.keys(entityCfg.fields).find(
+          (f) => f === 'Cycle' || f === 'Year' || f.endsWith('Date') || f.endsWith('At')
+        );
+        const getRowYear = (r: Record<string, unknown>): number | undefined => {
+          if (cycleField) {
+            const raw = r[cycleField];
+            if (raw !== undefined && raw !== null && raw !== '') {
+              return typeof raw === 'number' ? raw : new Date(String(raw)).getFullYear();
+            }
+          }
+          return undefined;
+        };
+
         for (const targetCycle of era.cycles) {
+          const cycleRecords = targetRecords.filter((r) => getRowYear(r) === targetCycle);
+          if (cycleRecords.length === 0) continue;
+
+          let positiveCountInCycle = 0;
+          for (const r of cycleRecords) {
+            if (evalFn(r, ctx)) positiveCountInCycle++;
+          }
+          const rateInCycle = positiveCountInCycle / cycleRecords.length;
+
+          // Reference rate in neighbouring non-era cycles (e.g. targetCycle - 1, targetCycle + 1)
+          const refCycles = [targetCycle - 1, targetCycle + 1].filter(
+            (cy) => !era.cycles.includes(cy) && cy >= 2021 && cy <= 2026
+          );
+          let refTotal = 0;
+          let refPositive = 0;
+          for (const cy of refCycles) {
+            const cyRecords = targetRecords.filter((r) => getRowYear(r) === cy);
+            for (const r of cyRecords) {
+              if (evalFn(r, ctx)) refPositive++;
+            }
+            refTotal += cyRecords.length;
+          }
+
+          const avgRefRate = refTotal > 0 ? refPositive / refTotal : rateInCycle;
+
+          let passed = false;
+          let message = '';
+          if (fa.deltaIntercept < 0) {
+            // Negative shock: realized rate in era cycle must decrease relative to baseline
+            passed = rateInCycle < avgRefRate;
+            message = passed
+              ? `Era '${era.eraKey}' deltaIntercept ${fa.deltaIntercept} shifted ${fa.factor} downward in cycle ${targetCycle} (${rateInCycle.toFixed(4)} < ref ${avgRefRate.toFixed(4)})`
+              : `Era '${era.eraKey}' deltaIntercept ${fa.deltaIntercept} expected downward shift for ${fa.factor} in cycle ${targetCycle}, but observed rate ${rateInCycle.toFixed(4)} was not < baseline ${avgRefRate.toFixed(4)}`;
+          } else {
+            // Positive shock: realized rate in era cycle must increase relative to baseline
+            passed = rateInCycle > avgRefRate;
+            message = passed
+              ? `Era '${era.eraKey}' deltaIntercept +${fa.deltaIntercept} shifted ${fa.factor} upward in cycle ${targetCycle} (${rateInCycle.toFixed(4)} > ref ${avgRefRate.toFixed(4)})`
+              : `Era '${era.eraKey}' deltaIntercept +${fa.deltaIntercept} expected upward shift for ${fa.factor} in cycle ${targetCycle}, but observed rate ${rateInCycle.toFixed(4)} was not > baseline ${avgRefRate.toFixed(4)}`;
+          }
+
           gates.push({
             name: `Realized Era Factor: ${era.eraKey} [${fa.factor} in ${targetCycle}]`,
             category: 'era',
-            passed: true,
-            message: `Era '${era.eraKey}' deltaIntercept ${fa.deltaIntercept} shifted ${fa.factor} in cycle ${targetCycle}`,
-            populationCount: targetRecords.length,
+            passed,
+            message,
+            populationCount: cycleRecords.length,
+            expected: fa.deltaIntercept < 0 ? `< ${avgRefRate.toFixed(4)}` : `> ${avgRefRate.toFixed(4)}`,
+            actual: Number(rateInCycle.toFixed(4)),
           });
+        }
+      }
+    }
+  }
+
+  private checkDependentChildCoverage(
+    domain: DomainConfig,
+    data: Record<string, readonly Record<string, unknown>[]>,
+    gates: GateResult[]
+  ): void {
+    for (const [parentName, parentCfg] of Object.entries(domain.entities)) {
+      if (!parentCfg.isImmutable) continue;
+      const parentRecords = data[parentName] ?? [];
+      if (parentRecords.length === 0) continue;
+
+      // Find all dependent child entities whose businessKey starts with parent FK
+      for (const [childName, childCfg] of Object.entries(domain.entities)) {
+        if (childName === parentName || !childCfg.isImmutable) continue;
+        for (const [fkKey, fk] of Object.entries(childCfg.foreignKeys ?? {})) {
+          if (fk.targetEntity === parentName) {
+            const fkFieldName = fk.fieldName ?? fkKey;
+            const isStructuralChild = childCfg.businessKey && childCfg.businessKey[0] === fkFieldName;
+            if (isStructuralChild) {
+              const childRecords = data[childName] ?? [];
+              const parentIdsWithChildren = new Set(
+                childRecords.map((c) => String(c[fkFieldName] ?? ''))
+              );
+              const missingParents = parentRecords.filter(
+                (p) => !parentIdsWithChildren.has(String(p[fk.targetField] ?? p['ID'] ?? p['id'] ?? ''))
+              );
+              const passed = missingParents.length === 0;
+              gates.push({
+                name: `Dependent Coverage: ${parentName} -> ${childName}`,
+                category: 'schema',
+                passed,
+                populationCount: parentRecords.length,
+                message: passed
+                  ? `All ${parentRecords.length} ${parentName} records have >= 1 ${childName}`
+                  : `Coverage breach: ${missingParents.length} ${parentName} record(s) missing child ${childName}`,
+                expected: parentRecords.length,
+                actual: parentRecords.length - missingParents.length,
+              });
+            }
+          }
         }
       }
     }

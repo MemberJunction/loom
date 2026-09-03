@@ -257,6 +257,26 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       }
     }
 
+    // Check if this entity is a structural dependent child of another entity
+    let isChild = false;
+    for (const [pName] of Object.entries(loaded.domain.entities)) {
+      if (pName === entityName) continue;
+      for (const [fkKey, fk] of Object.entries(entityCfg.foreignKeys ?? {})) {
+        if (fk.targetEntity === pName) {
+          const fkFieldName = fk.fieldName ?? fkKey;
+          if (entityCfg.isImmutable && entityCfg.businessKey && entityCfg.businessKey[0] === fkFieldName) {
+            isChild = true;
+            break;
+          }
+        }
+      }
+      if (isChild) break;
+    }
+    if (isChild) {
+      // Dependent child records are generated in cascade with their parent entity
+      continue;
+    }
+
     const startIdx = list.length + 1;
     const rng = createRng(seed, `accumulate:${entityName}:cycle:${cycleIndex}`);
 
@@ -270,6 +290,81 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
         identityService,
       });
       list.push(row);
+
+      // Cascade structural dependent children matching domain schema
+      for (const [childName, childCfg] of Object.entries(loaded.domain.entities)) {
+        if (childName === entityName || !childCfg.isImmutable) continue;
+        for (const [fkKey, fk] of Object.entries(childCfg.foreignKeys ?? {})) {
+          if (fk.targetEntity === entityName) {
+            const fkFieldName = fk.fieldName ?? fkKey;
+            const isStructuralChild = childCfg.businessKey && childCfg.businessKey[0] === fkFieldName;
+            if (!isStructuralChild) continue;
+
+            if (!currentRecords[childName]) currentRecords[childName] = [];
+
+            const rowId = String(row['ID'] ?? row['id']);
+            const otherFks = Object.values(childCfg.foreignKeys ?? {}).filter((f) => f.targetEntity !== entityName);
+
+            if (otherFks.length > 0) {
+              const lookupFk = otherFks[0]!;
+              const targetCatalog = currentRecords[lookupFk.targetEntity] ?? [];
+              if (targetCatalog.length > 0) {
+                const item = targetCatalog[(i - 1) % targetCatalog.length]!;
+                const childId = identityService.MintId(loaded.domain.name, childName, [rowId, String(item[lookupFk.targetField])]);
+                const priceVal = typeof item['UnitPrice'] === 'number' ? item['UnitPrice'] : (typeof item['Price'] === 'number' ? item['Price'] : 100);
+                const childRow: Record<string, unknown> = {
+                  ID: childId,
+                  [fkFieldName]: rowId,
+                  [lookupFk.fieldName]: item[lookupFk.targetField],
+                };
+                for (const [fName, fDef] of Object.entries(childCfg.fields)) {
+                  if (fName === 'ID' || fName === fkFieldName || fName === lookupFk.fieldName) continue;
+                  if (fName.toLowerCase().includes('quantity') || fName.toLowerCase().includes('qty')) {
+                    childRow[fName] = 1;
+                  } else if (fName.toLowerCase().includes('unitprice')) {
+                    childRow[fName] = priceVal;
+                  } else if (fName.toLowerCase().includes('extended') || fName.toLowerCase().includes('total')) {
+                    childRow[fName] = priceVal;
+                  } else if (fDef.type === 'string') {
+                    childRow[fName] = 'Standard';
+                  }
+                }
+                currentRecords[childName]!.push(childRow);
+                for (const fName of Object.keys(entityCfg.fields)) {
+                  if (fName.toLowerCase().includes('total') || fName.toLowerCase().includes('amount')) {
+                    row[fName] = priceVal;
+                  }
+                }
+              }
+            } else {
+              const dateField = Object.keys(childCfg.fields).find(
+                (f) => f.toLowerCase().includes('date') || f.toLowerCase().includes('time')
+              );
+              const childId = identityService.MintId(loaded.domain.name, childName, [rowId, asOfDate]);
+              const childRow: Record<string, unknown> = {
+                ID: childId,
+                [fkFieldName]: rowId,
+              };
+              for (const [fName, fDef] of Object.entries(childCfg.fields)) {
+                if (fName === 'ID' || fName === fkFieldName) continue;
+                if (fName === dateField) {
+                  childRow[fName] = asOfDate;
+                } else if (fName.toLowerCase().includes('amount') || fName.toLowerCase().includes('total')) {
+                  const totalField = Object.keys(entityCfg.fields).find(
+                    (f) => f.toLowerCase().includes('total') || f.toLowerCase().includes('amount')
+                  );
+                  childRow[fName] = totalField && typeof row[totalField] === 'number' ? row[totalField] : 100;
+                } else if (fName.toLowerCase().includes('status')) {
+                  childRow[fName] = 'Completed';
+                } else if (fDef.type === 'string') {
+                  childRow[fName] = 'Standard';
+                }
+              }
+              currentRecords[childName]!.push(childRow);
+            }
+          }
+        }
+      }
     }
 
     currentRecords[entityName] = list;

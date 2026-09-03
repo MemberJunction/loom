@@ -11,7 +11,7 @@ export const ProjectManifestSchema = z.object({
   banksPath: z.string().optional(),
   startCycle: z.number().int(),
   releaseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  cycleUnit: z.enum(['year', 'week', 'month', 'cycle']).default('year'),
+  cycleUnit: z.enum(['year', 'week']).default('year'),
   output: z.object({
     metadataDir: z.string().default('./metadata'),
   }).strict().default({
