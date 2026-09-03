@@ -11,3 +11,7 @@ export * from './validation/validator.js';
 export * from './emitters/metadata.js';
 export * from './emitters/skyway.js';
 export * from './emitters/date-fix.js';
+export * from './heroes/HeroInjector.js';
+export * from './motifs/MotifSampler.js';
+export * from './ladders/StateLadderEngine.js';
+export * from './simulation/RetrospectiveUnroller.js';

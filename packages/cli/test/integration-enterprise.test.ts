@@ -6,7 +6,7 @@ import * as crypto from 'node:crypto';
 import { executeBuild } from '../src/commands/build.js';
 import { executeAccumulate } from '../src/commands/accumulate.js';
 import { executeValidate } from '../src/commands/validate.js';
-import { emitSkywayMigration } from '@memberjunction/loom-engine';
+import { emitSkywayMigration, Validator } from '@memberjunction/loom-engine';
 import { loadProject } from '../src/project.js';
 
 describe('Loom Enterprise Integration Test Suite', () => {
@@ -72,6 +72,13 @@ describe('Loom Enterprise Integration Test Suite', () => {
     expect(report1.failedCount).toBe(0);
     // 7 PK gates + 7 FK gates + 3 factor gates = 17 gates total
     expect(report1.totalGates).toBeGreaterThanOrEqual(17);
+
+    // Verify continuity is populated and non-empty (L1 requirement)
+    const cpRaw = await fs.readFile(path.join(metaDirA, 'checkpoint.json'), 'utf8');
+    const checkpoint = JSON.parse(cpRaw);
+    expect(Object.keys(checkpoint.continuity.activeEntityIds).length).toBeGreaterThan(0);
+    expect(Object.keys(checkpoint.continuity.latentStates).length).toBeGreaterThan(0);
+    expect(Object.keys(checkpoint.continuity.activeLifecycleStates).length).toBeGreaterThan(0);
   });
 
   it('accumulates 12 consecutive weekly cycles and enforces ID persistence, non-deletion, and deep immutability', async () => {
@@ -90,6 +97,8 @@ describe('Loom Enterprise Integration Test Suite', () => {
 
     // Run 12 weekly accumulation cycles
     const totalCycles = 12;
+    let cycle1Lifecycles: unknown = null;
+    let totalStatusTransitions = 0;
     for (let cycle = 1; cycle <= totalCycles; cycle++) {
       await executeAccumulate({
         project: enterpriseProjectPath,
@@ -104,6 +113,11 @@ describe('Loom Enterprise Integration Test Suite', () => {
       const cpRaw = await fs.readFile(path.join(metaDirA, 'checkpoint.json'), 'utf8');
       const checkpoint = JSON.parse(cpRaw);
       expect(checkpoint.cycleIndex).toBe(cycle);
+      totalStatusTransitions += checkpoint.lastGeneratedDelta?.statusTransitions?.length ?? 0;
+
+      if (cycle === 1) {
+        cycle1Lifecycles = JSON.parse(JSON.stringify(checkpoint.continuity.activeLifecycleStates));
+      }
 
       // Validate all gates pass at every cycle
       const report = await executeValidate({
@@ -141,6 +155,31 @@ describe('Loom Enterprise Integration Test Suite', () => {
         expect(JSON.stringify(currentLines[i])).toBe(JSON.stringify(initialLines[i]));
       }
     }
+
+    const finalCpRaw = await fs.readFile(path.join(metaDirA, 'checkpoint.json'), 'utf8');
+    const finalCheckpoint = JSON.parse(finalCpRaw);
+
+    // R3-4: Assert activeLifecycleStates differs between cycle 1 and cycle 12
+    expect(JSON.stringify(cycle1Lifecycles)).not.toBe(
+      JSON.stringify(finalCheckpoint.continuity.activeLifecycleStates)
+    );
+
+    // R5-5: Assert the 12-cycle test status transition count matches durationCycles prediction
+    expect(totalStatusTransitions).toBe(5);
+
+    // R3-4: Assert that at least one delta migration across the 12 cycles contains an UPDATE statement
+    const migrationFiles = await fs.readdir(migrDirA);
+    let foundUpdate = false;
+    for (const f of migrationFiles) {
+      if (f.endsWith('.sql')) {
+        const content = await fs.readFile(path.join(migrDirA, f), 'utf8');
+        if (content.includes('UPDATE ')) {
+          foundUpdate = true;
+          break;
+        }
+      }
+    }
+    expect(foundUpdate).toBe(true);
   });
 
   it('guarantees 100% byte-for-byte idempotency across two independent multi-cycle simulation runs', async () => {
@@ -255,6 +294,208 @@ describe('Loom Enterprise Integration Test Suite', () => {
     expect(pgContent).toContain('"enterprise"."OrderLine"');
     expect(pgContent).toContain('"enterprise"."Subscription"');
     expect(pgContent).toContain('"enterprise"."Payment"');
+  });
+
+  it('emits status transitions as transactional UPDATE statements in delta migrations (L1 requirement)', async () => {
+    const loaded = await loadProject(enterpriseProjectPath);
+    const migrDir = path.join(tempDirA, 'status-test-migrations');
+
+    const migrFile = await emitSkywayMigration({
+      outputDir: migrDir,
+      version: '202609029998',
+      description: 'Status_Transition_Emission_Test',
+      domain: loaded.domain,
+      data: {},
+      statusTransitions: [
+        {
+          entity: 'Member',
+          id: '11111111-2222-3333-4444-555555555555',
+          fromStatus: 'Active',
+          toStatus: 'Cancelled',
+          effectiveDate: '2026-09-09',
+        },
+      ],
+    });
+
+    const content = await fs.readFile(migrFile, 'utf8');
+    expect(content).toContain('-- Status Transitions');
+    expect(content).toContain(
+      "UPDATE [enterprise].[Member] SET [Status] = 'Cancelled' WHERE [ID] = '11111111-2222-3333-4444-555555555555';"
+    );
+  });
+
+  it('deleting or altering a factor in the ruleset causes empirical validation to fail its derived gate (L1 requirement)', async () => {
+    const loaded = await loadProject(enterpriseProjectPath);
+
+    // 1. Snapshot of dataset generated with the factor present
+    const membersWithFactor: Record<string, unknown>[] = JSON.parse(
+      await fs.readFile(path.join(metaDirA, 'core', 'Member.json'), 'utf8')
+    );
+    const activeCountWith = membersWithFactor.filter((m) => m['Status'] === 'Active').length;
+    const rateWith = activeCountWith / membersWithFactor.length;
+
+    // Original factor contract from common.json
+    const originalFactor = loaded.rulesetModules['common']?.effects['factor-membership-renewal'];
+    expect(originalFactor).toBeDefined();
+
+    // 2. Build with factor altered: create temporary project copy and alter target drastically
+    const tempProjDir = path.join(tempDirA, 'proj-altered-factor');
+    await fs.cp(enterpriseProjectPath, tempProjDir, { recursive: true });
+
+    const commonJsonPath = path.join(tempProjDir, 'ruleset', 'common.json');
+    const commonMod = JSON.parse(await fs.readFile(commonJsonPath, 'utf8'));
+    // Alter factor target drastically from 0.80 to 0.20
+    commonMod.effects['factor-membership-renewal'].target = 0.20;
+    await fs.writeFile(commonJsonPath, JSON.stringify(commonMod, null, 2), 'utf8');
+
+    const testMetaAltered = path.join(tempDirA, 'meta-altered');
+    const testMigrAltered = path.join(tempDirA, 'migr-altered');
+    await executeBuild({
+      project: tempProjDir,
+      seed: '42',
+      output: testMetaAltered,
+      migrationsOutput: testMigrAltered,
+    });
+
+    const membersAltered: Record<string, unknown>[] = JSON.parse(
+      await fs.readFile(path.join(testMetaAltered, 'core', 'Member.json'), 'utf8')
+    );
+    const activeCountAltered = membersAltered.filter((m) => m['Status'] === 'Active').length;
+    const rateAltered = activeCountAltered / membersAltered.length;
+
+    // (a) Assert the observed distribution changes by more than the tolerance
+    expect(Math.abs(rateAltered - rateWith)).toBeGreaterThan(originalFactor!.tolerance);
+
+    // (b) Assert the original factor's gate now fails against the altered dataset
+    const recordsAltered: Record<string, Record<string, unknown>[]> = {};
+    for (const [entity, entityCfg] of Object.entries(loaded.domain.entities)) {
+      const filePath = path.join(testMetaAltered, entityCfg.pack, `${entity}.json`);
+      recordsAltered[entity] = JSON.parse(await fs.readFile(filePath, 'utf8'));
+    }
+
+    const validator = new Validator();
+    const report = validator.Validate(loaded.domain, recordsAltered, [originalFactor!]);
+    expect(report.passed).toBe(false);
+    expect(report.gates.some((g) => g.name.includes(originalFactor!.id) && !g.passed)).toBe(true);
+  });
+
+  it('R3-2: hero record has the exact same key set as a background row, and baseline SQL INSERT includes CompanyID, JoinDate, CreatedAt', async () => {
+    const loaded = await loadProject(enterpriseProjectPath);
+    const memberFilePath = path.join(metaDirA, 'core', 'Member.json');
+    const members: Record<string, unknown>[] = JSON.parse(await fs.readFile(memberFilePath, 'utf8'));
+
+    const sarah = members.find((m) => m['Email'] === 'sarah.connor@acme.example.com');
+    expect(sarah).toBeDefined();
+
+    // Find a non-hero background member
+    const backgroundMember = members.find(
+      (m) => m['Email'] !== 'sarah.connor@acme.example.com' && m['Email'] !== 'david.ross@globex.example.com'
+    );
+    expect(backgroundMember).toBeDefined();
+
+    // Verify Sarah has the exact same key set as background member
+    const heroKeys = Object.keys(sarah!).sort();
+    const backgroundKeys = Object.keys(backgroundMember!).sort();
+    expect(heroKeys).toEqual(backgroundKeys);
+
+    // Verify explicit presence of core relational & audit fields
+    expect(sarah!['CompanyID']).toBeDefined();
+    expect(sarah!['JoinDate']).toBeDefined();
+    expect(sarah!['CreatedAt']).toBeDefined();
+
+    // Verify baseline SQL migration INSERT contains CompanyID, JoinDate, and CreatedAt
+    const baselineSqlPath = path.join(migrDirA, 'V202609020000__Baseline_enterprise.sql');
+    const baselineSql = await fs.readFile(baselineSqlPath, 'utf8');
+    const sarahInsertLine = baselineSql.split('\n').find((l) => l.includes('sarah.connor@acme.example.com'));
+    expect(sarahInsertLine).toBeDefined();
+    expect(baselineSql).toContain('[CompanyID]');
+    expect(baselineSql).toContain('[JoinDate]');
+    expect(baselineSql).toContain('[CreatedAt]');
+  });
+
+  it('R5-3: startCycle 2015 unrolls from 2015 across multi-cycle history', async () => {
+    const tempProjDir = path.join(tempDirA, 'proj-2015');
+    await fs.cp(enterpriseProjectPath, tempProjDir, { recursive: true });
+
+    // Update manifest startCycle to 2015
+    const projJsonPath = path.join(tempProjDir, 'project.json');
+    const projManifest = JSON.parse(await fs.readFile(projJsonPath, 'utf8'));
+    projManifest.startCycle = 2015;
+    await fs.writeFile(projJsonPath, JSON.stringify(projManifest, null, 2), 'utf8');
+
+    const testMeta2015 = path.join(tempDirA, 'meta-2015');
+    const testMigr2015 = path.join(tempDirA, 'migr-2015');
+    await executeBuild({
+      project: tempProjDir,
+      seed: '42',
+      output: testMeta2015,
+      migrationsOutput: testMigr2015,
+    });
+
+    // Checkpoint continuity verifies startCycle span and birthCycles span back to 2015
+    const cpRaw = await fs.readFile(path.join(testMeta2015, 'checkpoint.json'), 'utf8');
+    const checkpoint = JSON.parse(cpRaw);
+    const birthCycles = Object.values(checkpoint.continuity.birthCycles as Record<string, number>);
+    expect(birthCycles.some((c) => c === 2015)).toBe(true);
+
+    const report = await executeValidate({
+      project: tempProjDir,
+      data: testMeta2015,
+    });
+    expect(report.passed).toBe(true);
+  });
+
+  it('R5-4: corrupt checkpoint.json throws naming the file, and corrupt entity file throws leaving metadata untouched', async () => {
+    const corruptTestDir = path.join(tempDirA, 'corrupt-test');
+    const corruptMigrDir = path.join(tempDirA, 'corrupt-test-migr');
+    await fs.cp(metaDirA, corruptTestDir, { recursive: true });
+    await fs.mkdir(corruptMigrDir, { recursive: true });
+
+    // 1. Corrupt checkpoint.json throws naming the file
+    const cpPath = path.join(corruptTestDir, 'checkpoint.json');
+    await fs.writeFile(cpPath, '{ "broken": syntax error', 'utf8');
+
+    await expect(
+      executeAccumulate({
+        project: enterpriseProjectPath,
+        priorState: corruptTestDir,
+        output: corruptTestDir,
+        migrationsOutput: corruptMigrDir,
+        weeks: '1',
+      })
+    ).rejects.toThrow(/checkpoint\.json/);
+
+    // Restore valid checkpoint
+    await fs.copyFile(path.join(metaDirA, 'checkpoint.json'), cpPath);
+
+    // 2. Corrupt entity file throws naming the file and leaves metadata untouched
+    const memberPath = path.join(corruptTestDir, 'core', 'Member.json');
+    await fs.writeFile(memberPath, '[ { "broken": json', 'utf8');
+
+    // Snapshot directory state before execution
+    const filesBefore = await getAllFilesRecursively(corruptTestDir);
+    const hashesBefore: Record<string, string> = {};
+    for (const f of filesBefore) {
+      hashesBefore[f] = await computeFileSha256(f);
+    }
+
+    await expect(
+      executeAccumulate({
+        project: enterpriseProjectPath,
+        priorState: corruptTestDir,
+        output: corruptTestDir,
+        migrationsOutput: corruptMigrDir,
+        weeks: '1',
+      })
+    ).rejects.toThrow(/Member\.json/);
+
+    // Verify metadata directory files are untouched (exact byte hashes preserved)
+    const filesAfter = await getAllFilesRecursively(corruptTestDir);
+    expect(filesAfter).toEqual(filesBefore);
+    for (const f of filesAfter) {
+      const hashAfter = await computeFileSha256(f);
+      expect(hashAfter).toBe(hashesBefore[f]);
+    }
   });
 });
 

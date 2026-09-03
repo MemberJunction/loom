@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import path from 'path';
 import fs from 'fs/promises';
-import { createRng, IdentityService } from '@memberjunction/loom-engine';
-import type { DomainConfig } from '@memberjunction/loom-contracts';
+import { createRng, IdentityService, Validator } from '@memberjunction/loom-engine';
+import { DomainConfigSchema, type DomainConfig } from '@memberjunction/loom-contracts';
 import { generateEntityRecord } from '../src/generation.js';
 
 describe('CLI Record Generator: generateEntityRecord', () => {
@@ -106,5 +106,85 @@ describe('CLI Record Generator: generateEntityRecord', () => {
         identityService,
       })
     ).toThrow(/No parent records available for foreign key Member\.CompanyID -> Company/);
+  });
+
+  it('N2 round-trip: generation and validation resolve the same column on a domain with an unnamed foreign key', () => {
+    const rawDomain = {
+      name: 'unnamed-fk-domain',
+      namespace: 'b1e4c4d5-8f6a-4d2b-9e3a-7a5c8d1f2e34',
+      packs: { core: { name: 'core' } },
+      entities: {
+        Parent: {
+          name: 'Parent',
+          targetTable: 'Parent',
+          schema: 'dbo',
+          pack: 'core',
+          businessKey: ['Code'],
+          fields: {
+            ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+            Code: { name: 'Code', type: 'string' },
+          },
+        },
+        Child: {
+          name: 'Child',
+          targetTable: 'Child',
+          schema: 'dbo',
+          pack: 'core',
+          businessKey: ['Code'],
+          fields: {
+            ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+            Code: { name: 'Code', type: 'string' },
+            ParentID: { name: 'ParentID', type: 'uuid' },
+          },
+          foreignKeys: {
+            ParentID: {
+              targetEntity: 'Parent',
+              targetField: 'ID',
+              cardinality: 'many-to-one',
+            },
+          },
+        },
+      },
+    };
+
+    const parsedDomain = DomainConfigSchema.parse(rawDomain);
+    const rng = createRng(42);
+    const identityService = new IdentityService();
+    identityService.RegisterNamespace(parsedDomain.name, parsedDomain.namespace);
+
+    // 1. Generate parent row
+    const parentRow = generateEntityRecord({
+      domain: parsedDomain,
+      entity: 'Parent',
+      i: 1,
+      parentPool: {},
+      rng,
+      identityService,
+    });
+
+    // 2. Generate child row with parent in parentPool
+    const childRow = generateEntityRecord({
+      domain: parsedDomain,
+      entity: 'Child',
+      i: 1,
+      parentPool: { Parent: [parentRow] },
+      rng,
+      identityService,
+    });
+
+    // Generation must have populated Child.ParentID matching Parent.ID
+    expect(childRow['ParentID']).toBe(parentRow['ID']);
+
+    // 3. Validator must validate the relationship without error
+    const validator = new Validator();
+    const report = validator.Validate(parsedDomain, {
+      Parent: [parentRow],
+      Child: [childRow],
+    });
+
+    expect(report.passed).toBe(true);
+    expect(
+      report.gates.some((g) => g.name.includes('FK Closure: Child.ParentID -> Parent.ID') && g.passed)
+    ).toBe(true);
   });
 });

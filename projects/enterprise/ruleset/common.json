@@ -5,7 +5,21 @@
   "params": {
     "baseRenewalTarget": 0.80,
     "autoRenewTarget": 0.70,
-    "enterpriseTierTarget": 0.30
+    "enterpriseTierTarget": 0.30,
+    "volume_Company": 10,
+    "volume_Product": 10,
+    "volume_Member": 250,
+    "volume_Subscription": 250,
+    "volume_OrderHeader": 20,
+    "volume_OrderLine": 20,
+    "volume_Payment": 20,
+    "intake_Company": 2,
+    "intake_Product": 2,
+    "intake_Member": 2,
+    "intake_Subscription": 2,
+    "intake_OrderHeader": 2,
+    "intake_OrderLine": 2,
+    "intake_Payment": 2
   },
   "effects": {
     "factor-membership-renewal": {
@@ -22,9 +36,18 @@
         "from": "self",
         "where": {
           "Status": "Active"
+        },
+        "otherwise": {
+          "Status": "Lapsed"
         }
       },
-      "arrows": {}
+      "arrows": {
+        "theta": {
+          "dial": "theta",
+          "beta": 1.2,
+          "description": "High engagement increases renewal probability"
+        }
+      }
     },
     "factor-subscription-autorenew": {
       "id": "factor-subscription-autorenew",
@@ -42,7 +65,13 @@
           "AutoRenew": true
         }
       },
-      "arrows": {}
+      "arrows": {
+        "phi": {
+          "dial": "phi",
+          "beta": 0.8,
+          "description": "Affluence increases auto-renewal"
+        }
+      }
     },
     "factor-enterprise-tier": {
       "id": "factor-enterprise-tier",
@@ -58,6 +87,9 @@
         "from": "self",
         "where": {
           "Tier": "Enterprise"
+        },
+        "otherwise": {
+          "Tier": "Standard"
         }
       },
       "arrows": {}

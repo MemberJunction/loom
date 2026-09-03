@@ -144,4 +144,52 @@ describe('Validator', () => {
     expect(factorGate?.passed).toBe(false);
     expect(factorGate?.actual).toBe(0.5);
   });
+
+  it('Gate 0: verifies hero field, feature, and outcome pins (pass and fail)', () => {
+    const factor: FactorContract = {
+      id: 'factor-status',
+      effect: 'Person',
+      target: 0.8,
+      tolerance: 0.2,
+      evidence: { source: 'test', confidence: 'high' },
+      outcome: { from: 'self', where: { Status: 'Active' } },
+      arrows: {},
+    };
+
+    const goodHero = {
+      heroKey: 'hero-1',
+      entity: 'Person',
+      businessKeys: { ID: 'p-hero' },
+      fixedFields: { Status: 'Active' },
+      birthCycle: 2021,
+      latentDials: {},
+      ladderEntries: [],
+      eras: [],
+      pins: [
+        { kind: 'field' as const, field: 'Status', op: 'eq' as const, value: 'Active' },
+        { kind: 'outcome' as const, factor: 'factor-status', cycle: 2021, value: true },
+      ],
+    };
+
+    const goodData = {
+      Organization: [],
+      Person: [{ ID: 'p-hero', Status: 'Active' }],
+    };
+
+    const goodReport = validator.Validate(domain, goodData, [factor], [goodHero]);
+    const goodHeroGate = goodReport.gates.find((g) => g.name.includes('Gate 0'));
+    expect(goodHeroGate).toBeDefined();
+    expect(goodHeroGate?.passed).toBe(true);
+
+    const badData = {
+      Organization: [],
+      Person: [{ ID: 'p-hero', Status: 'Inactive' }],
+    };
+
+    const badReport = validator.Validate(domain, badData, [factor], [goodHero]);
+    const badHeroGate = badReport.gates.find((g) => g.name.includes('Gate 0'));
+    expect(badHeroGate).toBeDefined();
+    expect(badHeroGate?.passed).toBe(false);
+    expect(badHeroGate?.message).toContain('failed');
+  });
 });

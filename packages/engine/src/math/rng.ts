@@ -92,6 +92,11 @@ export class RngStream {
     }
     return copy;
   }
+
+  /** Derives an isolated child named stream */
+  public substream(streamKey: string): RngStream {
+    return new RngStream(this.state, streamKey);
+  }
 }
 
 /** 32-bit FNV-1a hash */

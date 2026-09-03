@@ -1,0 +1,50 @@
+{
+  "$schema": "https://memberjunction.org/schemas/loom/motifs.v1.json",
+  "motifs": [
+    {
+      "motifKey": "enterprise-expansion-track",
+      "targetEntity": "Member",
+      "quota": { "mode": "count", "value": 16 },
+      "birthCycles": [2021, 2022],
+      "latentConstraints": {
+        "theta": { "min": 1.2, "max": 2.2 },
+        "phi": { "min": 0.2, "max": 1.5 }
+      },
+      "ladderProgression": {
+        "ladderKey": "subscription-status-ladder",
+        "initialState": "Trial"
+      }
+    },
+    {
+      "motifKey": "high-volume-buyer-trajectory",
+      "targetEntity": "Member",
+      "quota": { "mode": "percentage", "value": 0.05, "rounding": "round" },
+      "latentTrajectory": {
+        "dial": "theta",
+        "deltaPerCycle": 0.35
+      },
+      "childRates": [
+        {
+          "entity": "OrderHeader",
+          "perCycle": { "min": 2, "max": 6 }
+        }
+      ]
+    },
+    {
+      "motifKey": "supply-casualty-churn",
+      "targetEntity": "Member",
+      "quota": { "mode": "count", "value": 25 },
+      "eras": ["era-supply-disruption"],
+      "latentTrajectory": {
+        "dial": "theta",
+        "deltaPerCycle": -0.40
+      },
+      "factorOverrides": [
+        {
+          "factor": "factor-membership-renewal",
+          "probability": 0.05
+        }
+      ]
+    }
+  ]
+}

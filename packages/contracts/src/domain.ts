@@ -24,7 +24,7 @@ export const FieldConfigSchema = z.object({
 export type FieldConfig = z.infer<typeof FieldConfigSchema>;
 
 export const ForeignKeyConfigSchema = z.object({
-  fieldName: z.string().min(1),
+  fieldName: z.string().min(1).optional(),
   targetEntity: z.string().min(1),
   targetField: z.string().min(1),
   cardinality: z.enum(['one-to-one', 'many-to-one', 'one-to-many']).default('many-to-one'),
@@ -40,6 +40,18 @@ export const EntityConfigSchema = z.object({
   fields: z.record(z.string(), FieldConfigSchema),
   foreignKeys: z.record(z.string(), ForeignKeyConfigSchema).default({}),
   isImmutable: z.boolean().default(false),
+}).transform((entity) => {
+  const normalizedFKs: Record<string, Omit<ForeignKeyConfig, 'fieldName'> & { fieldName: string }> = {};
+  for (const [fkKey, fk] of Object.entries(entity.foreignKeys)) {
+    normalizedFKs[fkKey] = {
+      ...fk,
+      fieldName: fk.fieldName ?? fkKey,
+    };
+  }
+  return {
+    ...entity,
+    foreignKeys: normalizedFKs,
+  };
 });
 export type EntityConfig = z.infer<typeof EntityConfigSchema>;
 
@@ -82,7 +94,7 @@ export function createDomainConfigFromMJEntities(
 
   for (const entity of entities) {
     const fields: Record<string, FieldConfig> = {};
-    const foreignKeys: Record<string, ForeignKeyConfig> = {};
+    const foreignKeys: EntityConfig['foreignKeys'] = {};
     const candidateBusinessKeys: string[] = [];
 
     for (const field of entity.Fields ?? []) {

@@ -8,7 +8,10 @@ export const ProjectManifestSchema = z.object({
   description: z.string().optional(),
   entrypoint: z.string().default('./index.ts'),
   rulesetPath: z.string().default('./ruleset'),
-  narrativePath: z.string().optional(),
+  banksPath: z.string().optional(),
+  startCycle: z.number().int(),
+  releaseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  cycleUnit: z.enum(['year', 'week', 'month', 'cycle']).default('year'),
   output: z.object({
     metadataDir: z.string().default('./metadata'),
     migrationsDir: z.string().default('./migrations'),

@@ -8,6 +8,13 @@ export interface SkywayMigrationOptions {
   description: string;
   domain: DomainConfig;
   data: Record<string, readonly Record<string, unknown>[]>;
+  statusTransitions?: readonly {
+    entity: string;
+    id: string;
+    fromStatus: string;
+    toStatus: string;
+    effectiveDate: string;
+  }[];
   dialect?: 'sqlserver' | 'postgres';
   useSpCreate?: boolean;
 }
@@ -106,6 +113,24 @@ export async function emitSkywayMigration(options: SkywayMigrationOptions): Prom
         // Direct transactional SQL insert
         lines.push(`INSERT INTO ${fullTableName} (${colList}) VALUES (${valList});`);
       }
+    }
+    lines.push(``);
+  }
+
+  // Emit status transitions as updates
+  if (options.statusTransitions && options.statusTransitions.length > 0) {
+    lines.push(`-- Status Transitions`);
+    for (const tr of options.statusTransitions) {
+      const entityCfg = options.domain.entities[tr.entity];
+      if (!entityCfg) continue;
+      const schemaName = entityCfg.schema ?? 'dbo';
+      const tableName = entityCfg.targetTable ?? tr.entity;
+      const fullTableName = isPostgres ? `"${schemaName}"."${tableName}"` : `[${schemaName}].[${tableName}]`;
+      const statusCol = isPostgres ? `"Status"` : `[Status]`;
+      const idCol = isPostgres ? `"ID"` : `[ID]`;
+      const statusVal = formatSqlValue(tr.toStatus, isPostgres);
+      const idVal = formatSqlValue(tr.id, isPostgres);
+      lines.push(`UPDATE ${fullTableName} SET ${statusCol} = ${statusVal} WHERE ${idCol} = ${idVal};`);
     }
     lines.push(``);
   }

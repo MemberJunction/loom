@@ -3,10 +3,22 @@ import * as path from 'node:path';
 import {
   DomainConfigSchema,
   ProjectManifestSchema,
+  RulesetModuleSchema,
+  HeroesManifestSchema,
+  MotifsManifestSchema,
+  LaddersManifestSchema,
+  ErasManifestSchema,
+  validateHeroesAgainstDomain,
+  validateMotifsAgainstDomain,
+  validateLaddersAgainstDomain,
+  validateErasAgainstDomain,
   type DomainConfig,
   type ProjectManifest,
   type RulesetModule,
-  RulesetModuleSchema,
+  type HeroesManifest,
+  type MotifsManifest,
+  type LaddersManifest,
+  type ErasManifest,
 } from '@memberjunction/loom-contracts';
 
 export interface LoadedProject {
@@ -14,6 +26,10 @@ export interface LoadedProject {
   manifest: ProjectManifest;
   domain: DomainConfig;
   rulesetModules: Record<string, RulesetModule>;
+  heroesManifest?: HeroesManifest;
+  motifsManifest?: MotifsManifest;
+  laddersManifest?: LaddersManifest;
+  erasManifest?: ErasManifest;
 }
 
 function isEnoent(err: unknown): boolean {
@@ -23,6 +39,7 @@ function isEnoent(err: unknown): boolean {
 /**
  * Loads and validates a Loom simulation project from disk.
  * Strictly throws on any JSON syntax error or Zod validation failure.
+ * Runs domain schema closure checks on heroes, motifs, ladders, and eras.
  * Only ENOENT (file not found) is permitted to fall through to defaults.
  */
 export async function loadProject(projectPath: string): Promise<LoadedProject> {
@@ -74,8 +91,13 @@ export async function loadProject(projectPath: string): Promise<LoadedProject> {
   }
   const domain = DomainConfigSchema.parse(parsedDomainJson);
 
-  // 3. Load ruleset modules
+  // 3. Load ruleset modules and Plan 02 manifests
   const rulesetModules: Record<string, RulesetModule> = {};
+  let heroesManifest: HeroesManifest | undefined;
+  let motifsManifest: MotifsManifest | undefined;
+  let laddersManifest: LaddersManifest | undefined;
+  let erasManifest: ErasManifest | undefined;
+
   const rulesetDir = path.join(resolvedDir, manifest.rulesetPath);
 
   try {
@@ -88,10 +110,41 @@ export async function loadProject(projectPath: string): Promise<LoadedProject> {
         try {
           moduleJson = JSON.parse(fileContent);
         } catch (jsonErr) {
-          throw new Error(`Invalid JSON in ruleset module '${filePath}': ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`);
+          throw new Error(`Invalid JSON in ruleset file '${filePath}': ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`);
         }
-        const parsed = RulesetModuleSchema.parse(moduleJson);
-        rulesetModules[parsed.name] = parsed;
+
+        if (entry.name === 'heroes.json') {
+          const parsed = HeroesManifestSchema.parse(moduleJson);
+          const valRes = validateHeroesAgainstDomain(parsed, domain);
+          if (!valRes.valid) {
+            throw new Error(`Heroes manifest failed domain validation:\n  ${valRes.errors.join('\n  ')}`);
+          }
+          heroesManifest = parsed;
+        } else if (entry.name === 'motifs.json') {
+          const parsed = MotifsManifestSchema.parse(moduleJson);
+          const valRes = validateMotifsAgainstDomain(parsed, domain);
+          if (!valRes.valid) {
+            throw new Error(`Motifs manifest failed domain validation:\n  ${valRes.errors.join('\n  ')}`);
+          }
+          motifsManifest = parsed;
+        } else if (entry.name === 'ladders.json') {
+          const parsed = LaddersManifestSchema.parse(moduleJson);
+          const valRes = validateLaddersAgainstDomain(parsed, domain);
+          if (!valRes.valid) {
+            throw new Error(`Ladders manifest failed domain validation:\n  ${valRes.errors.join('\n  ')}`);
+          }
+          laddersManifest = parsed;
+        } else if (entry.name === 'eras.json') {
+          const parsed = ErasManifestSchema.parse(moduleJson);
+          const valRes = validateErasAgainstDomain(parsed, domain);
+          if (!valRes.valid) {
+            throw new Error(`Eras manifest failed domain validation:\n  ${valRes.errors.join('\n  ')}`);
+          }
+          erasManifest = parsed;
+        } else {
+          const parsed = RulesetModuleSchema.parse(moduleJson);
+          rulesetModules[parsed.name] = parsed;
+        }
       }
     }
   } catch (err) {
@@ -114,7 +167,6 @@ export async function loadProject(projectPath: string): Promise<LoadedProject> {
       if (!isEnoent(singleErr)) {
         throw singleErr;
       }
-      // Allowed to have empty ruleset if neither exists
     }
   }
 
@@ -123,5 +175,9 @@ export async function loadProject(projectPath: string): Promise<LoadedProject> {
     manifest,
     domain,
     rulesetModules,
+    heroesManifest,
+    motifsManifest,
+    laddersManifest,
+    erasManifest,
   };
 }

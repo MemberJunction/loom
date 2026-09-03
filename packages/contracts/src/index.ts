@@ -3,3 +3,8 @@ export * from './factors.js';
 export * from './ruleset.js';
 export * from './state.js';
 export * from './manifest.js';
+export * from './heroes.js';
+export * from './motifs.js';
+export * from './ladders.js';
+export * from './eras.js';
+export * from './validation.js';

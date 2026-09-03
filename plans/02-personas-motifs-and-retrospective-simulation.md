@@ -77,10 +77,14 @@ To guarantee compliance with the Enterprise Test, all examples below are written
 ### 3.1 Hero Personas Contract (`heroes.json`)
 Heroes specify their entity, business keys, fixed fields, birth cycle, and checkable `pins`. 
 
+**Conditioning vs. Constraint Semantics (L3)**:
+- **Conditioning**: Outcome pins condition the latent state during retrospective simulation to guarantee consistent demo facts for hero records without relying on LLM authoring iterations; the emitted value is drawn and Gate 0 verifies it.
+- **Empirical Gate 0 Verification**: During `loom validate`, Gate 0 verifies that the emitted dataset carries all pinned facts (catching emitter bugs, regressions, or pipeline mismatches). Field and feature pins are verified against realized records using `ValidateFieldPins` and `ValidateFeaturePins` / `compileRawFeature` without numeric coercion.
+
 Pins support three kinds:
 1. `kind: "field"`: Single field equality/comparison on the entity.
 2. `kind: "outcome"`: Asserting the boolean result of a named factor contract in a cycle.
-3. `kind: "feature"`: **Reuses Loom's `FeatureQuerySchema`** (`from`, `path`, `where`, `field`, `aggregation: count|sum|avg|min|max|exists`) evaluated via `compileFeature`. Supports operators: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `exists`, and `withinCyclesOfAsOf`.
+3. `kind: "feature"`: **Reuses Loom's `FeatureQuerySchema`** (`from`, `path`, `where`, `field`, `aggregation: count|sum|avg|min|max|exists`) evaluated via `compileFeature`. Supports operators: `eq`, `ne`, `neq`, `gt`, `gte`, `lt`, `lte`, `in`, `exists`, and `withinCyclesOfAsOf`.
 
 ```json
 {
@@ -407,10 +411,16 @@ To preserve focus on delivering the core metadata contracts and retrospective si
 
 ---
 
-### Implementation Phases (Roadmap Plan 02)
-- **Phase 02.1**: Zod metadata schemas in `@memberjunction/loom-contracts` (`heroes.ts`, `motifs.ts`, `ladders.ts`, `eras.ts`).
-- **Phase 02.2**: Engine execution modules (`HeroInjector`, `MotifSampler`, `StateLadderEngine`, `RetrospectiveUnroller`).
-- **Phase 02.3**: Validation engine integration (`loom validate` Gate 0, Gate 2, Gate 3, Gate 4, Gate 7).
-- **Phase 02.4**: Enterprise testbed expansion (`projects/enterprise` hero, motif, ladder integration test).
-- **Phase 02.5**: Standalone authoring tooling package (`@memberjunction/loom-author` with `loom-author suggest`).
-- **Phase 02.6**: Downstream integration and verification in `MemberJunction/more-cheese`.
+### Implementation Phases & Task/Gate Mapping (Plan 02)
+
+| Phase / Task | Finding Resolved | Scope & Deliverables | Verification Gate | PR |
+|---|---|---|---|---|
+| **Phase 02.1: Strict Schemas & Domain Validation** | L4a, N1, N2, N9 | `.strict()` on all Zod schemas (`heroes.ts`, `motifs.ts`, `ladders.ts`, `eras.ts`). Authored `validate*AgainstDomain` functions reporting unknown `entity.field` by name. Supported `ne` and `neq` (N1). Normalizes `fieldName = fieldName ?? fkKey` (N2). Percentage quotas as fraction $\in [0, 1]$. Dial arrows with strict union `DialArrowSchema \| FeatureArrowSchema` (N9). | Gate 0 / L4a suite: rejects unexpected keys, validates field existence, N9 dial arrow test. | `MemberJunction/loom#6` |
+| **Phase 02.2: Unified Factor Engine & Retrospective Simulation** | L2, L3, L4b, L7, N3, R4-1, R3-2 | Composed `RetrospectiveUnroller` with `FactorEngine` profiles and `calibrateIntercept`. Absolute cycle convention (`[2021..2026]`). Scripted hero ladder transitions (`ForceTransition`/`ExitLadder`). Era conditioning on motif factor overrides. Single unified world unroller with `DomainConfig` foreignKey closure (R4-1). Hero `baseRow` overlay populating all schema columns (R3-2). Cites empirical measurements: at $N = 400$, $\beta = 1.2$ recovered within $\pm 0.08$; at $N = 5000$, $\beta = 0.50$ recovered at $0.485$ ($\Delta = 0.015 \le 0.15$). Factor gate $N$ floor established at $N \ge 250$ in enterprise simulation. | Gate 4: $\beta$ recovery $\pm 0.15$ at $N \ge 5000$. 400-person cohort test with $\beta = 6.0$. Invariant 3 byte-compare idempotency. | `MemberJunction/loom#6` |
+| **Phase 02.3: CLI Generation Wiring & Continuity** | L1, R3-4, R5-4 | `loom build` and `loom accumulate` run generation through `FactorEngine` + `RetrospectiveUnroller` + ruleset volumes. Continuity populated and asserted non-empty. Strict file reading throwing on corrupt checkpoint/metadata files with ENOENT-vs-parse discrimination (R5-4). Delta migrations emit transactional SQL `UPDATE`s for status transitions. | `integration-enterprise.test.ts`: non-empty continuity, `UPDATE` statements in delta migrations, removing/altering factor alters distribution and fails gate. | `MemberJunction/loom#6` |
+| **Phase 02.4: Validator Gate 0 & Empirical Factor Tolerance** | L3, L5, R3-1, R5-1, R6-3 | `Validator.Validate` implements Gate 0 evaluating all three pin kinds (field, outcome, feature via `compileRawFeature` without numeric coercion) per hero per pin. `executeValidate` in CLI passes loaded heroes and rejects empty datasets. Hero child feature pins generically conditioned in `build.ts` (R5-1). Factor tolerance reverted to 0.10 with $N \ge 250$ (R6-3). | `validator.test.ts`, `integration-enterprise.test.ts`: Gate 0 pass/fail tests, factor tolerance breach checks. | `MemberJunction/loom#6` |
+| **Phase 02.5: Enterprise Fixtures & Dynamic Domain Vocabulary Gate** | L5, R3-3, R5-2, Gate 6 | Committed §3 enterprise fixtures (`heroes.json`, `motifs.json`, `ladders.json`, `eras.json`) under `projects/enterprise/ruleset/`. Added dynamic `scripts/check-domain-vocabulary.mjs` deriving domain words from ruleset files and checking whole-word boundaries with self-test (R5-2). | Gate 6: Enterprise 7-entity, 4-tier simulation passing 19 gates and 12-cycle accumulation. CI domain vocabulary grep passing with 'Cancelled' proof test. | `MemberJunction/loom#6` |
+| **Phase 02.6: Flagship Consumer Schema & Conformance** | M1, M2, M5, R2-H1, R2-L1 | Real schema fields and business keys matching committed metadata in `more-cheese/data/domain.json`. Role catalog vocabulary (`Member`, `Vice Chair`, `Chair`) in ladders. Elena 2-term ladder match and Jamie null title match. Acceptance verified via `validate-loom-data.mjs` running against real Loom contracts with mutation testing. | `more-cheese#21` acceptance: `check-metadata-closure.mjs` (0 orphans across 177,518 FKs) + `validate-loom-data.mjs` mutation tests passing. | `MemberJunction/more-cheese#21` |
+| **Phase 02.7: Multi-Cycle Child Row Generation from Motifs & Ladders (Deferred)** | Follow-up | Generate discrete child rows per cycle from `motif.childRates` and ladder bindings (`childRates[].fixedFields`). Enables child-aggregation feature pins across multi-cycle history. | Integration test verifying child row counts match rates per cycle. | Follow-up PR |
+| **Phase 02.8: Single Cycle Unit & Manifest Typed Fields** | N6, R5-3, R5-5 | Single `cycleUnit` declared in `ProjectManifestSchema` (`year`, `week`, `month`, `cycle`) and used consistently by `build` and `accumulate` (N6, R5-5). Ladders advance only when whole cycle elapsed; `cyclesSinceBirth` calculated from `birthCycle`. `startCycle` and `releaseDate` typed required fields in manifest; all `as Record<string, unknown>` casts eliminated (R5-3). | `integration-enterprise.test.ts`: 12-cycle test asserts 5 status transitions matching `durationCycles` prediction; `startCycle: 2015` unrolls from 2015. | `MemberJunction/loom#6` |
+
