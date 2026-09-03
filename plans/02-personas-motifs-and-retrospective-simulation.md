@@ -3,7 +3,7 @@
 **Universal Metadata-Driven World Modeling for MemberJunction**
 
 Version 2.0 · September 2026  
-Status: Proposed (Round 2 Review Incorporated)  
+Status: Proposed (Round 3 Review Incorporated)  
 Target Repository: `MemberJunction/loom`  
 Flagship Consumer: `MemberJunction/more-cheese`  
 Companion PR: [MemberJunction/more-cheese#20](https://github.com/MemberJunction/more-cheese/pull/20)
@@ -23,13 +23,14 @@ Loom must **never** hardcode domain vocabulary ("Board of Directors", "Cheesemak
 > **The Enterprise Test**: Every contract key defined in this plan must be authorable by `projects/enterprise` (`Company`, `Product`, `Member`, `Subscription`, `OrderHeader`, `OrderLine`, `Payment`) without renaming a single key. Domain vocabulary appears strictly as **values** in a consumer's authored JSON, never as **keys** in Loom's Zod schemas.
 
 ### 1.3 Loom Engine Invariants
-The simulation engine strictly adheres to the canonical invariant list defined in the [Loom Architecture Roadmap](loom-architecture-and-implementation-plan.md):
+The simulation engine strictly adheres to the canonical invariant list defined in Section 1.4 of the [Loom Architecture Roadmap](loom-architecture-and-implementation-plan.md):
 - **Invariant 1 (Deterministic Identity)**: Primary keys are derived deterministically via `IdentityService.MintId(domain, entity, businessKeys)` (uuidv5). Identical business key values yield the exact same UUID across all cycles and seeds.
 - **Invariant 2 (No Unseeded Dice)**: Generation is 100% deterministic and reproducible. Personal pseudo-random streams are keyed via `seed:entity:id:cycle`.
 - **Invariant 3 (No Index Overwriting)**: Heroes are **additive** records minted from business keys, never index overwrites of crowd slots. Adding or removing a hero changes no other generated record in the dataset.
 - **Invariant 4 (The LLM Boundary)**: Runtime simulation is strictly zero-LLM math. LLM capabilities are confined entirely to an authoring-time companion package (`@memberjunction/loom-author`) that outputs validated JSON metadata.
 - **Invariant 5 (Deep Immutability)**: Emitted transaction history from earlier cycles is never mutated in subsequent cycles.
 - **Invariant 6 (Factor Recovery)**: Statistical logistic regression over emitted crowd data recovers authored $\beta$ weights within defined tolerance bounds ($\pm 0.15$ at $N \ge 5000$).
+- **Invariant 7 (Topological & Referential Closure)**: Emitted datasets and Skyway migrations strictly preserve foreign key closure in topological DAG dependency order with zero orphaned records.
 
 ---
 
@@ -104,16 +105,10 @@ Pins support three kinds:
       },
       "ladderEntries": [
         {
-          "ladderKey": "subscription-tier-ladder",
-          "state": "Standard",
+          "ladderKey": "subscription-status-ladder",
+          "state": "Active",
           "enterCycle": 2021,
-          "exitCycle": 2023
-        },
-        {
-          "ladderKey": "subscription-tier-ladder",
-          "state": "Enterprise",
-          "enterCycle": 2023,
-          "exitCycle": 2026
+          "exitCycle": 2025
         }
       ],
       "pins": [
@@ -133,7 +128,7 @@ Pins support three kinds:
           "kind": "feature",
           "feature": {
             "from": "OrderHeader",
-            "where": { "Cycle": 2025 },
+            "where": { "Status": "Completed" },
             "aggregation": "count"
           },
           "op": "gte",
@@ -158,7 +153,7 @@ Pins support three kinds:
         "theta": 0.2,
         "phi": -0.8
       },
-      "eras": ["era-recession-2023"],
+      "eras": ["era-supply-disruption"],
       "pins": [
         {
           "kind": "outcome",
@@ -198,8 +193,8 @@ Motifs specify quotas, birth cycles, latent trajectories (positive or negative w
         "phi": { "min": 0.2, "max": 1.5 }
       },
       "ladderProgression": {
-        "ladderKey": "subscription-tier-ladder",
-        "initialState": "Standard"
+        "ladderKey": "subscription-status-ladder",
+        "initialState": "Trial"
       }
     },
     {
@@ -218,10 +213,10 @@ Motifs specify quotas, birth cycles, latent trajectories (positive or negative w
       ]
     },
     {
-      "motifKey": "quiet-churn-casualty",
+      "motifKey": "supply-casualty-churn",
       "targetEntity": "Member",
       "quota": { "mode": "count", "value": 25 },
-      "eras": ["era-recession-2023"],
+      "eras": ["era-supply-disruption"],
       "latentTrajectory": {
         "dial": "theta",
         "deltaPerCycle": -0.40
@@ -238,21 +233,21 @@ Motifs specify quotas, birth cycles, latent trajectories (positive or negative w
 ```
 
 ### 3.3 State Progression Ladders (`ladders.json`)
-Ladders model Markov state machines. They bind either directly to an entity field (e.g. `Tier` or `Status`) or to child-entity records (e.g. `Subscription` or `MembershipTerm`):
+Ladders model Markov state machines. They bind either directly to an entity field (e.g. `Company.Tier` or `Member.Status`) or to child-entity records (e.g. `Subscription.Status`):
+- `cohortShare`: The fraction (0.0 to 1.0) of eligible cohort members who enter the initial state of the ladder upon meeting prerequisites.
 
 ```json
 {
   "$schema": "https://memberjunction.org/schemas/loom/ladders.v1.json",
   "ladders": [
     {
-      "ladderKey": "subscription-tier-ladder",
+      "ladderKey": "subscription-status-ladder",
       "entity": "Member",
       "binding": {
         "mode": "childEntity",
         "childEntity": "Subscription",
         "foreignKey": "MemberID",
-        "stateField": "Tier",
-        "termField": "Cycle"
+        "stateField": "Status"
       },
       "cohortShare": 0.5,
       "states": [
@@ -268,7 +263,7 @@ Ladders model Markov state machines. They bind either directly to an entity fiel
           ]
         },
         {
-          "name": "Standard",
+          "name": "Active",
           "capacity": 100,
           "durationCycles": 4,
           "prerequisites": {
@@ -276,22 +271,32 @@ Ladders model Markov state machines. They bind either directly to an entity fiel
             "dials": { "theta": { "min": 0.5 } }
           },
           "effects": [
-            { "factor": "factor-membership-renewal", "beta": 1.5 }
+            { "factor": "factor-membership-renewal", "beta": 2.5 }
           ]
         },
         {
-          "name": "Enterprise",
+          "name": "PastDue",
           "capacity": 20,
-          "durationCycles": 4,
+          "durationCycles": 1,
           "prerequisites": {
-            "priorState": "Standard",
-            "dials": { "theta": { "min": 1.2 } }
+            "priorState": "Active"
           },
           "effects": [
-            { "factor": "factor-membership-renewal", "beta": 3.5 }
+            { "factor": "factor-membership-renewal", "beta": -2.0 }
           ],
           "exitEffects": [
-            { "dial": "theta", "delta": 0.3 }
+            { "dial": "theta", "delta": -0.3 }
+          ]
+        },
+        {
+          "name": "Cancelled",
+          "capacity": 500,
+          "durationCycles": 10,
+          "prerequisites": {
+            "priorState": "PastDue"
+          },
+          "effects": [
+            { "factor": "factor-membership-renewal", "beta": -4.0 }
           ]
         }
       ]
