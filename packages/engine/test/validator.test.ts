@@ -192,4 +192,160 @@ describe('Validator', () => {
     expect(badHeroGate?.passed).toBe(false);
     expect(badHeroGate?.message).toContain('failed');
   });
+
+  it('validates @lookup expressions and passes on clean references', () => {
+    const data = {
+      Organization: [{ ID: 'org-1' }],
+      Person: [
+        {
+          ID: 'p-1',
+          RoleRef: '@lookup:Committees: Roles.Name=Chair',
+          EntityRef: '@lookup:MJ: Entities.Name=MJ_BizApps_Common: People',
+          UserRef: '@lookup:MJ: Users.Email=marcus.oduya@morecheesefederation.example',
+        },
+      ],
+    };
+
+    const report = validator.Validate(domain, data);
+    const lookupGate = report.gates.find((g) => g.name.includes('Lookup Resolution'));
+    expect(lookupGate).toBeDefined();
+    expect(lookupGate?.passed).toBe(true);
+    expect(lookupGate?.populationCount).toBe(3);
+  });
+
+  it('fails @lookup gate when expression is invalid or points to non-existent record (mutation test)', () => {
+    const data = {
+      Organization: [{ ID: 'org-1' }],
+      Person: [
+        {
+          ID: 'p-1',
+          BadRef: '@lookup:NonExistentEntity.Name=Bogus',
+        },
+      ],
+    };
+
+    const report = validator.Validate(domain, data);
+    const lookupGate = report.gates.find((g) => g.name.includes('Lookup Resolution'));
+    expect(lookupGate).toBeDefined();
+    expect(lookupGate?.passed).toBe(false);
+    expect(lookupGate?.actual).toBe(1);
+    expect(lookupGate?.message).toContain('unresolved');
+  });
+
+  it('evaluates committee comments attribution: passes for members, fails for non-members (mutation test)', () => {
+    const committeeDomain: DomainConfig = {
+      ...domain,
+      entities: {
+        ...domain.entities,
+        Committee: { name: 'Committee', targetTable: 'c', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true } }, foreignKeys: {}, isImmutable: false },
+        Meeting: { name: 'Meeting', targetTable: 'm', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true }, CommitteeID: { name: 'CommitteeID', type: 'uuid' } }, foreignKeys: {}, isImmutable: false },
+        AgendaItem: { name: 'AgendaItem', targetTable: 'a', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true }, MeetingID: { name: 'MeetingID', type: 'uuid' }, Title: { name: 'Title', type: 'string' } }, foreignKeys: {}, isImmutable: false },
+        CommitteeMembership: { name: 'CommitteeMembership', targetTable: 'cm', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true }, CommitteeID: { name: 'CommitteeID', type: 'uuid' }, PersonID: { name: 'PersonID', type: 'uuid' } }, foreignKeys: {}, isImmutable: false },
+        Comment: { name: 'Comment', targetTable: 'cmt', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true }, AgendaItemID: { name: 'AgendaItemID', type: 'uuid' }, PersonID: { name: 'PersonID', type: 'uuid' } }, foreignKeys: {}, isImmutable: false },
+      },
+    };
+
+    const validData = {
+      Organization: [],
+      Person: [{ ID: 'p-member' }, { ID: 'p-outsider' }],
+      Committee: [{ ID: 'comm-1' }],
+      Meeting: [{ ID: 'meet-1', CommitteeID: 'comm-1' }],
+      AgendaItem: [{ ID: 'ai-1', MeetingID: 'meet-1', Title: 'Annual Audit' }],
+      CommitteeMembership: [{ ID: 'cm-1', CommitteeID: 'comm-1', PersonID: 'p-member' }],
+      Comment: [{ ID: 'cmt-1', AgendaItemID: 'ai-1', PersonID: 'p-member' }],
+    };
+
+    const passReport = validator.Validate(committeeDomain, validData);
+    const commGate = passReport.gates.find((g) => g.name.includes('Committee Comments Membership Attribution'));
+    expect(commGate).toBeDefined();
+    expect(commGate?.passed).toBe(true);
+
+    // Mutate comment author to outsider
+    const mutatedData = {
+      ...validData,
+      Comment: [{ ID: 'cmt-1', AgendaItemID: 'ai-1', PersonID: 'p-outsider' }],
+    };
+    const failReport = validator.Validate(committeeDomain, mutatedData);
+    const failCommGate = failReport.gates.find((g) => g.name.includes('Committee Comments Membership Attribution'));
+    expect(failCommGate).toBeDefined();
+    expect(failCommGate?.passed).toBe(false);
+    expect(failCommGate?.actual).toBe(1);
+  });
+
+  it('evaluates member activities tenure: passes within window, fails outside (mutation test)', () => {
+    const tenureDomain: DomainConfig = {
+      ...domain,
+      entities: {
+        ...domain.entities,
+        MembershipPeriod: { name: 'MembershipPeriod', targetTable: 'mp', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true }, PersonID: { name: 'PersonID', type: 'uuid' }, StartDate: { name: 'StartDate', type: 'date' }, EndDate: { name: 'EndDate', type: 'date' } }, foreignKeys: {}, isImmutable: false },
+        Activity: { name: 'Activity', targetTable: 'act', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true }, PersonID: { name: 'PersonID', type: 'uuid' }, ActivityDate: { name: 'ActivityDate', type: 'date' } }, foreignKeys: {}, isImmutable: false },
+      },
+    };
+
+    const validData = {
+      Organization: [],
+      Person: [{ ID: 'p-1' }],
+      MembershipPeriod: [{ ID: 'mp-1', PersonID: 'p-1', StartDate: '2023-01-01', EndDate: '2023-12-31' }],
+      Activity: [{ ID: 'act-1', PersonID: 'p-1', ActivityDate: '2023-06-15' }],
+    };
+
+    const passReport = validator.Validate(tenureDomain, validData);
+    const tenureGate = passReport.gates.find((g) => g.name.includes('Member Activities Within Tenure'));
+    expect(tenureGate).toBeDefined();
+    expect(tenureGate?.passed).toBe(true);
+
+    // Mutate activity date to outside membership tenure
+    const mutatedData = {
+      ...validData,
+      Activity: [{ ID: 'act-1', PersonID: 'p-1', ActivityDate: '2025-06-15' }],
+    };
+    const failReport = validator.Validate(tenureDomain, mutatedData);
+    const failTenureGate = failReport.gates.find((g) => g.name.includes('Member Activities Within Tenure'));
+    expect(failTenureGate).toBeDefined();
+    expect(failTenureGate?.passed).toBe(false);
+    expect(failTenureGate?.actual).toBe(1);
+  });
+
+  it('evaluates meeting minutes context: passes with date and agenda references, fails on generic boilerplate (mutation test)', () => {
+    const minutesDomain: DomainConfig = {
+      ...domain,
+      entities: {
+        ...domain.entities,
+        Meeting: { name: 'Meeting', targetTable: 'm', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true }, Name: { name: 'Name', type: 'string' }, MeetingDate: { name: 'MeetingDate', type: 'date' } }, foreignKeys: {}, isImmutable: false },
+        AgendaItem: { name: 'AgendaItem', targetTable: 'ai', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true }, MeetingID: { name: 'MeetingID', type: 'uuid' }, Title: { name: 'Title', type: 'string' } }, foreignKeys: {}, isImmutable: false },
+        Minute: { name: 'Minute', targetTable: 'min', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true }, MeetingID: { name: 'MeetingID', type: 'uuid' }, Content: { name: 'Content', type: 'string' } }, foreignKeys: {}, isImmutable: false },
+      },
+    };
+
+    const validData = {
+      Organization: [],
+      Person: [],
+      Meeting: [{ ID: 'meet-1', Name: 'Standards Committee Q2 Meeting', MeetingDate: '2024-04-10' }],
+      AgendaItem: [{ ID: 'ai-1', MeetingID: 'meet-1', Title: 'Raw Milk Standards Review' }],
+      Minute: [{
+        ID: 'min-1',
+        MeetingID: 'meet-1',
+        Content: 'Minutes of Standards Committee Q2 Meeting held on 2024-04-10. Agenda review: Raw Milk Standards Review discussed extensively.',
+      }],
+    };
+
+    const passReport = validator.Validate(minutesDomain, validData);
+    const minGate = passReport.gates.find((g) => g.name.includes('Meeting Minutes Context and Agenda References'));
+    expect(minGate).toBeDefined();
+    expect(minGate?.passed).toBe(true);
+
+    // Mutate minute to generic text lacking meeting context/agenda
+    const mutatedData = {
+      ...validData,
+      Minute: [{
+        ID: 'min-1',
+        MeetingID: 'meet-1',
+        Content: 'Routine discussion held.',
+      }],
+    };
+    const failReport = validator.Validate(minutesDomain, mutatedData);
+    const failMinGate = failReport.gates.find((g) => g.name.includes('Meeting Minutes Context and Agenda References'));
+    expect(failMinGate).toBeDefined();
+    expect(failMinGate?.passed).toBe(false);
+  });
 });

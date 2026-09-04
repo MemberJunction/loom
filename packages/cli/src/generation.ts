@@ -35,8 +35,16 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
     const fkIdx = fkList.findIndex((fk) => fk.fieldName === fieldName);
     if (fkIdx >= 0) {
       const fk = fkList[fkIdx]!;
+      if (fk.lookupPattern) {
+        row[fieldName] = fk.lookupPattern;
+        continue;
+      }
       const targetRows = parentPool[fk.targetEntity];
       if (!targetRows || targetRows.length === 0) {
+        if (fieldCfg.defaultValue !== undefined) {
+          row[fieldName] = fieldCfg.defaultValue;
+          continue;
+        }
         throw new Error(
           `No parent records available for foreign key ${entity}.${fieldName} -> ${fk.targetEntity}`
         );

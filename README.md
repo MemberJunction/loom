@@ -33,7 +33,7 @@ In Loom, observable facts are never generated in isolation. Every row, transacti
 
 ```mermaid
 flowchart TD
-    subgraph Narrative ["1. Narrative Bible (Ground Truth)"]
+    subgraph Narrative ["1. Narrative Ground Truth (Eras & Heroes)"]
         NB["Eras & Macro Events<br/>(Pandemic, Supply Shocks, M&A)"]
         CH["Character Roster & Arcs<br/>(Founders, Leaders, Volunteers)"]
     end
@@ -46,10 +46,9 @@ flowchart TD
     end
 
     subgraph OutputStack ["3. MemberJunction Ecosystem Delivery"]
-        OA["Open App Schemas<br/>(Common, Orders, Accounting, Tasks, etc.)"]
+        OA["Declarative Entity Schemas<br/>(Core, BizApps, Custom Extensions)"]
         SYNC["Metadata Sync JSON<br/>(/metadata/** Tree)"]
         BE["Full BaseEntity Lifecycle<br/>(Hooks, Audits, Embeddings via mj sync push)"]
-        UI["In-App Residue<br/>(Dashboards, Views, Conversations)"]
     end
 
     Narrative --> LoomEngine
@@ -61,8 +60,9 @@ flowchart TD
 ```
 
 ### 1. Narrative-Driven Ground Truth
-Loom follows the **Disney Principle**: the story comes first, and the data is generated *from* it.
-- A versioned narrative bible defines founding stories, leadership eras, historical crises, and character arcs.
+Loom follows the **Disney Principle**: the world is grounded in explicit narrative boundary conditions rather than unseeded dice.
+- Authored era manifests (`eras.json`) define macroeconomic shifts, industry shocks, and temporal multipliers across historical cycles.
+- Authored hero configurations (`heroes.json`) anchor key characters with deterministic business keys, state ladders, and pinned outcomes.
 - The narrative sets the boundary conditions and macroeconomic dials for generation. If the story states that an industry shock crippled wholesale orders while boosting direct-to-consumer sales in 2020, the generated transactional data reflects that exact inflection.
 
 ### 2. First-Class Accumulation (Never Wipe, Always Advance)
@@ -86,20 +86,16 @@ Loom enforces an absolute architectural invariant: **Metadata is the sole, exclu
 - Identical configuration + identical seed = byte-identical output across runs, machines, and architectures.
 - Prior IDs remain permanently stable across accumulation cycles.
 
-### 5. Bidirectional Factor Contracts & Verification
+### 6. Bidirectional Factor Contracts & Verification
 - Causal relationships are declared as factor contracts: `{ effect, feature, evidence }`.
 - **Declaring earns you checks**: during generation, the factor executes forward to draw correlated distributions; during validation, the suite executes backward to verify that the generated data adheres to statistical and referential tolerance bands.
-- 300+ validation gates catch referential closure, demographic alignment, and logical contradictions.
+- Automated validation gates evaluate referential closure, schema constraints, era volume multipliers, hero pins, and factor tolerance bands across the entire generated dataset.
 
-### 6. Native Open App & BizApps Composition
-Loom is designed from the ground up for the [MemberJunction Open App](https://github.com/MemberJunction/MJ/tree/main/packages/OpenApp) architecture:
-- **`bizapps-common`**: Master identity graph (`Person`, `Organization`, `Address`, `ContactMethod`, `Activity`).
-- **`bizapps-orders`**: Commercial billing substrate, product catalog, orders, subscriptions, and dues renewals.
-- **`bizapps-accounting`**: Balanced subsidiary ledger, automated per-line journal entries (`SUM(Debits) === SUM(Credits)`), and ratable revenue recognition.
-- **`bizapps-sales` & `bizapps-contracts`**: Deals, pipelines, Closed Won orchestration, and legal provisions.
-- **`bizapps-tasks` & `bizapps-issues`**: Workflows, approval gates, action items, and support tickets.
-- **`bizapps-secure-messaging`**: Customer portal communications and threaded support dialogues.
-- **`bizapps-sonar`**: Data health scoring, anomaly monitoring, and quality rule evaluation.
+### 7. Schema-Agnostic Open App & Ecosystem Compatibility
+Loom is fully schema-agnostic and generates data for any MemberJunction domain model:
+- Works with any entity shape, primary key type, foreign key relationship, and business key structure.
+- Natively models standard MemberJunction Open App architectures, including core CRM, commerce, accounting, governance, and custom downstream extensions.
+- Enforces strict foreign key closure and topological ordering across all dependent schemas.
 
 ---
 
@@ -114,8 +110,7 @@ loom/
 │   └── agent-skill/      # Autonomous Agent Skill for weekly accumulation and Playwright verification
 ├── projects/
 │   ├── fixture/          # Lightweight CI testbed project (~120 lines, verified every build)
-│   └── [consumers]       # External consumers (e.g. More Cheese) load as standalone projects
-├── docs/                 # Architectural specifications, factor guide, and authoring handbook
+│   └── enterprise/       # Reference enterprise SaaS simulation project
 ├── plans/                # Active implementation briefs and design roadmap
 ├── package.json          # pnpm monorepo workspace configuration
 ├── turbo.json            # Turborepo task pipeline
@@ -135,23 +130,19 @@ loom build --project=projects/enterprise --seed=42 --release=2026-09-02
 # Advance simulation by one cycle (Accumulation mode)
 loom accumulate --project=projects/enterprise --prior-state=./metadata --weeks=1
 
-# Execute 300+ statistical, referential, and factor verification gates
+# Execute statistical, referential, and factor verification gates
 loom validate --project=projects/enterprise
-
-# Inspect causal graph and factor dependencies
-loom inspect factors --project=projects/enterprise
 ```
 
 ---
 
-## 🤖 The Simulation Agent Skill & Visual Invariants
+## 🤖 The Simulation Agent Skill Workflow
 
-Loom includes an autonomous **Agent Skill** designed to run recurring weekly simulation cycles:
-1. **Story Evolution:** Extends the narrative bible and folds in current events.
-2. **Rules Update:** Translates narrative developments into declarative factor configs.
-3. **Accumulation Run:** Invokes `loom accumulate` to generate pure deltas.
-4. **Automated Gates:** Executes deterministic and statistical validation gates.
-5. **Playwright Visual Verification:** Boots the local host stack (`MJAPI` + `MJExplorer`) and drives headless browser sessions to inspect rendered dashboards, verify persona views (CEO, VP Membership), and guarantee zero UI or GraphQL runtime regressions before committing the state.
+Loom's autonomous Agent Skill executes recurring simulation cycles against running hosts:
+1. **Accumulate:** Invokes `loom accumulate` to generate pure deltas from committed prior state.
+2. **Validate:** Executes deterministic referential closure, hero pins, and factor tolerance gates.
+3. **Ingest (`mj sync push`):** Pushes emitted metadata trees through MemberJunction's `BaseEntity` lifecycle.
+4. **Visual Inspection:** Drives headless Playwright browser sessions to inspect rendered views and verify zero UI, GraphQL, or data regressions before merging.
 
 ---
 

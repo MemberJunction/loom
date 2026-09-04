@@ -29,6 +29,7 @@ export const ForeignKeyConfigSchema = z.object({
   targetField: z.string().min(1),
   cardinality: z.enum(['one-to-one', 'many-to-one', 'one-to-many']).default('many-to-one'),
   dependent: z.boolean().default(false),
+  lookupPattern: z.string().optional(),
 });
 export type ForeignKeyConfig = z.infer<typeof ForeignKeyConfigSchema>;
 
@@ -42,6 +43,8 @@ export const EntityConfigSchema = z.object({
   fields: z.record(z.string(), FieldConfigSchema),
   foreignKeys: z.record(z.string(), ForeignKeyConfigSchema).default({}),
   isImmutable: z.boolean().default(false),
+  outputDirectory: z.string().optional(),
+  outputFileName: z.string().optional(),
 }).transform((entity) => {
   const normalizedFKs: Record<string, Omit<ForeignKeyConfig, 'fieldName'> & { fieldName: string }> = {};
   for (const [fkKey, fk] of Object.entries(entity.foreignKeys)) {

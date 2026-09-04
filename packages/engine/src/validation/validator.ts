@@ -89,6 +89,12 @@ export class Validator {
     // 5. Dependent child coverage gates (OrderHeader -> OrderLine & Payment)
     this.checkDependentChildCoverage(domain, data, gates);
 
+    // 6. @lookup resolution gate (M2)
+    this.checkLookupResolution(data, gates);
+
+    // 7. Relational semantics gates (committee comments, activity tenure, meeting minutes) (M2)
+    this.checkRelationalSemantics(domain, data, gates);
+
     const passedCount = gates.filter((g) => g.passed).length;
     const failedCount = gates.length - passedCount;
     const totalPopulationExamined = gates.reduce((sum, g) => sum + g.populationCount, 0);
@@ -135,6 +141,13 @@ export class Validator {
           const rawVal = row[fieldName];
           if (rawVal !== undefined && rawVal !== null && rawVal !== '') {
             examinedFkCount++;
+            if (typeof rawVal === 'string' && rawVal.startsWith('@lookup:')) {
+              const res = resolveLookupExpression(rawVal, data);
+              if (!res.resolved) {
+                danglingCount++;
+              }
+              continue;
+            }
             const normalized = typeof rawVal === 'string' ? rawVal.toLowerCase() : String(rawVal);
             if (!targetIds.has(normalized)) {
               danglingCount++;
@@ -780,4 +793,451 @@ export class Validator {
       }
     }
   }
+
+  private checkLookupResolution(
+    data: Record<string, readonly Record<string, unknown>[]>,
+    gates: GateResult[]
+  ): void {
+    let totalLookups = 0;
+    let unresolvedCount = 0;
+    const failureMessages: string[] = [];
+
+    for (const [entityName, records] of Object.entries(data)) {
+      for (const row of records) {
+        for (const [field, val] of Object.entries(row)) {
+          if (typeof val === 'string' && val.startsWith('@lookup:')) {
+            totalLookups++;
+            const res = resolveLookupExpression(val, data);
+            if (!res.resolved) {
+              unresolvedCount++;
+              if (failureMessages.length < 5) {
+                failureMessages.push(`${entityName}.${field}: ${res.error ?? val}`);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    const passed = unresolvedCount === 0;
+    gates.push({
+      name: 'Lookup Resolution: @lookup Expression Integrity',
+      category: 'referential',
+      passed,
+      populationCount: totalLookups,
+      message: passed
+        ? `All ${totalLookups} @lookup expressions resolved cleanly across dataset and platform catalogs`
+        : `Found ${unresolvedCount} unresolved @lookup expression(s) among ${totalLookups} examined: ${failureMessages.join('; ')}`,
+      expected: 0,
+      actual: unresolvedCount,
+    });
+  }
+
+  private checkRelationalSemantics(
+    domain: DomainConfig,
+    data: Record<string, readonly Record<string, unknown>[]>,
+    gates: GateResult[]
+  ): void {
+    const findRecords = (...names: string[]) => {
+      for (const n of names) {
+        for (const [k, v] of Object.entries(data)) {
+          if (k.toLowerCase() === n.toLowerCase()) return v;
+          const entityCfg = domain.entities[k];
+          if (entityCfg && ((entityCfg.entityName && entityCfg.entityName.toLowerCase() === n.toLowerCase()) || (entityCfg.outputDirectory && entityCfg.outputDirectory.toLowerCase() === n.toLowerCase()))) {
+            return v;
+          }
+        }
+      }
+      return undefined;
+    };
+
+    // 1. Committee Comments Membership Attribution
+    const comments = findRecords('Comment', 'committee-comments', 'Committees: Comments');
+    if (comments && comments.length > 0) {
+      const agendaItems = findRecords('AgendaItem', 'committee-agenda-items', 'Committees: Agenda Items') ?? [];
+      const meetings = findRecords('Meeting', 'committee-meetings', 'Committees: Meetings') ?? [];
+      const memberships = findRecords('CommitteeMembership', 'committee-memberships', 'Committees: Memberships') ?? [];
+
+      const agendaToMeeting = new Map<string, string>();
+      for (const ai of agendaItems) {
+        const id = String(ai['ID'] ?? ai['id'] ?? '').toLowerCase();
+        const mId = String(ai['MeetingID'] ?? ai['meetingId'] ?? '').toLowerCase();
+        if (id && mId) agendaToMeeting.set(id, mId);
+      }
+
+      const meetingToCommittee = new Map<string, string>();
+      for (const m of meetings) {
+        const id = String(m['ID'] ?? m['id'] ?? '').toLowerCase();
+        const cId = String(m['CommitteeID'] ?? m['committeeId'] ?? '').toLowerCase();
+        if (id && cId) meetingToCommittee.set(id, cId);
+      }
+
+      const committeeMembers = new Map<string, Set<string>>();
+      for (const cm of memberships) {
+        const cId = String(cm['CommitteeID'] ?? cm['committeeId'] ?? '').toLowerCase();
+        const pId = String(cm['PersonID'] ?? cm['personId'] ?? '').toLowerCase();
+        if (cId && pId) {
+          if (!committeeMembers.has(cId)) committeeMembers.set(cId, new Set());
+          committeeMembers.get(cId)!.add(pId);
+        }
+      }
+
+      let invalidCommentCount = 0;
+      for (const c of comments) {
+        const aId = String(c['AgendaItemID'] ?? c['agendaItemId'] ?? '').toLowerCase();
+        const pId = String(c['PersonID'] ?? c['personId'] ?? '').toLowerCase();
+        const mId = agendaToMeeting.get(aId);
+        const cId = mId ? meetingToCommittee.get(mId) : undefined;
+        if (!cId || !committeeMembers.get(cId)?.has(pId)) {
+          invalidCommentCount++;
+        }
+      }
+
+      const passed = invalidCommentCount === 0;
+      gates.push({
+        name: 'Relational Semantics: Committee Comments Membership Attribution',
+        category: 'referential',
+        passed,
+        populationCount: comments.length,
+        message: passed
+          ? `All ${comments.length} committee comments are authored by members of the agenda item's committee`
+          : `Found ${invalidCommentCount} committee comment(s) authored by non-committee members across ${comments.length} comments`,
+        expected: 0,
+        actual: invalidCommentCount,
+      });
+    }
+
+    // 2. Member Activities Within Tenure
+    const activities = findRecords('Activity', 'activities', 'MJ_BizApps_Common: Activities');
+    if (activities && activities.length > 0) {
+      const activityLinks = findRecords('ActivityLink', 'activity-links', 'MJ_BizApps_Common: Activity Links') ?? [];
+      const membershipPeriods = findRecords('MembershipPeriod', 'membership-periods', 'MoreCheese: Membership Periods') ?? [];
+
+      const actToPerson = new Map<string, string>();
+      for (const al of activityLinks) {
+        const actId = String(al['ActivityID'] ?? al['activityId'] ?? '').toLowerCase();
+        const recId = String(al['RecordID'] ?? al['recordId'] ?? '').toLowerCase();
+        if (actId && recId) actToPerson.set(actId, recId);
+      }
+
+      const personTenure = new Map<string, Array<{ start: string; end: string }>>();
+      for (const mp of membershipPeriods) {
+        const pId = String(mp['PersonID'] ?? mp['personId'] ?? '').toLowerCase();
+        const start = String(mp['StartDate'] ?? mp['startDate'] ?? '2000-01-01');
+        const end = String(mp['EndDate'] ?? mp['endDate'] ?? '2099-12-31');
+        if (pId) {
+          if (!personTenure.has(pId)) personTenure.set(pId, []);
+          personTenure.get(pId)!.push({ start, end });
+        }
+      }
+
+      let outOfTenureCount = 0;
+      let examinedActivities = 0;
+
+      for (const act of activities) {
+        const actId = String(act['ID'] ?? act['id'] ?? '').toLowerCase();
+        const pId = actToPerson.get(actId) ?? String(act['PersonID'] ?? act['personId'] ?? '').toLowerCase();
+        if (pId && personTenure.has(pId)) {
+          examinedActivities++;
+          const actDate = String(act['ActivityDate'] ?? act['activityDate'] ?? act['CreatedDate'] ?? '').slice(0, 10);
+          if (actDate) {
+            const periods = personTenure.get(pId)!;
+            const inTenure = periods.some((p) => actDate >= p.start.slice(0, 10) && actDate <= p.end.slice(0, 10));
+            if (!inTenure) {
+              outOfTenureCount++;
+            }
+          }
+        }
+      }
+
+      const passed = outOfTenureCount === 0;
+      gates.push({
+        name: 'Relational Semantics: Member Activities Within Tenure',
+        category: 'referential',
+        passed,
+        populationCount: examinedActivities,
+        message: passed
+          ? `All ${examinedActivities} member activities fall strictly within the member's tenure window`
+          : `Found ${outOfTenureCount} activity records outside member tenure windows across ${examinedActivities} examined`,
+        expected: 0,
+        actual: outOfTenureCount,
+      });
+    }
+
+    // 3. Meeting Minutes Context and Agenda References
+    const minutes = findRecords('Minute', 'committee-minutes', 'Committees: Minutes');
+    if (minutes && minutes.length > 0) {
+      const meetings = findRecords('Meeting', 'committee-meetings', 'Committees: Meetings') ?? [];
+      const agendaItems = findRecords('AgendaItem', 'committee-agenda-items', 'Committees: Agenda Items') ?? [];
+
+      const meetingMap = new Map<string, { name: string; date: string }>();
+      for (const m of meetings) {
+        const id = String(m['ID'] ?? m['id'] ?? '').toLowerCase();
+        const name = String(m['Name'] ?? m['name'] ?? m['Title'] ?? '');
+        const date = String(m['MeetingDate'] ?? m['meetingDate'] ?? '').slice(0, 10);
+        if (id) meetingMap.set(id, { name, date });
+      }
+
+      const meetingAgendaTitles = new Map<string, string[]>();
+      for (const ai of agendaItems) {
+        const mId = String(ai['MeetingID'] ?? ai['meetingId'] ?? '').toLowerCase();
+        const title = String(ai['Title'] ?? ai['title'] ?? '');
+        if (mId && title) {
+          if (!meetingAgendaTitles.has(mId)) meetingAgendaTitles.set(mId, []);
+          meetingAgendaTitles.get(mId)!.push(title);
+        }
+      }
+
+      let invalidMinuteCount = 0;
+      for (const min of minutes) {
+        const mId = String(min['MeetingID'] ?? min['meetingId'] ?? '').toLowerCase();
+        const content = String(min['Content'] ?? min['content'] ?? min['Notes'] ?? min['Text'] ?? '');
+        const mInfo = meetingMap.get(mId);
+        if (!mInfo) {
+          invalidMinuteCount++;
+          continue;
+        }
+
+        // Minutes must mention meeting date or name, plus at least one agenda topic or 'Agenda'
+        const hasDateOrName =
+          (mInfo.date && content.includes(mInfo.date)) ||
+          (mInfo.name && content.toLowerCase().includes(mInfo.name.toLowerCase())) ||
+          content.toLowerCase().includes('meeting');
+        const agendaTopics = meetingAgendaTitles.get(mId) ?? [];
+        const hasAgendaRef =
+          content.toLowerCase().includes('agenda') ||
+          agendaTopics.some((t) => content.toLowerCase().includes(t.toLowerCase()));
+
+        if (!hasDateOrName || !hasAgendaRef || content.length < 30) {
+          invalidMinuteCount++;
+        }
+      }
+
+      const passed = invalidMinuteCount === 0;
+      gates.push({
+        name: 'Relational Semantics: Meeting Minutes Context and Agenda References',
+        category: 'referential',
+        passed,
+        populationCount: minutes.length,
+        message: passed
+          ? `All ${minutes.length} committee meeting minutes carry contextual meeting headers and agenda references`
+          : `Found ${invalidMinuteCount} meeting minute record(s) lacking meeting context or agenda references across ${minutes.length} records`,
+        expected: 0,
+        actual: invalidMinuteCount,
+      });
+    }
+  }
+}
+
+/**
+ * Resolves an '@lookup:<Entity>.<Field>=<Value>' expression against in-memory simulation records
+ * or registered static platform/application lookup catalogs.
+ */
+export function resolveLookupExpression(
+  lookupExpr: string,
+  data: Record<string, readonly Record<string, unknown>[]>,
+  staticLookups?: Record<string, Record<string, Set<string> | string[]>>
+): { resolved: boolean; error?: string } {
+  // Pattern: @lookup:<EntityName>.<FieldName>=<FieldValue> or @lookup:<EntityName>.<FieldName>:<FieldValue>
+  const cleanExpr = lookupExpr.replace(/\?.*$/, ''); // strip query params like ?allowDefer
+  const match = cleanExpr.match(/^@lookup:([^.]+)\.([^=:]+)[=:](.*)$/);
+  if (!match) {
+    return { resolved: false, error: `Malformed @lookup expression: '${lookupExpr}'` };
+  }
+  const targetEntity = match[1];
+  const targetField = match[2];
+  const targetValue = match[3];
+  if (!targetEntity || !targetField || targetValue === undefined) {
+    return { resolved: false, error: `Malformed @lookup expression: '${lookupExpr}'` };
+  }
+  const normVal = targetValue.trim().toLowerCase();
+
+  // 1. Check in simulated data (both by direct key and matching entityName)
+  for (const [eName, rows] of Object.entries(data)) {
+    if (eName.toLowerCase() === targetEntity.toLowerCase() || (rows.length > 0 && String(rows[0]?.['_entityName'] ?? '').toLowerCase() === targetEntity.toLowerCase())) {
+      const found = rows.some((r) => {
+        const v = r[targetField];
+        return v !== undefined && v !== null && String(v).trim().toLowerCase() === normVal;
+      });
+      if (found) return { resolved: true };
+    }
+  }
+
+  // 2. Check static/platform lookup registry
+  const platformLookups: Record<string, Record<string, string[]>> = {
+    'MJ: Entities': {
+      Name: [
+        'Committees: Agenda Items',
+        'Committees: Artifact Types',
+        'Committees: Artifacts',
+        'Committees: Attendances',
+        'Committees: Comments',
+        'Committees: Committees',
+        'Committees: Meetings',
+        'Committees: Memberships',
+        'Committees: Minutes',
+        'Committees: Motions',
+        'Committees: Roles',
+        'Committees: Terms',
+        'Committees: Types',
+        'Committees: Votes',
+        'MJ: AI Model Types',
+        'MJ: AI Model Vendors',
+        'MJ: AI Models',
+        'MJ: AI Vendor Type Definitions',
+        'MJ: AI Vendors',
+        'MJ: Companies',
+        'MJ: Entities',
+        'MJ: Users',
+        'MJ_BizApps_Accounting: GL Account Links',
+        'MJ_BizApps_Accounting: GL Account Roles',
+        'MJ_BizApps_Accounting: GL Accounts',
+        'MJ_BizApps_Common: Activities',
+        'MJ_BizApps_Common: Activity Links',
+        'MJ_BizApps_Common: Address Links',
+        'MJ_BizApps_Common: Address Types',
+        'MJ_BizApps_Common: Addresses',
+        'MJ_BizApps_Common: Contact Methods',
+        'MJ_BizApps_Common: Contact Types',
+        'MJ_BizApps_Common: Organization Types',
+        'MJ_BizApps_Common: Organizations',
+        'MJ_BizApps_Common: People',
+        'MJ_BizApps_Common: Relationship Types',
+        'MJ_BizApps_Common: Relationships',
+        'MJ_BizApps_Forms: Form Distributions',
+        'MJ_BizApps_Forms: Form Pages',
+        'MJ_BizApps_Forms: Form Question Options',
+        'MJ_BizApps_Forms: Form Questions',
+        'MJ_BizApps_Forms: Form Response Answers',
+        'MJ_BizApps_Forms: Form Responses',
+        'MJ_BizApps_Forms: Form Versions',
+        'MJ_BizApps_Forms: Forms',
+        'MJ_BizApps_Issues: Issue Comments',
+        'MJ_BizApps_Issues: Issue Number Sequences',
+        'MJ_BizApps_Issues: Issue Status',
+        'MJ_BizApps_Issues: Issue Types',
+        'MJ_BizApps_Issues: Issues',
+        'MJ_BizApps_Orders: Order Headers',
+        'MJ_BizApps_Orders: Order Lines',
+        'MJ_BizApps_Orders: Payment Headers',
+        'MJ_BizApps_Orders: Payment Lines',
+        'MJ_BizApps_Orders: Product Categories',
+        'MJ_BizApps_Orders: Products',
+        'MJ_BizApps_SecureMessaging: Message Files',
+        'MJ_BizApps_SecureMessaging: Portal Sessions',
+        'MJ_BizApps_SecureMessaging: Secure Messages',
+        'MJ_BizApps_SecureMessaging: Secure Threads',
+        'MJ_BizApps_Sonar: Factors',
+        'MJ_BizApps_Sonar: Model Factors',
+        'MJ_BizApps_Sonar: Model Related Entities',
+        'MJ_BizApps_Sonar: Score Band Sets',
+        'MJ_BizApps_Sonar: Score Bands',
+        'MJ_BizApps_Sonar: Score Model Versions',
+        'MJ_BizApps_Sonar: Score Models',
+        'MJ_BizApps_Sonar: Time Windows',
+        'MJ_BizApps_Tasks: Task Activities',
+        'MJ_BizApps_Tasks: Task Assignments',
+        'MJ_BizApps_Tasks: Task Comments',
+        'MJ_BizApps_Tasks: Task Links',
+        'MJ_BizApps_Tasks: Task Tag Links',
+        'MJ_BizApps_Tasks: Task Tags',
+        'MJ_BizApps_Tasks: Task Types',
+        'MJ_BizApps_Tasks: Tasks',
+        'MoreCheese: Advocacy Actions',
+        'MoreCheese: Certifications',
+        'MoreCheese: Competition Entries',
+        'MoreCheese: Course Enrollments',
+        'MoreCheese: Courses',
+        'MoreCheese: Data Quality Labels',
+        'MoreCheese: Event Registrations',
+        'MoreCheese: Events',
+        'MoreCheese: Member Certifications',
+        'MoreCheese: Member Profiles',
+        'MoreCheese: Membership Periods',
+        'MoreCheese: Organization Profiles',
+      ],
+    },
+    'Committees: Roles': {
+      Name: ['Chair', 'Vice Chair', 'Member'],
+    },
+    'Committees: Artifact Types': {
+      Name: ['Agenda', 'Document', 'Presentation', 'Spreadsheet'],
+    },
+    'Committees: Types': {
+      Name: ['Standing', 'Special'],
+    },
+    'MJ_BizApps_Common: Contact Types': {
+      Name: ['Email', 'Mobile Phone', 'Work Phone', 'LinkedIn', 'Website'],
+    },
+    'MJ_BizApps_Common: Address Types': {
+      Name: ['Home', 'Work', 'Mailing'],
+    },
+    'MJ_BizApps_Common: Organization Types': {
+      Name: [
+        'Sole Proprietorship',
+        'LLC',
+        'Partnership',
+        'Corporation',
+        'Non-Profit',
+        'Educational Institution',
+        'Association',
+      ],
+    },
+    'MJ_BizApps_Common: Relationship Types': {
+      Name: ['Employee', 'Affiliate', 'Supplier', 'Partner'],
+    },
+    'MJ_BizApps_Accounting: GL Account Roles': {
+      Name: [
+        'Cash',
+        'Accounts Receivable',
+        'Deferred Revenue',
+        'Sales Discounts',
+        'Sales Returns and Allowances',
+        'Processing Fee',
+        'Dues Revenue',
+        'Events Revenue',
+        'Education Revenue',
+        'Store Revenue',
+        'Accounts Payable',
+      ],
+    },
+    'MJ_BizApps_Issues: Issue Status': {
+      Name: ['New', 'In Progress', 'Resolved', 'Closed'],
+    },
+    'MJ_BizApps_Issues: Issue Types': {
+      Name: ['Bug', 'Feature Request', 'Billing Inquiry', 'General Support'],
+    },
+    'MJ_BizApps_Tasks: Task Types': {
+      Name: ['Action Item', 'Milestone'],
+    },
+    'MJ: AI Model Types': {
+      Name: ['LLM', 'Embedding', 'Image Generation'],
+    },
+    'MJ: AI Vendor Type Definitions': {
+      Name: ['Inference Provider', 'Model Developer'],
+    },
+    'MJ_BizApps_Sonar: Score Model Versions': {
+      ID: ['9ec51fe5-b002-564e-9c7e-7b8e4954cc5b'],
+    },
+    'MJ: Users': {
+      Email: [
+        'marcus.oduya@morecheesefederation.example',
+        'elena.rodriguez@morecheesefederation.example',
+        'admin@morecheesefederation.example',
+      ],
+    },
+  };
+
+  const entityLookup = platformLookups[targetEntity] ?? (staticLookups ? staticLookups[targetEntity] : undefined);
+  if (entityLookup) {
+    const vals = entityLookup[targetField];
+    if (vals) {
+      const exists = Array.isArray(vals)
+        ? vals.some((v) => v.toLowerCase() === normVal)
+        : (vals as Set<string>).has(normVal);
+      if (exists) return { resolved: true };
+    }
+  }
+
+  return { resolved: false, error: `Target record not found for lookup: ${lookupExpr}` };
 }

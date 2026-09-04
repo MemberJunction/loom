@@ -18,14 +18,19 @@ import type { SimulationCheckpoint, HeroOutcomePin, EraConfig } from '@memberjun
 import { generateEntityRecord } from '../generation.js';
 
 export interface BuildCommandOptions {
-  project: string;
+  project?: string;
+  config?: string;
   seed?: string;
   release?: string;
   output?: string;
 }
 
 export async function executeBuild(options: BuildCommandOptions): Promise<void> {
-  const loaded = await loadProject(options.project);
+  const projectPath = options.config ?? options.project;
+  if (!projectPath) {
+    throw new Error('Build: either --project or --config must be provided');
+  }
+  const loaded = await loadProject(projectPath);
   const seed = options.seed ? parseInt(options.seed, 10) : 42;
   const releaseDate = options.release ?? loaded.manifest.releaseDate ?? '2026-09-02';
   const asOfYear = parseInt(releaseDate.slice(0, 4), 10) || 2026;
@@ -214,7 +219,9 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
     const node: SimulationNode = {
       id: `node-${entityName.toLowerCase()}`,
-      consumes: Object.values(entityCfg.foreignKeys).map((fk) => fk.targetEntity),
+      consumes: Object.values(entityCfg.foreignKeys)
+        .map((fk) => fk.targetEntity)
+        .filter((target) => target in loaded.domain.entities),
       produces: [entityName],
       description: `Generates ${entityName} records with causal factor calibration`,
       execute: async (ctx) => {

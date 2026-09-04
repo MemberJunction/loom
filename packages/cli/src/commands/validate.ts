@@ -4,12 +4,17 @@ import { loadProject } from '../project.js';
 import { Validator, readEntityMetadata, type ValidationReport, type GateResult } from '@memberjunction/loom-engine';
 
 export interface ValidateCommandOptions {
-  project: string;
+  project?: string;
+  config?: string;
   data?: string;
 }
 
 export async function executeValidate(options: ValidateCommandOptions): Promise<ValidationReport> {
-  const loaded = await loadProject(options.project);
+  const projectPath = options.config ?? options.project;
+  if (!projectPath) {
+    throw new Error('Validate: either --project or --config must be provided');
+  }
+  const loaded = await loadProject(projectPath);
   const dataDir = options.data
     ? path.resolve(process.cwd(), options.data)
     : path.resolve(loaded.projectDir, loaded.manifest.output.metadataDir);
@@ -47,7 +52,8 @@ export async function executeValidate(options: ValidateCommandOptions): Promise<
   }
 
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
-    const entityDir = path.join(dataDir, entityName);
+    const dirName = entityCfg.outputDirectory ?? entityName;
+    const entityDir = path.join(dataDir, dirName);
     try {
       const { records: unwrapped } = await readEntityMetadata(entityDir, entityCfg.entityName);
       records[entityName] = unwrapped;
@@ -55,7 +61,7 @@ export async function executeValidate(options: ValidateCommandOptions): Promise<
         name: `MetadataSync: ${entityName} (.mj-sync.json & record wrapper)`,
         category: 'schema',
         passed: true,
-        message: `Entity directory '${entityName}' conforms to MetadataSync specifications`,
+        message: `Entity directory '${dirName}' conforms to MetadataSync specifications`,
         populationCount: unwrapped.length,
       });
     } catch (syncErr) {
