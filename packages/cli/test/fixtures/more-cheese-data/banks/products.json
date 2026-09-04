@@ -1,0 +1,94 @@
+{
+  "memberships": [
+    {
+      "productKey": "PROD-MEM-ENTHUSIAST",
+      "name": "Enthusiast Membership (annual)",
+      "productType": "Membership",
+      "unitPrice": 150,
+      "description": "Individual enthusiast tier for home cheesemakers and cheese lovers"
+    },
+    {
+      "productKey": "PROD-MEM-INDIVIDUAL",
+      "name": "Individual Membership (annual)",
+      "productType": "Membership",
+      "unitPrice": 175,
+      "description": "Professional individual membership for cheesemakers and mongers"
+    },
+    {
+      "productKey": "PROD-MEM-SMALLBUSINESS",
+      "name": "SmallBusiness Membership (annual)",
+      "productType": "Membership",
+      "unitPrice": 400,
+      "description": "Small creamery or independent retail shop membership"
+    },
+    {
+      "productKey": "PROD-MEM-CORPORATE",
+      "name": "Corporate Membership (annual)",
+      "productType": "Membership",
+      "unitPrice": 1200,
+      "description": "Full corporate producer or distributor membership with multi-seat access"
+    }
+  ],
+  "conferences_and_events": [
+    {
+      "productKey": "PROD-CONF-ANNUAL",
+      "name": "International Cheese Foundation Annual Conference Registration",
+      "productType": "Event",
+      "unitPrice": 650,
+      "description": "Full pass to the annual flagship educational conference and trade show"
+    },
+    {
+      "productKey": "PROD-CONF-FESTIVAL-TICKETS",
+      "name": "Festival of Cheese Grand Tasting Ticket",
+      "productType": "Event",
+      "unitPrice": 125,
+      "description": "General admission pass to the public cheese tasting showcase"
+    },
+    {
+      "productKey": "PROD-CONF-AWARDS-BANQUET",
+      "name": "Awards Gala Banquet & Celebration",
+      "productType": "Event",
+      "unitPrice": 185,
+      "description": "Ticket to the annual competition awards banquet ceremony"
+    }
+  ],
+  "courses_and_certifications": [
+    {
+      "productKey": "PROD-CERT-CCP-EXAM",
+      "name": "Certified Cheese Professional (CCP) Exam Application",
+      "productType": "Certification",
+      "unitPrice": 500,
+      "description": "Application and testing fee for the industry-standard CCP credential"
+    },
+    {
+      "productKey": "PROD-COURSE-SENSORY",
+      "name": "Sensory Evaluation of Artisan Cheese (Course)",
+      "productType": "Course",
+      "unitPrice": 350,
+      "description": "Comprehensive sensory evaluation, defect identification, and flavor profiling"
+    },
+    {
+      "productKey": "PROD-COURSE-AFFINAGE",
+      "name": "Affinage & Cave Management (Course)",
+      "productType": "Course",
+      "unitPrice": 450,
+      "description": "Advanced aging physics, humidity control, and microflora management"
+    },
+    {
+      "productKey": "PROD-COURSE-FOOD-SAFETY",
+      "name": "Food Safety Modernization & HACCP Workshop",
+      "productType": "Course",
+      "unitPrice": 300,
+      "description": "Preventive controls and pathogen management for artisanal dairies"
+    }
+  ],
+  "competitions": [
+    {
+      "productKey": "PROD-COMP-ENTRY-SINGLE",
+      "name": "Specialty Cheese Competition Entry (Single Wheel)",
+      "productType": "Competition",
+      "unitPrice": 85,
+      "description": "Entry fee for one product submission in the annual judged competition"
+    }
+  ]
+}

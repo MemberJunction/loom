@@ -1,0 +1,270 @@
+{
+  "name": "more-cheese",
+  "namespace": "8d3e9117-2b36-4078-a6fe-4c60144f8101",
+  "description": "International Cheese Foundation (ICF) domain schema mapping for Loom world simulation",
+  "packs": {
+    "core": {
+      "name": "core",
+      "dependsOn": [],
+      "description": "Core people, organizations, and member identity entities"
+    },
+    "community": {
+      "name": "community",
+      "dependsOn": ["core"],
+      "description": "Memberships, events, courses, certifications, and committees"
+    },
+    "commerce": {
+      "name": "commerce",
+      "dependsOn": ["core", "community"],
+      "description": "Orders, lines, payments, and product catalog"
+    }
+  },
+  "entities": {
+    "Organization": {
+      "name": "Organization",
+      "entityName": "MJ_BizApps_Common: Organizations",
+      "targetTable": "Organization",
+      "schema": "__mj_BizAppsCommon",
+      "pack": "core",
+      "outputDirectory": "organizations",
+      "businessKey": ["Name"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "Name": { "name": "Name", "type": "string" },
+        "OrganizationTypeID": { "name": "OrganizationTypeID", "type": "string", "nullable": true },
+        "LegalName": { "name": "LegalName", "type": "string", "nullable": true },
+        "Website": { "name": "Website", "type": "string", "nullable": true },
+        "Phone": { "name": "Phone", "type": "string", "nullable": true },
+        "FoundedDate": { "name": "FoundedDate", "type": "date", "nullable": true },
+        "Status": { "name": "Status", "type": "string" }
+      },
+      "foreignKeys": {},
+      "isImmutable": false
+    },
+    "Person": {
+      "name": "Person",
+      "entityName": "MJ_BizApps_Common: People",
+      "targetTable": "Person",
+      "schema": "__mj_BizAppsCommon",
+      "pack": "core",
+      "outputDirectory": "people",
+      "businessKey": ["Email"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "FirstName": { "name": "FirstName", "type": "string" },
+        "LastName": { "name": "LastName", "type": "string" },
+        "Email": { "name": "Email", "type": "string" },
+        "Title": { "name": "Title", "type": "string", "nullable": true },
+        "Status": { "name": "Status", "type": "string" }
+      },
+      "foreignKeys": {},
+      "isImmutable": false
+    },
+    "Company": {
+      "name": "Company",
+      "entityName": "MJ: Companies",
+      "targetTable": "Company",
+      "schema": "__mj",
+      "pack": "core",
+      "outputDirectory": "companies",
+      "businessKey": ["Name"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "Name": { "name": "Name", "type": "string" },
+        "Description": { "name": "Description", "type": "string", "nullable": true },
+        "Website": { "name": "Website", "type": "string", "nullable": true },
+        "Domain": { "name": "Domain", "type": "string", "nullable": true }
+      },
+      "foreignKeys": {},
+      "isImmutable": true
+    },
+    "ProductCategory": {
+      "name": "ProductCategory",
+      "entityName": "MJ_BizApps_Orders: Product Categories",
+      "targetTable": "ProductCategory",
+      "schema": "__mj_BizAppsOrders",
+      "pack": "commerce",
+      "outputDirectory": "product-categories",
+      "businessKey": ["Name"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "CompanyID": { "name": "CompanyID", "type": "uuid" },
+        "Name": { "name": "Name", "type": "string" },
+        "Description": { "name": "Description", "type": "string", "nullable": true }
+      },
+      "foreignKeys": {
+        "CompanyID": { "targetEntity": "Company", "targetField": "ID" }
+      },
+      "isImmutable": true
+    },
+    "Product": {
+      "name": "Product",
+      "entityName": "MJ_BizApps_Orders: Products",
+      "targetTable": "Product",
+      "schema": "__mj_BizAppsOrders",
+      "pack": "commerce",
+      "outputDirectory": "products",
+      "businessKey": ["SKU"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "SKU": { "name": "SKU", "type": "string" },
+        "Name": { "name": "Name", "type": "string" },
+        "CompanyID": { "name": "CompanyID", "type": "uuid" },
+        "ProductTypeID": { "name": "ProductTypeID", "type": "uuid" },
+        "ProductCategoryID": { "name": "ProductCategoryID", "type": "uuid" },
+        "RevenueRecognitionTypeID": { "name": "RevenueRecognitionTypeID", "type": "uuid" },
+        "Status": { "name": "Status", "type": "string" },
+        "StandaloneSellingPrice": { "name": "StandaloneSellingPrice", "type": "number" },
+        "IsTaxable": { "name": "IsTaxable", "type": "boolean" }
+      },
+      "foreignKeys": {
+        "CompanyID": { "targetEntity": "Company", "targetField": "ID" },
+        "ProductCategoryID": { "targetEntity": "ProductCategory", "targetField": "ID" }
+      },
+      "isImmutable": false
+    },
+    "MembershipPeriod": {
+      "name": "MembershipPeriod",
+      "entityName": "MoreCheese: Membership Periods",
+      "targetTable": "MembershipPeriod",
+      "schema": "morecheese_members",
+      "pack": "community",
+      "outputDirectory": "membership-periods",
+      "businessKey": ["PeriodKey"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "PeriodKey": { "name": "PeriodKey", "type": "string" },
+        "PersonID": { "name": "PersonID", "type": "uuid" },
+        "MembershipTier": { "name": "MembershipTier", "type": "string" },
+        "DuesAmount": { "name": "DuesAmount", "type": "number" },
+        "StartDate": { "name": "StartDate", "type": "date" },
+        "EndDate": { "name": "EndDate", "type": "date" },
+        "RenewalDate": { "name": "RenewalDate", "type": "date", "nullable": true },
+        "Status": { "name": "Status", "type": "string" },
+        "CancellationDate": { "name": "CancellationDate", "type": "date", "nullable": true },
+        "CancellationReason": { "name": "CancellationReason", "type": "string", "nullable": true },
+        "AutoRenew": { "name": "AutoRenew", "type": "boolean" },
+        "IsSharedDemo": { "name": "IsSharedDemo", "type": "boolean" }
+      },
+      "foreignKeys": {
+        "PersonID": {
+          "fieldName": "PersonID",
+          "targetEntity": "Person",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        }
+      },
+      "isImmutable": false
+    },
+    "EventRegistration": {
+      "name": "EventRegistration",
+      "entityName": "MoreCheese: Event Registrations",
+      "targetTable": "EventRegistration",
+      "schema": "morecheese_members",
+      "pack": "community",
+      "outputDirectory": "event-registrations",
+      "businessKey": ["RegKey"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "RegKey": { "name": "RegKey", "type": "string" },
+        "PersonID": { "name": "PersonID", "type": "uuid" },
+        "EventID": { "name": "EventID", "type": "uuid" },
+        "RegisteredOn": { "name": "RegisteredOn", "type": "date" },
+        "Attended": { "name": "Attended", "type": "boolean" },
+        "IsSharedDemo": { "name": "IsSharedDemo", "type": "boolean" }
+      },
+      "foreignKeys": {
+        "PersonID": {
+          "fieldName": "PersonID",
+          "targetEntity": "Person",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        }
+      },
+      "isImmutable": false
+    },
+    "CourseEnrollment": {
+      "name": "CourseEnrollment",
+      "entityName": "MoreCheese: Course Enrollments",
+      "targetTable": "CourseEnrollment",
+      "schema": "morecheese_members",
+      "pack": "community",
+      "outputDirectory": "enrollments",
+      "businessKey": ["EnrollKey"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "EnrollKey": { "name": "EnrollKey", "type": "string" },
+        "PersonID": { "name": "PersonID", "type": "uuid" },
+        "CourseID": { "name": "CourseID", "type": "uuid" },
+        "EnrolledOn": { "name": "EnrolledOn", "type": "date" },
+        "Status": { "name": "Status", "type": "string" },
+        "CompletedOn": { "name": "CompletedOn", "type": "date", "nullable": true },
+        "IsSharedDemo": { "name": "IsSharedDemo", "type": "boolean" }
+      },
+      "foreignKeys": {
+        "PersonID": {
+          "fieldName": "PersonID",
+          "targetEntity": "Person",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        }
+      },
+      "isImmutable": false
+    },
+    "AdvocacyAction": {
+      "name": "AdvocacyAction",
+      "entityName": "MoreCheese: Advocacy Actions",
+      "targetTable": "AdvocacyAction",
+      "schema": "morecheese_members",
+      "pack": "community",
+      "outputDirectory": "advocacy-actions",
+      "businessKey": ["ActionKey"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "ActionKey": { "name": "ActionKey", "type": "string" },
+        "PersonID": { "name": "PersonID", "type": "uuid" },
+        "ActionDate": { "name": "ActionDate", "type": "date" },
+        "Kind": { "name": "Kind", "type": "string" },
+        "Topic": { "name": "Topic", "type": "string" },
+        "IsSharedDemo": { "name": "IsSharedDemo", "type": "boolean" }
+      },
+      "foreignKeys": {
+        "PersonID": {
+          "fieldName": "PersonID",
+          "targetEntity": "Person",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        }
+      },
+      "isImmutable": false
+    },
+    "CommitteeMembership": {
+      "name": "CommitteeMembership",
+      "entityName": "Committees: Memberships",
+      "targetTable": "Member",
+      "schema": "__mj_BizAppsCommittees",
+      "pack": "community",
+      "outputDirectory": "committee-memberships",
+      "businessKey": ["PersonID", "RoleID", "TermID"],
+      "fields": {
+        "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },
+        "PersonID": { "name": "PersonID", "type": "uuid" },
+        "RoleID": { "name": "RoleID", "type": "string" },
+        "TermID": { "name": "TermID", "type": "uuid" },
+        "StartDate": { "name": "StartDate", "type": "date" },
+        "EndDate": { "name": "EndDate", "type": "date" },
+        "Status": { "name": "Status", "type": "string" }
+      },
+      "foreignKeys": {
+        "PersonID": {
+          "fieldName": "PersonID",
+          "targetEntity": "Person",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        }
+      },
+      "isImmutable": false
+    }
+  }
+}
+

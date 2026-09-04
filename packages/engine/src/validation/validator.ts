@@ -156,7 +156,7 @@ export class Validator {
     this.checkLookupResolution(data, actualCatalogs, gates);
 
     // 7. Relational rules gates (M2)
-    this.checkRelationalRules(domain, data, gates);
+    this.checkRelationalRules(domain, data, gates, actualCatalogs);
 
     const passedCount = gates.filter((g) => g.passed).length;
     const failedCount = gates.length - passedCount;
@@ -901,41 +901,148 @@ export class Validator {
   private checkRelationalRules(
     domain: DomainConfig,
     data: Record<string, readonly Record<string, unknown>[]>,
-    gates: GateResult[]
+    gates: GateResult[],
+    catalogs?: Record<string, readonly Record<string, unknown>[]>
   ): void {
+    // 1. Build declared entities set for validation (R2-3)
+    const declaredEntityNames = new Set<string>();
+    for (const [k, cfg] of Object.entries(domain.entities)) {
+      declaredEntityNames.add(k.toLowerCase());
+      if (cfg.entityName) declaredEntityNames.add(cfg.entityName.toLowerCase());
+      if (cfg.outputDirectory) declaredEntityNames.add(cfg.outputDirectory.toLowerCase());
+      if (cfg.targetTable) declaredEntityNames.add(cfg.targetTable.toLowerCase());
+    }
+    for (const k of Object.keys(data)) {
+      declaredEntityNames.add(k.toLowerCase());
+    }
+    if (catalogs) {
+      for (const k of Object.keys(catalogs)) {
+        declaredEntityNames.add(k.toLowerCase());
+      }
+    }
+
+    const assertEntityDeclared = (entityName: string, ruleName: string) => {
+      if (!entityName || !declaredEntityNames.has(entityName.toLowerCase())) {
+        throw new Error(
+          `Relational rule '${ruleName}': unknown entity '${entityName}' referenced in rule definition. Entity must be declared in domain.entities or provided via catalogs.`
+        );
+      }
+    };
+
+    // 2. Validate all entity references upfront across all declared relational rules (R2-3)
+    for (const rule of domain.relationalRules ?? []) {
+      assertEntityDeclared(rule.sourceEntity, rule.name);
+      if (rule.kind === 'path-match') {
+        for (const segment of rule.path) {
+          const colonIdx = segment.indexOf(':');
+          const targetEntityName = colonIdx >= 0 ? segment.slice(colonIdx + 1) : '';
+          if (targetEntityName) assertEntityDeclared(targetEntityName, rule.name);
+        }
+        if (rule.inclusion) {
+          assertEntityDeclared(rule.inclusion.poolEntity, rule.name);
+        }
+      } else if (rule.kind === 'date-window') {
+        assertEntityDeclared(rule.windowEntity, rule.name);
+        if (rule.linkEntity) {
+          assertEntityDeclared(rule.linkEntity, rule.name);
+        }
+      } else if (rule.kind === 'text-contains-path') {
+        for (const segment of rule.path) {
+          const colonIdx = segment.indexOf(':');
+          const targetEntityName = colonIdx >= 0 ? segment.slice(colonIdx + 1) : '';
+          if (targetEntityName) assertEntityDeclared(targetEntityName, rule.name);
+        }
+        if (rule.childReferences) {
+          assertEntityDeclared(rule.childReferences.childEntity, rule.name);
+        }
+      }
+    }
+
     const findRecords = (name: string): readonly Record<string, unknown>[] => {
+      const norm = name.toLowerCase();
       for (const [k, v] of Object.entries(data)) {
-        if (k.toLowerCase() === name.toLowerCase()) return v;
+        if (k.toLowerCase() === norm) return v;
         const cfg = domain.entities[k];
         if (cfg) {
-          if (cfg.entityName && cfg.entityName.toLowerCase() === name.toLowerCase()) return v;
-          if (cfg.outputDirectory && cfg.outputDirectory.toLowerCase() === name.toLowerCase()) return v;
+          if (cfg.entityName && cfg.entityName.toLowerCase() === norm) return v;
+          if (cfg.outputDirectory && cfg.outputDirectory.toLowerCase() === norm) return v;
+          if (cfg.targetTable && cfg.targetTable.toLowerCase() === norm) return v;
+        }
+      }
+      if (catalogs) {
+        for (const [k, v] of Object.entries(catalogs)) {
+          if (k.toLowerCase() === norm) return v;
         }
       }
       return [];
     };
 
+    // Cached record-by-ID map for O(1) path hop resolution (R2-6)
+    const entityRecordById = new Map<string, Map<string, Record<string, unknown>>>();
+    const getEntityRecordMap = (entityName: string): Map<string, Record<string, unknown>> => {
+      const norm = entityName.toLowerCase();
+      let map = entityRecordById.get(norm);
+      if (!map) {
+        map = new Map();
+        const records = findRecords(entityName);
+        for (const r of records) {
+          const id = r['ID'] ?? r['id'];
+          if (id !== undefined && id !== null) {
+            map.set(String(id).toLowerCase(), r as Record<string, unknown>);
+          }
+        }
+        entityRecordById.set(norm, map);
+      }
+      return map;
+    };
+
     for (const rule of domain.relationalRules ?? []) {
       const sourceRecords = findRecords(rule.sourceEntity);
-      if (sourceRecords.length === 0) continue;
+      if (sourceRecords.length === 0) {
+        // R2-3: an entity with zero rows still emits a gate with populationCount: 0
+        gates.push({
+          name: `Relational Integrity: ${rule.name}`,
+          category: 'referential',
+          passed: true,
+          populationCount: 0,
+          message: `Source entity '${rule.sourceEntity}' has 0 records; rule '${rule.name}' evaluated vacuously`,
+          expected: 0,
+          actual: 0,
+        });
+        continue;
+      }
 
       if (rule.kind === 'path-match') {
         let invalidCount = 0;
+
+        // Pre-index inclusion pool into a Set for O(1) membership checks (R2-6)
+        let poolSet: Set<string> | undefined;
+        if (rule.inclusion) {
+          const inc = rule.inclusion;
+          const poolRecords = findRecords(inc.poolEntity);
+          poolSet = new Set<string>();
+          for (const p of poolRecords) {
+            const pItem = String(p[inc.poolItemField] ?? '').toLowerCase();
+            const pContainer = String(p[inc.poolContainerField] ?? '').toLowerCase();
+            poolSet.add(`${pItem}:${pContainer}`);
+          }
+        }
+
         for (const row of sourceRecords) {
           let current: Record<string, unknown> | undefined = row;
           for (let i = 0; i < rule.path.length; i++) {
             if (!current) break;
             const segment = rule.path[i]!;
-            const [fkField, targetEntityName] = segment.split(':');
-            const fkVal: unknown = current[fkField!];
+            const colonIdx = segment.indexOf(':');
+            const fkField = colonIdx >= 0 ? segment.slice(0, colonIdx) : segment;
+            const targetEntityName = colonIdx >= 0 ? segment.slice(colonIdx + 1) : '';
+            const fkVal: unknown = current[fkField];
             if (!fkVal) {
               current = undefined;
               break;
             }
-            const targetTable = findRecords(targetEntityName ?? '');
-            current = targetTable.find(
-              (t) => String(t['ID'] ?? t['id'] ?? '').toLowerCase() === String(fkVal).toLowerCase()
-            );
+            const targetMap = getEntityRecordMap(targetEntityName);
+            current = targetMap.get(String(fkVal).toLowerCase());
           }
 
           if (!current) {
@@ -960,17 +1067,11 @@ export class Validator {
             }
           }
 
-          if (rule.inclusion) {
+          if (poolSet && rule.inclusion) {
             const inc = rule.inclusion;
-            const poolRecords = findRecords(inc.poolEntity);
             const sourceItemVal = String(row[inc.sourceItemField] ?? '').toLowerCase();
             const containerVal = String(targetVal).toLowerCase();
-            const isIncluded = poolRecords.some((p) => {
-              const pItem = String(p[inc.poolItemField] ?? '').toLowerCase();
-              const pContainer = String(p[inc.poolContainerField] ?? '').toLowerCase();
-              return pItem === sourceItemVal && pContainer === containerVal;
-            });
-            if (!isIncluded) {
+            if (!poolSet.has(`${sourceItemVal}:${containerVal}`)) {
               invalidCount++;
             }
           }
@@ -1004,11 +1105,17 @@ export class Validator {
         const targetWindows = new Map<string, Array<{ start: string; end: string }>>();
         for (const w of windowRecords) {
           const tId = String(w[rule.windowForeignKey] ?? '').toLowerCase();
-          const start = String(w[rule.windowStartField] ?? '2000-01-01').slice(0, 10);
-          const end = String(w[rule.windowEndField] ?? '2099-12-31').slice(0, 10);
+          const rawStart = w[rule.windowStartField];
+          const rawEnd = w[rule.windowEndField];
+          const start = rawStart !== undefined && rawStart !== null && rawStart !== '' ? String(rawStart).slice(0, 10) : '';
+          const end = rawEnd !== undefined && rawEnd !== null && rawEnd !== '' ? String(rawEnd).slice(0, 10) : '\uffff';
           if (tId) {
-            if (!targetWindows.has(tId)) targetWindows.set(tId, []);
-            targetWindows.get(tId)!.push({ start, end });
+            let list = targetWindows.get(tId);
+            if (!list) {
+              list = [];
+              targetWindows.set(tId, list);
+            }
+            list.push({ start, end });
           }
         }
 
@@ -1018,16 +1125,19 @@ export class Validator {
         for (const row of sourceRecords) {
           const rowId = String(row['ID'] ?? row['id'] ?? '').toLowerCase();
           const targetId = entityToTarget.get(rowId) ?? String(row[rule.windowForeignKey] ?? '').toLowerCase();
-          if (targetId && targetWindows.has(targetId)) {
+          const windows = targetId ? targetWindows.get(targetId) : undefined;
+          if (windows && windows.length > 0) {
             examinedCount++;
             const rawDate = String(row[rule.dateField] ?? '').slice(0, 10);
             if (rawDate) {
-              const windows = targetWindows.get(targetId)!;
               const inWindow = windows.some((w) => rawDate >= w.start && rawDate <= w.end);
               if (!inWindow) {
                 outOfWindowCount++;
               }
             }
+          } else if (rule.requireWindow) {
+            examinedCount++;
+            outOfWindowCount++;
           }
         }
 
@@ -1045,21 +1155,41 @@ export class Validator {
         });
       } else if (rule.kind === 'text-contains-path') {
         let invalidCount = 0;
+
+        // Pre-index child references by foreignKey parent ID for O(1) retrieval (R2-6)
+        const childMap = new Map<string, string[]>();
+        if (rule.childReferences) {
+          const cr = rule.childReferences;
+          const childTable = findRecords(cr.childEntity);
+          for (const child of childTable) {
+            const pId = String(child[cr.foreignKey] ?? '').toLowerCase();
+            const val = String(child[cr.childField] ?? '').trim();
+            if (val) {
+              let arr = childMap.get(pId);
+              if (!arr) {
+                arr = [];
+                childMap.set(pId, arr);
+              }
+              arr.push(val);
+            }
+          }
+        }
+
         for (const row of sourceRecords) {
           let current: Record<string, unknown> | undefined = row;
           for (let i = 0; i < rule.path.length; i++) {
             if (!current) break;
             const segment = rule.path[i]!;
-            const [fkField, targetEntityName] = segment.split(':');
-            const fkVal: unknown = current[fkField!];
+            const colonIdx = segment.indexOf(':');
+            const fkField = colonIdx >= 0 ? segment.slice(0, colonIdx) : segment;
+            const targetEntityName = colonIdx >= 0 ? segment.slice(colonIdx + 1) : '';
+            const fkVal: unknown = current[fkField];
             if (!fkVal) {
               current = undefined;
               break;
             }
-            const targetTable = findRecords(targetEntityName ?? '');
-            current = targetTable.find(
-              (t) => String(t['ID'] ?? t['id'] ?? '').toLowerCase() === String(fkVal).toLowerCase()
-            );
+            const targetMap = getEntityRecordMap(targetEntityName);
+            current = targetMap.get(String(fkVal).toLowerCase());
           }
 
           if (!current) {
@@ -1078,15 +1208,10 @@ export class Validator {
           }
 
           if (rule.childReferences) {
-            const cr = rule.childReferences;
-            const childTable = findRecords(cr.childEntity);
             const parentId = String(current['ID'] ?? current['id'] ?? '').toLowerCase();
-            const children = childTable.filter(
-              (c) => String(c[cr.foreignKey] ?? '').toLowerCase() === parentId
-            );
-            for (const child of children) {
-              const childVal = String(child[cr.childField] ?? '').trim();
-              if (childVal && !textVal.includes(childVal)) {
+            const childValues = childMap.get(parentId) ?? [];
+            for (const childVal of childValues) {
+              if (!textVal.includes(childVal)) {
                 missingReference = true;
                 break;
               }

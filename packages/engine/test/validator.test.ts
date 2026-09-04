@@ -396,4 +396,50 @@ describe('Validator', () => {
     expect(failMinGate).toBeDefined();
     expect(failMinGate?.passed).toBe(false);
   });
+
+  it('throws upfront when relational rule references an unknown entity (R2-3 mutation test)', () => {
+    const ghostDomain: DomainConfig = {
+      ...domain,
+      relationalRules: [
+        {
+          kind: 'path-match',
+          name: 'Ghost Rule',
+          sourceEntity: 'NoSuchEntity',
+          path: ['SomeID:OtherEntity'],
+          targetField: 'ID',
+        },
+      ],
+    };
+
+    expect(() => validator.Validate(ghostDomain, { Organization: [], Person: [] })).toThrow(
+      /Relational rule 'Ghost Rule': unknown entity 'NoSuchEntity' referenced in rule definition/
+    );
+  });
+
+  it('emits gate with populationCount: 0 when relational rule source entity has zero records (R2-3)', () => {
+    const zeroDomain: DomainConfig = {
+      ...domain,
+      entities: {
+        ...domain.entities,
+        Meeting: { name: 'Meeting', targetTable: 'm', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true } }, foreignKeys: {}, isImmutable: false },
+        Comment: { name: 'Comment', targetTable: 'cmt', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true }, MeetingID: { name: 'MeetingID', type: 'uuid' } }, foreignKeys: {}, isImmutable: false },
+      },
+      relationalRules: [
+        {
+          kind: 'path-match',
+          name: 'Empty Source Rule',
+          sourceEntity: 'Comment',
+          path: ['MeetingID:Meeting'],
+          targetField: 'ID',
+        },
+      ],
+    };
+
+    const report = validator.Validate(zeroDomain, { Organization: [], Person: [], Meeting: [], Comment: [] });
+    const gate = report.gates.find((g) => g.name.includes('Empty Source Rule'));
+    expect(gate).toBeDefined();
+    expect(gate?.passed).toBe(true);
+    expect(gate?.populationCount).toBe(0);
+  });
 });
+

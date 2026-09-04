@@ -20,6 +20,7 @@ export const FieldConfigSchema = z.object({
   isPrimaryKey: z.boolean().default(false),
   mjFieldType: z.string().optional(),
   valueListType: z.string().optional(),
+  values: z.array(z.union([z.string(), z.number(), z.boolean()])).optional(),
 });
 export type FieldConfig = z.infer<typeof FieldConfigSchema>;
 
@@ -95,6 +96,7 @@ export const DateWindowRuleSchema = z.object({
   windowForeignKey: z.string().min(1),
   windowStartField: z.string().min(1),
   windowEndField: z.string().min(1),
+  requireWindow: z.boolean().optional().default(false),
 });
 export type DateWindowRule = z.infer<typeof DateWindowRuleSchema>;
 

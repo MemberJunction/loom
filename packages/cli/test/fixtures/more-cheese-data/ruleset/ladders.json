@@ -1,0 +1,67 @@
+{
+  "$schema": "https://memberjunction.org/schemas/loom/ladders.v1.json",
+  "ladders": [
+    {
+      "ladderKey": "governance-leadership-ladder",
+      "entity": "Person",
+      "binding": {
+        "mode": "childEntity",
+        "childEntity": "CommitteeMembership",
+        "foreignKey": "PersonID",
+        "stateField": "RoleID",
+        "termField": "TermID"
+      },
+      "cohortShare": 0.05,
+      "states": [
+        {
+          "name": "Member",
+          "durationCycles": 2,
+          "effects": [
+            {
+              "factor": "factor-annual-conference-attendance",
+              "beta": 0.40
+            }
+          ],
+          "exitEffects": []
+        },
+        {
+          "name": "Vice Chair",
+          "capacity": 35,
+          "durationCycles": 2,
+          "prerequisites": {
+            "priorState": "Member",
+            "minCyclesSinceBirth": 2
+          },
+          "effects": [
+            {
+              "factor": "factor-annual-conference-attendance",
+              "beta": 0.80
+            }
+          ],
+          "exitEffects": []
+        },
+        {
+          "name": "Chair",
+          "capacity": 35,
+          "durationCycles": 2,
+          "prerequisites": {
+            "priorState": "Vice Chair",
+            "minCyclesSinceBirth": 4
+          },
+          "effects": [
+            {
+              "factor": "factor-annual-conference-attendance",
+              "beta": 1.20
+            }
+          ],
+          "exitEffects": [
+            {
+              "dial": "theta",
+              "delta": 0.50
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

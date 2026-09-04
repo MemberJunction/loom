@@ -1,0 +1,92 @@
+{
+  "$schema": "https://memberjunction.org/schemas/loom/eras.v1.json",
+  "eras": [
+    {
+      "eraKey": "era-pre-pandemic-baseline",
+      "scope": "all",
+      "cycles": [2019],
+      "factorAdjustments": [],
+      "volumeMultipliers": [],
+      "description": "Healthy pre-pandemic in-person events, conferences, and wholesale dues"
+    },
+    {
+      "eraKey": "era-pandemic-shock-2020",
+      "scope": "all",
+      "cycles": [2020],
+      "factorAdjustments": [
+        {
+          "factor": "factor-membership-renewal",
+          "deltaIntercept": -0.40
+        }
+      ],
+      "volumeMultipliers": [
+        {
+          "entity": "EventRegistration",
+          "multiplier": 0.15
+        },
+        {
+          "entity": "CourseEnrollment",
+          "multiplier": 1.85
+        }
+      ],
+      "description": "85% collapse in physical event attendance; 85% surge in online affineur and culinary coursework"
+    },
+    {
+      "eraKey": "era-virtual-pivot-2021",
+      "scope": "all",
+      "cycles": [2021],
+      "factorAdjustments": [
+        {
+          "factor": "factor-membership-renewal",
+          "deltaIntercept": 1.0
+        }
+      ],
+      "volumeMultipliers": [
+        {
+          "entity": "EventRegistration",
+          "multiplier": 0.45
+        },
+        {
+          "entity": "CourseEnrollment",
+          "multiplier": 1.50
+        }
+      ],
+      "description": "Hybrid symposiums, virtual tastings, and continuing digital academy course enrollment"
+    },
+    {
+      "eraKey": "era-artisan-boom-2022-2024",
+      "scope": "all",
+      "cycles": [2022, 2023, 2024],
+      "factorAdjustments": [
+        {
+          "factor": "factor-membership-renewal",
+          "deltaIntercept": 1.35
+        }
+      ],
+      "volumeMultipliers": [
+        {
+          "entity": "EventRegistration",
+          "multiplier": 1.40
+        },
+        {
+          "entity": "CourseEnrollment",
+          "multiplier": 1.25
+        }
+      ],
+      "description": "In-person World Cheese Cup returns; surge in artisan creamery corporate memberships"
+    },
+    {
+      "eraKey": "era-creamery-closures-2025",
+      "scope": "all",
+      "cycles": [2025],
+      "factorAdjustments": [
+        {
+          "factor": "factor-membership-renewal",
+          "deltaIntercept": -0.65
+        }
+      ],
+      "volumeMultipliers": [],
+      "description": "Regional feed and energy cost inflation driving small farmstead creamery distress"
+    }
+  ]
+}

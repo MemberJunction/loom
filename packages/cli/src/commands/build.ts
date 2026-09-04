@@ -21,31 +21,11 @@ function resolveComplement(targetVal: unknown, fieldCfg?: FieldConfig): unknown 
   if (typeof targetVal === 'boolean') {
     return !targetVal;
   }
-  if (typeof targetVal === 'string') {
-    const norm = targetVal.trim().toLowerCase();
-    const binaryComplements: Record<string, string> = {
-      active: 'Inactive',
-      inactive: 'Active',
-      true: 'false',
-      false: 'true',
-      yes: 'no',
-      no: 'yes',
-      enabled: 'Disabled',
-      disabled: 'Enabled',
-      open: 'Closed',
-      closed: 'Open',
-      valid: 'Invalid',
-      invalid: 'Valid',
-      pass: 'Fail',
-      fail: 'Pass',
-      passed: 'Failed',
-      failed: 'Passed',
-    };
-    if (binaryComplements[norm]) {
-      return binaryComplements[norm];
-    }
-    if (fieldCfg?.defaultValue !== undefined && String(fieldCfg.defaultValue).toLowerCase() !== norm) {
-      return fieldCfg.defaultValue;
+  if (fieldCfg?.values && Array.isArray(fieldCfg.values) && fieldCfg.values.length === 2) {
+    const norm = String(targetVal).trim().toLowerCase();
+    const complement = fieldCfg.values.find((v) => String(v).trim().toLowerCase() !== norm);
+    if (complement !== undefined) {
+      return complement;
     }
   }
   return undefined;

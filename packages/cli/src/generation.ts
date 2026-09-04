@@ -49,19 +49,40 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
         if (pattern.includes('${')) {
           pattern = pattern.replace(/\$\{([^}]+)\}/g, (_, expr: string) => {
             const key = expr.trim();
-            if (key.startsWith('parent.') && parent) {
-              return String(parent[key.slice(7)] ?? '');
+            if (key.startsWith('parent.')) {
+              const field = key.slice(7);
+              if (!parent) {
+                throw new Error(
+                  `lookupPattern template variable '\${${key}}' cannot be resolved: no parent record available for ${entity}.${fieldName} -> ${fk.targetEntity}`
+                );
+              }
+              const val = parent[field];
+              if (val === undefined || val === null || val === '') {
+                throw new Error(
+                  `lookupPattern template variable '\${${key}}' cannot be resolved: field '${field}' not found on parent entity '${fk.targetEntity}'`
+                );
+              }
+              return String(val);
             }
             if (key.startsWith('row.')) {
-              return String(row[key.slice(4)] ?? '');
+              const field = key.slice(4);
+              const val = row[field];
+              if (val === undefined || val === null || val === '') {
+                throw new Error(
+                  `lookupPattern template variable '\${${key}}' cannot be resolved: field '${field}' not found on row for entity '${entity}'`
+                );
+              }
+              return String(val);
             }
-            if (parent && parent[key] !== undefined) {
+            if (parent && parent[key] !== undefined && parent[key] !== null && parent[key] !== '') {
               return String(parent[key]);
             }
-            if (row[key] !== undefined) {
+            if (row[key] !== undefined && row[key] !== null && row[key] !== '') {
               return String(row[key]);
             }
-            return '';
+            throw new Error(
+              `lookupPattern template variable '\${${key}}' cannot be resolved for ${entity}.${fieldName}`
+            );
           });
         }
         row[fieldName] = pattern;

@@ -199,7 +199,12 @@ export async function loadProject(projectPath: string): Promise<LoadedProject> {
       const catalogPath = path.resolve(resolvedDir, catalogRelPath);
       try {
         const catRaw = await fs.readFile(catalogPath, 'utf8');
-        const parsed = JSON.parse(catRaw);
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(catRaw);
+        } catch (jsonErr) {
+          throw new Error(`Failed to parse catalog file '${catalogPath}': ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`);
+        }
         if (Array.isArray(parsed)) {
           catalogs[entityName] = parsed;
         } else if (parsed && typeof parsed === 'object') {
@@ -214,7 +219,9 @@ export async function loadProject(projectPath: string): Promise<LoadedProject> {
         }
       } catch (err) {
         if (!isEnoent(err)) {
-          throw new Error(`Failed to read catalog for '${entityName}' at '${catalogPath}': ${err instanceof Error ? err.message : String(err)}`);
+          throw err instanceof Error && err.message.startsWith('Failed to parse catalog')
+            ? err
+            : new Error(`Failed to read catalog for '${entityName}' at '${catalogPath}': ${err instanceof Error ? err.message : String(err)}`);
         }
       }
     }
@@ -227,25 +234,26 @@ export async function loadProject(projectPath: string): Promise<LoadedProject> {
     for (const entry of catEntries) {
       if (entry.isFile() && entry.name.endsWith('.json')) {
         const catPath = path.join(catalogsDir, entry.name);
+        const catRaw = await fs.readFile(catPath, 'utf8');
+        let parsed: unknown;
         try {
-          const catRaw = await fs.readFile(catPath, 'utf8');
-          const parsed = JSON.parse(catRaw);
-          const baseName = path.basename(entry.name, '.json');
-          if (Array.isArray(parsed)) {
-            if (!catalogs[baseName]) {
-              catalogs[baseName] = parsed;
-            }
-          } else if (parsed && typeof parsed === 'object') {
-            const obj = parsed as Record<string, unknown>;
-            const entityKey = typeof obj['entity'] === 'string' ? obj['entity'] : (typeof obj['entityName'] === 'string' ? obj['entityName'] : baseName);
-            if (Array.isArray(obj['records'])) {
-              if (!catalogs[entityKey]) catalogs[entityKey] = obj['records'];
-            } else if (Array.isArray(obj['data'])) {
-              if (!catalogs[entityKey]) catalogs[entityKey] = obj['data'];
-            }
+          parsed = JSON.parse(catRaw);
+        } catch (jsonErr) {
+          throw new Error(`Failed to parse catalog file '${catPath}': ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`);
+        }
+        const baseName = path.basename(entry.name, '.json');
+        if (Array.isArray(parsed)) {
+          if (!catalogs[baseName]) {
+            catalogs[baseName] = parsed;
           }
-        } catch {
-          // ignore unparseable optional catalog files
+        } else if (parsed && typeof parsed === 'object') {
+          const obj = parsed as Record<string, unknown>;
+          const entityKey = typeof obj['entity'] === 'string' ? obj['entity'] : (typeof obj['entityName'] === 'string' ? obj['entityName'] : baseName);
+          if (Array.isArray(obj['records'])) {
+            if (!catalogs[entityKey]) catalogs[entityKey] = obj['records'];
+          } else if (Array.isArray(obj['data'])) {
+            if (!catalogs[entityKey]) catalogs[entityKey] = obj['data'];
+          }
         }
       }
     }
