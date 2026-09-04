@@ -83,6 +83,81 @@ describe("L10-5 Agent Skill weeklyCycle Workflow", () => {
     expect(result.validation.passed).toBe(true);
     expect(result.validation.failedCount).toBe(0);
   });
+
+  it("proves pipeline aborts and skips push and playwright when validation fails", async () => {
+    const recordedSteps: string[] = [];
+    const pushMock = vi.fn();
+    const abortDir = path.join(tempDir, "abort-validation");
+    const abortBaseline = path.join(tempDir, "abort-baseline");
+
+    // Create baseline and deliberately tamper with a file so validation fails after accumulate
+    await fs.cp(baselineDir, abortBaseline, { recursive: true });
+
+    // Tamper with Session.json in baseline to inject corrupted dates that will break item-inside-session upon accumulate
+    const sessionFile = path.join(abortBaseline, "Session", "Session.json");
+    const sessionJson = JSON.parse(await fs.readFile(sessionFile, "utf8"));
+    for (const s of sessionJson) {
+      s.fields.StartDate = "2099-01-01";
+      s.fields.EndDate = "2099-01-02";
+    }
+    await fs.writeFile(sessionFile, JSON.stringify(sessionJson, null, 2));
+
+    const result = await weeklyCycle({
+      projectDir: govFixturePath,
+      priorStateDir: abortBaseline,
+      generatedDir: abortDir,
+      cycles: 1,
+      seed: 42,
+      enableVisualInspection: true,
+      explorerUrl: "http://localhost:4200",
+      routesToInspect: ["/governance"],
+      recordStep: (step) => {
+        recordedSteps.push(step);
+      },
+      executePush: pushMock,
+    });
+
+    // Proven: validation failed
+    expect(result.passed).toBe(false);
+    expect(result.validation.passed).toBe(false);
+
+    // Proven: pipeline halted after validate; push and playwright were NEVER called
+    expect(result.executionOrder).toEqual(["accumulate", "validate"]);
+    expect(recordedSteps).toEqual(["accumulate", "validate"]);
+    expect(recordedSteps).not.toContain("push");
+    expect(recordedSteps).not.toContain("playwright");
+    expect(pushMock).not.toHaveBeenCalled();
+    expect(result.visualInspection).toBeUndefined();
+  });
+
+  it("proves pipeline aborts and skips playwright when push throws an error", async () => {
+    const recordedSteps: string[] = [];
+    const pushError = new Error("MJAPI network error during mj sync push");
+    const pushFailingMock = vi.fn().mockRejectedValue(pushError);
+    const pushAbortDir = path.join(tempDir, "abort-push");
+
+    await expect(
+      weeklyCycle({
+        projectDir: govFixturePath,
+        priorStateDir: baselineDir,
+        generatedDir: pushAbortDir,
+        cycles: 1,
+        seed: 42,
+        enableVisualInspection: true,
+        explorerUrl: "http://localhost:4200",
+        routesToInspect: ["/governance"],
+        recordStep: (step) => {
+          recordedSteps.push(step);
+        },
+        executePush: pushFailingMock,
+      })
+    ).rejects.toThrow("MJAPI network error during mj sync push");
+
+    // Proven: accumulate, validate, and push were invoked, but playwright was NEVER called
+    expect(recordedSteps).toEqual(["accumulate", "validate", "push"]);
+    expect(recordedSteps).not.toContain("playwright");
+    expect(pushFailingMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("runWeeklySimulationCycle (legacy in-memory)", () => {

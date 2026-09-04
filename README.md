@@ -48,7 +48,7 @@ flowchart TD
     subgraph OutputStack ["3. MemberJunction Ecosystem Delivery"]
         OA["Declarative Entity Schemas<br/>(Core, BizApps, Custom Extensions)"]
         SYNC["Metadata Sync JSON<br/>(/metadata/** Tree)"]
-        BE["Full BaseEntity Lifecycle<br/>(Hooks, Audits, Embeddings via mj sync push)"]
+        BE["Server Metadata Push<br/>(mj sync push)"]
     end
 
     Narrative --> LoomEngine
@@ -71,10 +71,10 @@ Real businesses do not drop their database and re-seed every quarter; they accum
 - Each simulation cycle reads the committed prior state, respects continuity boundaries (active terms, open support tickets, pending renewals), and emits **only new records** into the metadata tree.
 - Prior IDs remain permanently stable across accumulation cycles.
 
-### 3. Sole Delivery Invariant: Exclusive Metadata Ingestion (BaseEntity Lifecycle)
+### 3. Sole Delivery Invariant: Exclusive Metadata Ingestion
 Loom enforces an absolute architectural invariant: **Metadata is the sole, exclusive engine for synthetic data delivery.**
 - All simulated records are emitted as declarative MemberJunction metadata trees (`metadata/` JSON format) and ingested via `mj sync push`.
-- **Zero Direct-SQL Bypasses**: Direct transactional SQL execution for synthetic data delivery is strictly prohibited. In MemberJunction, operational integrity relies on strongly typed `BaseEntity` subclasses, which execute server-side validation rules, permission checks, custom lifecycle overrides, status transitions, vector embeddings, and audit trails. Bypassing `BaseEntity` produces silent corruption and breaks platform guarantees. All synthetic data ingestion goes through `BaseEntity.Save()` (validation, hooks, audit).
+- **Zero Direct-SQL Bypasses**: Direct transactional SQL execution for synthetic data delivery is strictly prohibited. Synthetic data delivery flows through declarative metadata files ingested through MemberJunction server metadata APIs (`mj sync push`).
 
 ### 4. Fully Metadata- & Configuration-Driven
 - The Loom engine contains **zero hardcoded domain procedures**.
@@ -142,8 +142,21 @@ loom validate --project=projects/enterprise
 Loom's autonomous Agent Skill executes recurring simulation cycles against running hosts:
 1. **Accumulate:** Invokes `loom accumulate --cycles <n>` to generate pure deltas from committed prior state.
 2. **Validate:** Executes deterministic referential closure, hero pins, and factor tolerance gates (`loom validate`).
-3. **Ingestion:** Pushes generated metadata deltas via `mj sync push --dir <generated>`, executing the complete `BaseEntity` lifecycle.
+3. **Ingestion:** Pushes generated metadata deltas via `mj sync push --dir <generated>` through server metadata APIs.
 4. **Visual Inspection:** Drives headless Playwright browser sessions to inspect rendered views and verify zero UI, GraphQL, or data regressions before merging.
+
+### Test Execution Matrix (Mock vs Live)
+
+To ensure fast, hermetic, and deterministic CI execution without external network or browser dependencies, unit tests configure specific boundaries:
+
+| Subsystem | Live Execution | Unit Test / CI Execution | Rationale |
+| :--- | :--- | :--- | :--- |
+| **`accumulate`** | **LIVE** | **LIVE** | Executes actual `executeAccumulate` CLI/engine logic, computing diffs and persisting checkpoint files to disk. |
+| **`validate`** | **LIVE** | **LIVE** | Executes full `executeValidate` engine logic against real serialized files, examining all referential, factor, and relational gates. |
+| **`push`** | **LIVE** (`mj sync push`) | **STUBBED** (`executePush` callback) | Avoids requiring a running MJAPI backend during test runs; records command lines and verifies strict fail-stop invocation order. |
+| **`playwright`** | **LIVE** (Chromium browser launch) | **MOCKED** (`vi.mock('playwright')`) | Avoids requiring local browser binaries and display servers during automated test runs; verifies route navigation and error handling. |
+
+*See [`packages/agent-skill/README.md`](packages/agent-skill/README.md) for full details on error-abort semantics and test suites.*
 
 ---
 

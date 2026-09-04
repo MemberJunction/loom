@@ -11,6 +11,9 @@ import {
   StateLadderEngine,
   FactorEngine,
   RetrospectiveUnroller,
+  nestedEvent,
+  temporalRole,
+  scopedDecision,
   type SimulationNode,
   type EntityCandidate,
 } from '@memberjunction/loom-engine';
@@ -280,16 +283,157 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         // 1. Generate background records deterministically (1..targetCount)
         const backgroundRecords: Record<string, unknown>[] = [];
         const entityRng = createRng(ctx.seed, `entity:${entityName}`);
-        for (let i = 1; i <= targetCount; i++) {
-          const row = generateEntityRecord({
-            domain: loaded.domain,
-            entity: entityName,
-            i,
-            parentPool,
-            rng: entityRng,
-            identityService,
+
+        const rolePoolRule = (loaded.domain.relationalRules ?? []).find(
+          (r) =>
+            r.kind === 'date-window' &&
+            r.windowEntity === entityName &&
+            (loaded.domain.relationalRules ?? []).some(
+              (or) => or.kind === 'outcome-derived-from-ballots' && or.ballotEntity === r.sourceEntity
+            )
+        );
+        const nestedDateWindowRule = (loaded.domain.relationalRules ?? []).find(
+          (r) => r.kind === 'date-window' && r.sourceEntity === entityName && parentPool[r.windowEntity]?.length
+        );
+        const outcomeRule = (loaded.domain.relationalRules ?? []).find(
+          (r) => r.kind === 'outcome-derived-from-ballots' && r.sourceEntity === entityName
+        );
+
+        if (rolePoolRule && rolePoolRule.kind === 'date-window') {
+          // Temporal role assignment pool generation: generate role records spanning the simulation era
+          const parentFk = Object.values(entityCfg.foreignKeys)[0];
+          const parentRecords = parentFk ? (parentPool[parentFk.targetEntity] ?? []) : [];
+          for (const b of parentRecords) {
+            const parentId = String(b['ID'] ?? b['id']);
+            for (let a = 1; a <= 5; a++) {
+              const actorId = identityService.MintId(loaded.domain.name, 'Actor', [parentId, `ACTOR-${a}`]);
+              const roleId = identityService.MintId(loaded.domain.name, entityName, [parentId, actorId, '2021-01-01']);
+              backgroundRecords.push({
+                ID: roleId,
+                ...(parentFk ? { [parentFk.fieldName]: parentId } : {}),
+                [rolePoolRule.windowForeignKey]: actorId,
+                [rolePoolRule.windowStartField]: '2021-01-01',
+                [rolePoolRule.windowEndField]: '2028-12-31',
+                CreatedAt: '2021-01-01',
+              });
+            }
+          }
+        } else if (nestedDateWindowRule && nestedDateWindowRule.kind === 'date-window') {
+          // Pattern A: nestedEvent - events bounded within parent window
+          const parentRecords = parentPool[nestedDateWindowRule.windowEntity]!;
+          const itemsPerParent = Math.max(1, Math.floor(targetCount / parentRecords.length)) || 2;
+          const nestedRecords = nestedEvent({
+            seed: ctx.seed,
+            parents: parentRecords,
+            streamKey: (p) => `nested:${entityName}:${p['ID'] ?? p['id']}`,
+            countOf: () => itemsPerParent,
+            parentWindow: (p) => ({
+              start: String(p[nestedDateWindowRule.windowStartField] ?? '2026-03-01'),
+              end: String(p[nestedDateWindowRule.windowEndField] ?? '2026-03-10'),
+            }),
+            spawnChild: (_childRng, p, idx, childDate) => {
+              const parentId = String(p['ID'] ?? p['id']);
+              const childId = identityService.MintId(loaded.domain.name, entityName, [parentId, String(idx), childDate]);
+              const childRow: Record<string, unknown> = {
+                ID: childId,
+                [nestedDateWindowRule.windowForeignKey]: parentId,
+                [nestedDateWindowRule.dateField]: childDate,
+                CreatedAt: childDate,
+              };
+              for (const [fName, fDef] of Object.entries(entityCfg.fields)) {
+                if (fName in childRow) continue;
+                if (fDef.type === 'string') {
+                  childRow[fName] = `${entityName} ${idx + 1} (${p['Name'] ?? 'Event'})`;
+                } else if (fDef.type === 'date') {
+                  childRow[fName] = childDate;
+                }
+              }
+              return childRow;
+            },
           });
-          backgroundRecords.push(row);
+          backgroundRecords.push(...nestedRecords);
+        } else if (outcomeRule && outcomeRule.kind === 'outcome-derived-from-ballots') {
+          // Pattern B: temporalRole + Pattern C: scopedDecision
+          const parentFk = Object.values(entityCfg.foreignKeys)[0];
+          const eventEntity = parentFk?.targetEntity ?? '';
+          const eventRecords = (eventEntity ? (parentPool[eventEntity] ?? allRecords[eventEntity]) : undefined) ?? [];
+          const ballotTenureRule = (loaded.domain.relationalRules ?? []).find(
+            (r) => r.kind === 'date-window' && r.sourceEntity === outcomeRule.ballotEntity
+          );
+          const tenureRecords = ballotTenureRule && ballotTenureRule.kind === 'date-window'
+            ? (allRecords[ballotTenureRule.windowEntity] ?? parentPool[ballotTenureRule.windowEntity] ?? [])
+            : [];
+
+          const actorIds = Array.from(new Set(tenureRecords.map((t) => String(t['ActorID'] ?? t['Actor']))));
+          const actors = actorIds.map((id) => ({ ID: id }));
+          const rolePool = temporalRole({
+            actors,
+            roleAssignments: tenureRecords,
+            actorIdOf: (a) => a.ID,
+            assignmentActorIdOf: (t) => String(t[ballotTenureRule && ballotTenureRule.kind === 'date-window' ? ballotTenureRule.windowForeignKey : 'ActorID']),
+            assignmentWindowOf: (t) => ({
+              start: String(t[ballotTenureRule && ballotTenureRule.kind === 'date-window' ? ballotTenureRule.windowStartField : 'StartDate']),
+              end: String(t[ballotTenureRule && ballotTenureRule.kind === 'date-window' ? ballotTenureRule.windowEndField : 'EndDate']),
+            }),
+          });
+
+          const entityFactor = factorContracts.find((fc) => fc.effect === entityName);
+          const targetApprovalRate = entityFactor?.target ?? 0.6;
+          const { ballots, decisions } = scopedDecision({
+            seed: ctx.seed,
+            events: eventRecords,
+            eligibleActorsOf: (ev) => rolePool.getActiveActors(String(ev['ItemDate'] ?? ev['Date'] ?? '2026-03-05')).map((r) => r.actor),
+            eventDateOf: (ev) => String(ev['ItemDate'] ?? ev['Date'] ?? '2026-03-05'),
+            streamKey: (ev) => `scopedDecision:${ev['ID'] ?? ev['id']}`,
+            rule: outcomeRule.rule ?? 'majority',
+            quorum: outcomeRule.quorum,
+            tieRule: outcomeRule.tieRule,
+            abstainHandling: outcomeRule.abstainHandling,
+            targetApprovalRate,
+            createBallot: (_ballotRng, ev, actor, vote, ballotDate) => {
+              const decisionId = identityService.MintId(loaded.domain.name, entityName, [String(ev['ID'] ?? ev['id'])]);
+              const ballotId = identityService.MintId(loaded.domain.name, outcomeRule.ballotEntity, [decisionId, actor.ID]);
+              return {
+                ID: ballotId,
+                [outcomeRule.ballotDecisionForeignKey]: decisionId,
+                ActorID: actor.ID,
+                [outcomeRule.ballotVoteField]: vote === 'Yes'
+                  ? outcomeRule.positiveVoteValue
+                  : vote === 'No'
+                  ? outcomeRule.negativeVoteValue
+                  : 'Abstain',
+                BallotDate: ballotDate,
+                CreatedAt: ballotDate,
+              };
+            },
+            createDecision: (ev, outcome, _eventBallots, decisionDate) => {
+              const decisionId = identityService.MintId(loaded.domain.name, entityName, [String(ev['ID'] ?? ev['id'])]);
+              return {
+                ID: decisionId,
+                ItemID: ev['ID'] ?? ev['id'],
+                [outcomeRule.outcomeField]: outcome === 'Passed' ? outcomeRule.passedOutcomeValue : outcomeRule.failedOutcomeValue,
+                DecisionDate: decisionDate,
+                CreatedAt: decisionDate,
+              };
+            },
+          });
+
+          allRecords[outcomeRule.ballotEntity] = ballots;
+          bgRecordsByEntity.set(outcomeRule.ballotEntity, ballots);
+
+          backgroundRecords.push(...decisions);
+        } else {
+          for (let i = 1; i <= targetCount; i++) {
+            const row = generateEntityRecord({
+              domain: loaded.domain,
+              entity: entityName,
+              i,
+              parentPool,
+              rng: entityRng,
+              identityService,
+            });
+            backgroundRecords.push(row);
+          }
         }
 
         for (const row of backgroundRecords) {
@@ -363,7 +507,12 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
 
       // Spread temporal dates across birthCycle for cohort entities (entities with foreign keys)
       const isCohortEntity = Object.keys(loaded.domain.entities[entityName]?.foreignKeys ?? {}).length > 0;
-      if (isCohortEntity) {
+      const isRelationalRuleEntity = (loaded.domain.relationalRules ?? []).some(
+        (r) =>
+          (r.kind === 'date-window' && (r.windowEntity === entityName || r.sourceEntity === entityName)) ||
+          (r.kind === 'outcome-derived-from-ballots' && (r.sourceEntity === entityName || r.ballotEntity === entityName))
+      );
+      if (isCohortEntity && !isRelationalRuleEntity) {
         const month = String(1 + (bgIdx % 12)).padStart(2, '0');
         const day = String(1 + (bgIdx % 28)).padStart(2, '0');
         if (r['JoinDate'] !== undefined) {
@@ -427,6 +576,13 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
             for (const [field, targetVal] of Object.entries(contract.outcome.where)) {
               if (hero && hero.fixedFields && field in hero.fixedFields) {
                 // Invariant: hero fixedFields take precedence over factor outcome calibration
+                continue;
+              }
+              const isDerivedOutcomeField = (loaded.domain.relationalRules ?? []).some(
+                (r) => r.kind === 'outcome-derived-from-ballots' && r.sourceEntity === entityName && r.outcomeField === field
+              );
+              if (isDerivedOutcomeField) {
+                // Invariant: outcome derived strictly from ballots via scopedDecision; do not decouple
                 continue;
               }
               if (realized) {
@@ -719,82 +875,6 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
     }
   }
 
-  // Align generated entities against declared relational rules
-  for (const rule of loaded.domain.relationalRules ?? []) {
-    if (rule.kind === 'date-window') {
-      const windowRecords = allRecords[rule.windowEntity] ?? [];
-      const windowsByKey = new Map<string, { rawKey: string; windows: Array<{ start: string; end: string }> }>();
-      for (const w of windowRecords) {
-        const rawKey = String(w[rule.windowForeignKey] ?? w['ID'] ?? w['id'] ?? '');
-        const k = rawKey.toLowerCase();
-        const start = String(w[rule.windowStartField] ?? '').slice(0, 10);
-        const end = String(w[rule.windowEndField] ?? '').slice(0, 10) || '9999-12-31';
-        if (k && start) {
-          let entry = windowsByKey.get(k);
-          if (!entry) {
-            entry = { rawKey, windows: [] };
-            windowsByKey.set(k, entry);
-          }
-          entry.windows.push({ start, end });
-        }
-      }
-      const sourceRecords = allRecords[rule.sourceEntity] ?? [];
-      const entries = Array.from(windowsByKey.values());
-      for (let i = 0; i < sourceRecords.length; i++) {
-        const row = sourceRecords[i]!;
-        let currentK = String(row[rule.windowForeignKey] ?? '').toLowerCase();
-        let entry = windowsByKey.get(currentK);
-        if ((!entry || entry.windows.length === 0) && entries.length > 0) {
-          entry = entries[i % entries.length]!;
-          row[rule.windowForeignKey] = entry.rawKey;
-        }
-        if (entry && entry.windows.length > 0) {
-          const w = entry.windows[0]!;
-          row[rule.dateField] = w.start;
-        }
-      }
-    } else if (rule.kind === 'outcome-derived-from-ballots') {
-      const ballotRecords = allRecords[rule.ballotEntity] ?? [];
-      const ballotsByDecision = new Map<string, Record<string, unknown>[]>();
-      for (const b of ballotRecords) {
-        const dId = String(b[rule.ballotDecisionForeignKey] ?? '').toLowerCase();
-        if (dId) {
-          let list = ballotsByDecision.get(dId);
-          if (!list) {
-            list = [];
-            ballotsByDecision.set(dId, list);
-          }
-          list.push(b);
-        }
-      }
-      const decisionRecords = allRecords[rule.sourceEntity] ?? [];
-      for (const outcomeRecord of decisionRecords) {
-        const dId = String(outcomeRecord['ID'] ?? outcomeRecord['id'] ?? '').toLowerCase();
-        const relatedBallots = ballotsByDecision.get(dId) ?? [];
-        if (relatedBallots.length === 0) continue;
-
-        let yes = 0;
-        let no = 0;
-        for (const b of relatedBallots) {
-          const v = String(b[rule.ballotVoteField] ?? '').trim();
-          if (v.toLowerCase() === rule.positiveVoteValue.toLowerCase()) yes++;
-          else if (v.toLowerCase() === rule.negativeVoteValue.toLowerCase()) no++;
-        }
-
-        let outcome: string;
-        if (rule.rule === 'supermajority-two-thirds') {
-          outcome = yes >= 2 * no && yes > 0 ? rule.passedOutcomeValue : rule.failedOutcomeValue;
-        } else if (rule.rule === 'unanimous') {
-          outcome = yes > 0 && no === 0 ? rule.passedOutcomeValue : rule.failedOutcomeValue;
-        } else {
-          outcome = yes > no ? rule.passedOutcomeValue : rule.failedOutcomeValue;
-        }
-
-        outcomeRecord[rule.outcomeField] = outcome;
-      }
-    }
-  }
-
   // Emit metadata tree
   const writtenMetadata = await emitMetadata({
     outputDir,
@@ -832,7 +912,6 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
           currentState: state.currentState,
           enteredCycle: state.enteredCycle,
           tenureInCurrentState: state.tenureInCurrentState,
-          ['ten' + 'ure']: state.tenureInCurrentState,
         });
       }
     }

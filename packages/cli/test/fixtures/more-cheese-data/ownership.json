@@ -1,0 +1,335 @@
+{
+  "version": "1.0.0",
+  "directories": {
+    "ai-model-vendors": {
+      "tier": "config",
+      "classification": "config",
+      "reason": "Hand-authored administrative, taxonomy, or model configuration"
+    },
+    "ai-models": {
+      "tier": "config",
+      "classification": "config",
+      "reason": "Hand-authored administrative, taxonomy, or model configuration"
+    },
+    "ai-vendors": {
+      "tier": "config",
+      "classification": "config",
+      "reason": "Hand-authored administrative, taxonomy, or model configuration"
+    },
+    "sonar-factors": {
+      "tier": "config",
+      "classification": "config",
+      "reason": "Hand-authored administrative, taxonomy, or model configuration"
+    },
+    "sonar-model-factors": {
+      "tier": "config",
+      "classification": "config",
+      "reason": "Hand-authored administrative, taxonomy, or model configuration"
+    },
+    "sonar-model-related-entities": {
+      "tier": "config",
+      "classification": "config",
+      "reason": "Hand-authored administrative, taxonomy, or model configuration"
+    },
+    "sonar-score-band-sets": {
+      "tier": "config",
+      "classification": "config",
+      "reason": "Hand-authored administrative, taxonomy, or model configuration"
+    },
+    "sonar-score-bands": {
+      "tier": "config",
+      "classification": "config",
+      "reason": "Hand-authored administrative, taxonomy, or model configuration"
+    },
+    "sonar-score-model-versions": {
+      "tier": "config",
+      "classification": "config",
+      "reason": "Hand-authored administrative, taxonomy, or model configuration"
+    },
+    "sonar-score-models": {
+      "tier": "config",
+      "classification": "config",
+      "reason": "Hand-authored administrative, taxonomy, or model configuration"
+    },
+    "sonar-time-windows": {
+      "tier": "config",
+      "classification": "config",
+      "reason": "Hand-authored administrative, taxonomy, or model configuration"
+    },
+    "schema-info": {
+      "tier": "config",
+      "classification": "config",
+      "reason": "Application schema registration metadata (template-authored)"
+    },
+    "address-links": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "addresses": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "advocacy-actions": {
+      "tier": "generated",
+      "classification": "loom",
+      "reason": "Synthetic world model entity generated and simulated by Loom"
+    },
+    "certifications": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "reference taxonomy (reviewer round-1 C3 Option A; pending owner confirmation)"
+    },
+    "committee-agenda-items": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "committee-attendance": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "committee-meetings": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "committee-memberships": {
+      "tier": "generated",
+      "classification": "loom",
+      "reason": "Synthetic world model entity generated and simulated by Loom"
+    },
+    "committee-motions": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "committee-terms": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "committee-types": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "reference taxonomy (reviewer round-1 C3 Option A; pending owner confirmation)"
+    },
+    "committee-votes": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "committees": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "companies": {
+      "tier": "generated",
+      "classification": "loom",
+      "reason": "Synthetic world model entity generated and simulated by Loom"
+    },
+    "competition-entries": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "contact-methods": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "courses": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "reference taxonomy (reviewer round-1 C3 Option A; pending owner confirmation)"
+    },
+    "data-quality-labels": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "reference taxonomy (reviewer round-1 C3 Option A; pending owner confirmation)"
+    },
+    "enrollments": {
+      "tier": "generated",
+      "classification": "loom",
+      "reason": "Synthetic world model entity generated and simulated by Loom"
+    },
+    "event-registrations": {
+      "tier": "generated",
+      "classification": "loom",
+      "reason": "Synthetic world model entity generated and simulated by Loom"
+    },
+    "events": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "form-answers": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "form-distributions": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "form-pages": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "reference taxonomy (reviewer round-1 C3 Option A; pending owner confirmation)"
+    },
+    "form-question-options": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "reference taxonomy (reviewer round-1 C3 Option A; pending owner confirmation)"
+    },
+    "form-questions": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "reference taxonomy (reviewer round-1 C3 Option A; pending owner confirmation)"
+    },
+    "form-responses": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "form-versions": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "reference taxonomy (reviewer round-1 C3 Option A; pending owner confirmation)"
+    },
+    "forms": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "reference taxonomy (reviewer round-1 C3 Option A; pending owner confirmation)"
+    },
+    "issue-comments": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "issue-sequences": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "issue-types": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "reference taxonomy (reviewer round-1 C3 Option A; pending owner confirmation)"
+    },
+    "issues": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "member-certifications": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "member-profiles": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "membership-periods": {
+      "tier": "generated",
+      "classification": "loom",
+      "reason": "Synthetic world model entity generated and simulated by Loom"
+    },
+    "order-lines": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "orders": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "organization-profiles": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "organizations": {
+      "tier": "generated",
+      "classification": "loom",
+      "reason": "Synthetic world model entity generated and simulated by Loom"
+    },
+    "payment-lines": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "payments": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "people": {
+      "tier": "generated",
+      "classification": "loom",
+      "reason": "Synthetic world model entity generated and simulated by Loom"
+    },
+    "portal-sessions": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "Legacy portal web telemetry frozen (proposed, pending owner confirmation)"
+    },
+    "product-categories": {
+      "tier": "generated",
+      "classification": "loom",
+      "reason": "Synthetic world model entity generated and simulated by Loom"
+    },
+    "products": {
+      "tier": "generated",
+      "classification": "loom",
+      "reason": "Synthetic world model entity generated and simulated by Loom"
+    },
+    "relationship-types": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "reference taxonomy (reviewer round-1 C3 Option A; pending owner confirmation)"
+    },
+    "relationships": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "secure-messages": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "secure-threads": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "task-assignments": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "task-links": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    },
+    "task-types": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "reference taxonomy (reviewer round-1 C3 Option A; pending owner confirmation)"
+    },
+    "tasks": {
+      "tier": "generated",
+      "classification": "frozen",
+      "reason": "datagen-origin, moves under Loom in C27-4"
+    }
+  }
+}

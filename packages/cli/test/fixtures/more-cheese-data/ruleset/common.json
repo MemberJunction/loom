@@ -86,7 +86,7 @@
       "id": "factor-ccp-enrollment",
       "effect": "CourseEnrollment",
       "target": 0.12,
-      "tolerance": 0.04,
+      "tolerance": 0.03,
       "evidence": {
         "source": "ICF Education Commission Annual Report",
         "confidence": "medium",

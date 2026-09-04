@@ -32,7 +32,7 @@ Real organizations do not drop their database and re-seed every quarter; they ac
 - Loom treats accumulation as a first-class engine primitive:
   $$\text{Loom: } (\text{domainConfig}, \text{seed}, \text{releaseDate}, \text{ruleset}, \text{priorState}) \longrightarrow \text{deltaRecords}$$
 - Each simulation cycle ingests the committed prior state (`metadata/` JSON tree), respects continuity boundaries (active committee terms, open billing tickets, pending renewal grace periods), and emits **only new records**.
-- Every delta is naturally a pure, additive MemberJunction metadata sync diff, ingested via `mj sync push` and executing `BaseEntity` lifecycles.
+- Every delta is naturally a pure, additive MemberJunction metadata sync diff, ingested via `mj sync push`.
 
 ### 1.4 Canonical Engine Invariants
 The Loom simulation engine strictly preserves seven architectural invariants across all packages, seeds, and execution modes:
@@ -43,7 +43,7 @@ The Loom simulation engine strictly preserves seven architectural invariants acr
 - **Invariant 5 (Deep Immutability)**: Emitted transaction history from earlier cycles is never mutated in subsequent cycles.
 - **Invariant 6 (Factor Recovery)**: Statistical logistic regression over emitted crowd data recovers authored $\beta$ weights within defined tolerance bounds ($\pm 0.15$ at $N \ge 5000$).
 - **Invariant 7 (Topological & Referential Closure)**: Emitted datasets strictly preserve foreign key closure in topological DAG dependency order with zero orphaned records.
-- **Invariant 8 (Metadata Sole Delivery & BaseEntity Integrity)**: Metadata is the sole engine for synthetic data delivery. All simulated records are emitted as partitioned declarative metadata files (`metadata/` tree) and ingested exclusively via MemberJunction's metadata sync push (`mj sync push`), ensuring every record triggers the complete `BaseEntity` subclass lifecycle, server hooks, validation rules, status transitions, vector embeddings, and audit tracking. Direct SQL `INSERT` bypasses are strictly prohibited.
+- **Invariant 8 (Metadata Sole Delivery)**: Metadata is the sole engine for synthetic data delivery. All simulated records are emitted as partitioned declarative metadata files (`metadata/` tree) and ingested exclusively via MemberJunction's metadata sync push (`mj sync push`) through server metadata APIs. Direct SQL `INSERT` bypasses are strictly prohibited.
 
 ---
 
@@ -75,7 +75,7 @@ flowchart TD
 
     subgraph Emitters ["3. Exclusive Metadata Emission"]
         MS["Open App Metadata Tree<br/>(/metadata/** JSON)"]
-        BE["Full BaseEntity Lifecycle<br/>(mj sync push)"]
+        BE["Server Metadata Push<br/>(mj sync push)"]
         ARF["In-App Operational Residue<br/>(Dashboards, Views, Conversations)"]
     end
 
@@ -223,7 +223,7 @@ sequenceDiagram
     Skill->>Loom: loom validate
     Loom-->>Skill: All Validation Gates Passed
     Skill->>Sync: mj sync push --dir <generated>
-    Sync-->>Skill: BaseEntity Ingestion Confirmed
+    Sync-->>Skill: Push Completed
     Skill->>Host: Verify Running Host Stack
     Skill->>PW: Run Visual Inspection Suite
     PW->>Host: Navigate Dashboards & Persona Views
@@ -268,11 +268,11 @@ sequenceDiagram
 ### Phase 5: More Cheese Migration to Loom (Measured Reality)
 - [x] Define More Cheese domain manifest (`data/domain.json`) and factor rulesets in Loom.
 - [x] Direct generation targeting standard BizApps/Core schemas (`generated/` metadata trees partitioned per entity).
-- [x] Schema & Directory Ownership manifest (`data/ownership.json`): 23 active Loom-generated directories, 32 frozen directories (datagen-origin, pending Loom migration), and 17 config/metadata directories.
+- [x] Schema & Directory Ownership manifest (`data/ownership.json`): Measured reality at cheese #27 `0ae53cd`: 10 `loom`, 44 `frozen`, 11 `config`.
 - [x] Referential closure and schema integrity: 9 closure invariants (FK closure, directoryOrder completeness, PK uniqueness, TotalGross balance, balance identity, no overpayment, period-to-order 1:1 within 90 days, DuesAmount equals UnitPrice, status shape by category).
-- [x] Relational integrity gates: 3 relational rules (comment author committee membership, activities inside membership tenure with requireWindow, minutes contextual references).
+- [x] Relational integrity gates: Relational rules evaluated on generic test fixtures (`projects/governance-fixture/`); cheese #26 consolidated production More Cheese rules into closure invariants.
 - [x] Accumulation and checkpoint persistence: deterministic multi-cycle advancement from prior state via `checkpoint.json`.
-- [x] Elimination of Direct SQL Bypasses: all synthetic data ingestion channeled through declarative metadata and `BaseEntity.Save()`.
+- [x] Elimination of Direct SQL Bypasses: all synthetic data emitted as partitioned declarative metadata files ingested via `mj sync push`.
 
 ### Phase 6: Simulation Agent Skill & First-Class Cadence
 - [x] Implement the Simulation Agent Skill package (`@memberjunction/loom-agent-skill`).
@@ -296,18 +296,10 @@ Instead, Loom enforces an **iterative authoring discipline**:
 ### 7.2 Counterfactual Branching & Signature Isolation
 Loom's deterministic architecture enables precise **counterfactual branching**: running "what-if" organizational simulations from identical starting conditions by varying a single factor or ruleset parameter.
 
-**Empirical Measurement (Enterprise Fixture)**:
-- **Baseline Build**: Seed 42, Release 2026-09-02, baseline renewal factor target 0.80.
-- **Counterfactual Variant**: Seed 42, Release 2026-09-02, renewal factor target varied to 0.40.
-- **Measured Diff**:
-  - Exactly **1 file affected**: `Member/Member.json`.
-  - Exactly **931 diff lines** (representing 110 status transitions from `Active` to `Lapsed`).
-  - **0 mutations** across all other entities: `Company`, `Product`, `Subscription`, `OrderHeader`, `OrderLine`, `Payment`, `.mj-sync.json`, and `checkpoint.json` remained 100% byte-identical.
-
 **Signature Isolation Assessment**:
 The execution signature tuple `(project, seed, release, ruleset)` cleanly and completely isolates causal mutations:
 - Because PRNG sequences are deterministically keyed per `seed:entity:id:cycle`, altering a factor parameter on one entity leaves unrelated entities and upstream generators entirely untouched.
-- **Tooling Gap Identified**: While raw `diff -u -r` proves physical isolation, dedicated CLI tooling (`loom diff --baseline <dir> --variant <dir>`) is planned to summarize causal divergences in business terms (e.g. "Factor target shift 0.80 -> 0.40 resulted in -40% renewal rate across 250 members with zero referential drift").
+- **Tooling Gap Identified**: While raw `diff -u -r` proves physical isolation, dedicated CLI tooling (`loom diff --baseline <dir> --variant <dir>`) is planned to summarize causal divergences in business terms (e.g. "Factor target shift 0.80 -> 0.40 resulted in -40% renewal rate across members with zero referential drift").
 
 ---
 

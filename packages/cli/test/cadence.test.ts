@@ -63,24 +63,25 @@ describe("L10-6 Cadence First-Class & Calendar-Correct Month Advance", () => {
       }
     });
 
-    it("mutation: removing month from cycleUnit enum causes schema rejection", () => {
-      // Simulate mutation where month is removed from valid units
-      const mutatedSchema = ProjectManifestSchema.refine(
-        (m) => m.cycleUnit !== "month",
-        { message: "Mutated: month removed from valid cycleUnit" }
-      );
-      const monthManifest = {
-        name: "test-manifest",
-        version: "1.0.0",
-        domain: "test",
-        uuidNamespace: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
-        startCycle: 2021,
-        releaseDate: "2026-09-02",
-        cycleUnit: "month",
-        output: { metadataDir: "./metadata" },
-      };
-      const parsed = mutatedSchema.safeParse(monthManifest);
-      expect(parsed.success).toBe(false);
+    it("rejects invalid cycle units: fortnight, decade, invalid, hour", () => {
+      for (const badUnit of ["fortnight", "decade", "invalid", "hour", "century"]) {
+        const badManifest = {
+          name: "test-manifest",
+          version: "1.0.0",
+          domain: "test",
+          uuidNamespace: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+          startCycle: 2021,
+          releaseDate: "2026-09-02",
+          cycleUnit: badUnit,
+          output: { metadataDir: "./metadata" },
+        };
+        const parsed = ProjectManifestSchema.safeParse(badManifest);
+        expect(parsed.success).toBe(false);
+        if (!parsed.success) {
+          const issue = parsed.error.issues.find((i) => i.path.includes("cycleUnit"));
+          expect(issue).toBeDefined();
+        }
+      }
     });
   });
 });

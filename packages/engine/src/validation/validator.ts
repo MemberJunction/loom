@@ -1293,17 +1293,27 @@ export class Validator {
 
           let posVotes = 0;
           let negVotes = 0;
+          let abstainVotes = 0;
           for (const b of ballots) {
-            const voteVal = String(b[rule.ballotVoteField] ?? '').trim();
-            if (voteVal.toLowerCase() === rule.positiveVoteValue.toLowerCase()) {
+            const voteVal = String(b[rule.ballotVoteField] ?? '').trim().toLowerCase();
+            if (voteVal === rule.positiveVoteValue.toLowerCase()) {
               posVotes++;
-            } else if (voteVal.toLowerCase() === rule.negativeVoteValue.toLowerCase()) {
+            } else if (voteVal === rule.negativeVoteValue.toLowerCase()) {
               negVotes++;
+            } else if (voteVal === 'abstain') {
+              abstainVotes++;
             }
           }
 
+          const minQuorum = rule.quorum ?? 1;
+          const quorumParticipants = rule.abstainHandling === 'count-toward-quorum'
+            ? posVotes + negVotes + abstainVotes
+            : posVotes + negVotes;
+
           let expectedOutcome: string;
-          if (rule.rule === 'supermajority-two-thirds') {
+          if (quorumParticipants < minQuorum) {
+            expectedOutcome = rule.failedOutcomeValue;
+          } else if (rule.rule === 'supermajority-two-thirds') {
             expectedOutcome = posVotes >= 2 * negVotes && posVotes > 0 ? rule.passedOutcomeValue : rule.failedOutcomeValue;
           } else if (rule.rule === 'unanimous') {
             expectedOutcome = posVotes > 0 && negVotes === 0 ? rule.passedOutcomeValue : rule.failedOutcomeValue;
@@ -1313,7 +1323,13 @@ export class Validator {
             } else if (posVotes < negVotes) {
               expectedOutcome = rule.failedOutcomeValue;
             } else {
-              expectedOutcome = rule.tieOutcomeValue ?? rule.failedOutcomeValue;
+              if (rule.tieRule === 'Passed') {
+                expectedOutcome = rule.passedOutcomeValue;
+              } else if (rule.tieRule === 'Failed') {
+                expectedOutcome = rule.failedOutcomeValue;
+              } else {
+                expectedOutcome = rule.tieOutcomeValue ?? rule.failedOutcomeValue;
+              }
             }
           }
 

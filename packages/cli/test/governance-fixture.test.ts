@@ -66,6 +66,18 @@ describe("L10-3 Governance Fixture Testbed", () => {
         output: noHeroBuildDir,
       });
 
+      // Body differs because hero record HERO-GOV-001 is injected in build1Dir
+      const withHeroBodyRaw = await fs.readFile(path.join(build1Dir, "Body", "Body.json"), "utf8");
+      const noHeroBodyRaw = await fs.readFile(path.join(noHeroBuildDir, "Body", "Body.json"), "utf8");
+      expect(withHeroBodyRaw).not.toBe(noHeroBodyRaw);
+
+      const withHeroBody = JSON.parse(withHeroBodyRaw) as Array<{ primaryKey: { ID: string }; fields: { Name: string } }>;
+      const noHeroBody = JSON.parse(noHeroBodyRaw) as Array<{ primaryKey: { ID: string }; fields: { Name: string } }>;
+      expect(withHeroBody.length).toBe(noHeroBody.length + 1);
+      const nonHeroWithHeroBody = withHeroBody.filter((b) => b.fields.Name !== "Hero Governing Board");
+      expect(JSON.stringify(nonHeroWithHeroBody)).toBe(JSON.stringify(noHeroBody));
+
+      // All child and dependent entities are 100% byte-identical
       const entities = ["Tenure", "Session", "Item", "Decision", "Ballot"];
       for (const entity of entities) {
         const withHeroData = await fs.readFile(path.join(build1Dir, entity, entity + ".json"), "utf8");
@@ -131,6 +143,118 @@ describe("L10-3 Governance Fixture Testbed", () => {
     const report = await executeValidate({
       project: govFixturePath,
       data: mutantDir,
+    });
+
+    expect(report.passed).toBe(false);
+    const brokenGate = report.gates.find((g) => g.name.includes("decision-outcome-derived-from-ballots"));
+    expect(brokenGate).toBeDefined();
+    expect(brokenGate?.passed).toBe(false);
+    expect(brokenGate?.actual).toBeGreaterThan(0);
+  });
+
+  it("mutation 4 fails: quorum requirement not met fails decision-outcome-derived-from-ballots", async () => {
+    const mutantProjDir = path.join(tempDir, "mutant-proj-quorum");
+    await fs.cp(govFixturePath, mutantProjDir, { recursive: true });
+
+    // Set quorum to 9999 in domain.json
+    const domainPath = path.join(mutantProjDir, "domain.json");
+    const domainJson = JSON.parse(await fs.readFile(domainPath, "utf8"));
+    const rule = domainJson.relationalRules.find((r: { kind: string }) => r.kind === "outcome-derived-from-ballots");
+    rule.quorum = 9999;
+    await fs.writeFile(domainPath, JSON.stringify(domainJson, null, 2));
+
+    const report = await executeValidate({
+      project: mutantProjDir,
+      data: build1Dir,
+    });
+
+    expect(report.passed).toBe(false);
+    const brokenGate = report.gates.find((g) => g.name.includes("decision-outcome-derived-from-ballots"));
+    expect(brokenGate).toBeDefined();
+    expect(brokenGate?.passed).toBe(false);
+    expect(brokenGate?.actual).toBeGreaterThan(0);
+  });
+
+  it("mutation 5 fails: tie-break rule violation fails decision-outcome-derived-from-ballots", async () => {
+    const mutantProjDir = path.join(tempDir, "mutant-proj-tie");
+    const mutantDataDir = path.join(tempDir, "mutant-data-tie");
+    await fs.cp(govFixturePath, mutantProjDir, { recursive: true });
+    await fs.cp(build1Dir, mutantDataDir, { recursive: true });
+
+    // In domain.json set tieRule to Failed
+    const domainPath = path.join(mutantProjDir, "domain.json");
+    const domainJson = JSON.parse(await fs.readFile(domainPath, "utf8"));
+    const rule = domainJson.relationalRules.find((r: { kind: string }) => r.kind === "outcome-derived-from-ballots");
+    rule.tieRule = "Failed";
+    await fs.writeFile(domainPath, JSON.stringify(domainJson, null, 2));
+
+    // In mutant data, find first decision that is Passed, and set its ballots to 5 Yes, 5 No (tie)
+    const decisionFile = path.join(mutantDataDir, "Decision", "Decision.json");
+    const decisions = JSON.parse(await fs.readFile(decisionFile, "utf8"));
+    const targetDecision = decisions.find((d: { fields: { Outcome: string } }) => d.fields.Outcome === "Passed") ?? decisions[0];
+    targetDecision.fields.Outcome = "Passed";
+    await fs.writeFile(decisionFile, JSON.stringify(decisions, null, 2));
+
+    const ballotFile = path.join(mutantDataDir, "Ballot", "Ballot.json");
+    const ballots = JSON.parse(await fs.readFile(ballotFile, "utf8"));
+    const targetDecisionId = targetDecision.primaryKey.ID;
+    const targetBallots = ballots.filter((b: { fields: { DecisionID: string } }) => b.fields.DecisionID === targetDecisionId);
+    // Mutate ballots: exactly half Yes, half No
+    const half = Math.floor(targetBallots.length / 2);
+    targetBallots.forEach((b: { fields: { Vote: string } }, idx: number) => {
+      b.fields.Vote = idx < half ? "Yes" : "No";
+    });
+    if (targetBallots.length % 2 !== 0 && targetBallots.length > 0) {
+      targetBallots[targetBallots.length - 1].fields.Vote = "No";
+    }
+    await fs.writeFile(ballotFile, JSON.stringify(ballots, null, 2));
+
+    const report = await executeValidate({
+      project: mutantProjDir,
+      data: mutantDataDir,
+    });
+
+    expect(report.passed).toBe(false);
+    const brokenGate = report.gates.find((g) => g.name.includes("decision-outcome-derived-from-ballots"));
+    expect(brokenGate).toBeDefined();
+    expect(brokenGate?.passed).toBe(false);
+    expect(brokenGate?.actual).toBeGreaterThan(0);
+  });
+
+  it("mutation 6 fails: abstain votes ignored below quorum fails decision-outcome-derived-from-ballots", async () => {
+    const mutantProjDir = path.join(tempDir, "mutant-proj-abstain");
+    const mutantDataDir = path.join(tempDir, "mutant-data-abstain");
+    await fs.cp(govFixturePath, mutantProjDir, { recursive: true });
+    await fs.cp(build1Dir, mutantDataDir, { recursive: true });
+
+    // Set quorum to 30 and abstainHandling to 'ignore' in domain.json
+    const domainPath = path.join(mutantProjDir, "domain.json");
+    const domainJson = JSON.parse(await fs.readFile(domainPath, "utf8"));
+    const rule = domainJson.relationalRules.find((r: { kind: string }) => r.kind === "outcome-derived-from-ballots");
+    rule.quorum = 30;
+    rule.abstainHandling = "ignore";
+    await fs.writeFile(domainPath, JSON.stringify(domainJson, null, 2));
+
+    // Find a decision that is Passed, and change most ballots to Abstain so active votes (Yes + No) < 30
+    const decisionFile = path.join(mutantDataDir, "Decision", "Decision.json");
+    const decisions = JSON.parse(await fs.readFile(decisionFile, "utf8"));
+    const targetDecision = decisions.find((d: { fields: { Outcome: string } }) => d.fields.Outcome === "Passed") ?? decisions[0];
+    targetDecision.fields.Outcome = "Passed";
+    await fs.writeFile(decisionFile, JSON.stringify(decisions, null, 2));
+
+    const ballotFile = path.join(mutantDataDir, "Ballot", "Ballot.json");
+    const ballots = JSON.parse(await fs.readFile(ballotFile, "utf8"));
+    const targetDecisionId = targetDecision.primaryKey.ID;
+    const targetBallots = ballots.filter((b: { fields: { DecisionID: string } }) => b.fields.DecisionID === targetDecisionId);
+    // 5 Yes, 5 No, rest Abstain (total Yes+No = 10 < 30 quorum)
+    targetBallots.forEach((b: { fields: { Vote: string } }, idx: number) => {
+      b.fields.Vote = idx < 5 ? "Yes" : (idx < 10 ? "No" : "Abstain");
+    });
+    await fs.writeFile(ballotFile, JSON.stringify(ballots, null, 2));
+
+    const report = await executeValidate({
+      project: mutantProjDir,
+      data: mutantDataDir,
     });
 
     expect(report.passed).toBe(false);

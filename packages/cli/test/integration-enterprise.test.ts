@@ -768,13 +768,13 @@ describe('Loom Enterprise Integration Test Suite', () => {
     const simEngine = new StateLadderEngine([ladder]);
     const activeLifecycles = initialCp.continuity.activeLifecycleStates as Record<
       string,
-      Array<{ ladder: string; currentState: string; tenure: number; enteredCycle: number }>
+      Array<{ ladder: string; currentState: string; tenureInCurrentState?: number; tenure?: number; enteredCycle: number }>
     >;
     for (const [entityId, lifecycles] of Object.entries(activeLifecycles)) {
       for (const lc of lifecycles) {
         if (lc.ladder === ladder.ladderKey) {
           const s = simEngine.Enroll(ladder.ladderKey, entityId, lc.currentState, lc.enteredCycle ?? 0);
-          s.tenureInCurrentState = lc.tenure;
+          s.tenureInCurrentState = lc.tenureInCurrentState ?? lc.tenure ?? 0;
         }
       }
     }

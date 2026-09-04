@@ -31,7 +31,7 @@ The simulation engine strictly adheres to the canonical invariant list defined i
 - **Invariant 5 (Deep Immutability)**: Emitted transaction history from earlier cycles is never mutated in subsequent cycles.
 - **Invariant 6 (Factor Recovery)**: Statistical logistic regression over emitted crowd data recovers authored $\beta$ weights within defined tolerance bounds ($\pm 0.15$ at $N \ge 5000$).
 - **Invariant 7 (Topological & Referential Closure)**: Emitted datasets strictly preserve foreign key closure in topological DAG dependency order with zero orphaned records.
-- **Invariant 8 (Metadata Sole Delivery & BaseEntity Integrity)**: Metadata is the sole, exclusive engine for synthetic data delivery. All simulated records are emitted as partitioned declarative metadata files (`metadata/` tree) and ingested exclusively via MemberJunction's metadata sync push (`mj sync push`), ensuring every record triggers the complete `BaseEntity` subclass lifecycle, server hooks, validation rules, status transitions, vector embeddings, and audit tracking. Direct SQL `INSERT` bypasses are strictly prohibited.
+- **Invariant 8 (Metadata Sole Delivery)**: Metadata is the sole, exclusive engine for synthetic data delivery. All simulated records are emitted as partitioned declarative metadata files (`metadata/` tree) and ingested exclusively via MemberJunction's metadata sync push (`mj sync push`) through server metadata APIs. Direct SQL `INSERT` bypasses are strictly prohibited.
 
 ---
 
@@ -442,7 +442,7 @@ To preserve focus on delivering the core metadata contracts and retrospective si
 
 The following capabilities are aspirational design goals deferred to future phases:
 - [ ] **Phase 03: Narrative Bible Authoring & Story Evolution Workflow**: Declarative long-form narrative bible authoring tools that systematically compile historical chronicles, crises, and character storylines into versioned era and hero metadata configs.
-- [ ] **Phase 04: CLI Inspection Tools (`loom inspect`)**: Interactive CLI inspection suite including `loom inspect factors` (evaluating causal graph topologies and dependency chains) and `loom inspect graph`.
+- [x] **Phase 04: CLI Inspection Tools**: Standalone `loom inspect` dropped in favor of structured CLI logs, validator reports, and Playwright verification.
 - [ ] **Phase 05: Generated In-App Residue**: Generating synthetic collaborative residue in the host application, including pre-populated dashboard views, saved filters, shared queries, and threaded messaging dialogues.
 - [ ] **Phase 06: Architectural Handbook & Documentation Suite**: Formalized handbook and reference architecture under a dedicated `docs/` tree.
 
