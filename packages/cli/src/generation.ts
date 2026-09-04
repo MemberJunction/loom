@@ -36,7 +36,35 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
     if (fkIdx >= 0) {
       const fk = fkList[fkIdx]!;
       if (fk.lookupPattern) {
-        row[fieldName] = fk.lookupPattern;
+        let pattern = fk.lookupPattern;
+        const targetRows = parentPool[fk.targetEntity];
+        const parentIndex =
+          targetRows && targetRows.length > 0
+            ? (fkIdx === 0
+                ? (i - 1) % targetRows.length
+                : Math.floor((i - 1) / Math.pow(targetRows.length, fkIdx)) % targetRows.length)
+            : undefined;
+        const parent = parentIndex !== undefined && targetRows ? targetRows[parentIndex] : undefined;
+
+        if (pattern.includes('${')) {
+          pattern = pattern.replace(/\$\{([^}]+)\}/g, (_, expr: string) => {
+            const key = expr.trim();
+            if (key.startsWith('parent.') && parent) {
+              return String(parent[key.slice(7)] ?? '');
+            }
+            if (key.startsWith('row.')) {
+              return String(row[key.slice(4)] ?? '');
+            }
+            if (parent && parent[key] !== undefined) {
+              return String(parent[key]);
+            }
+            if (row[key] !== undefined) {
+              return String(row[key]);
+            }
+            return '';
+          });
+        }
+        row[fieldName] = pattern;
         continue;
       }
       const targetRows = parentPool[fk.targetEntity];

@@ -67,12 +67,66 @@ export const PackConfigSchema = z.object({
 });
 export type PackConfig = z.infer<typeof PackConfigSchema>;
 
+export const PathMatchRuleSchema = z.object({
+  kind: z.literal('path-match'),
+  name: z.string().min(1),
+  sourceEntity: z.string().min(1),
+  path: z.array(z.string()).min(1),
+  sourceField: z.string().optional(),
+  targetField: z.string().min(1),
+  inclusion: z.object({
+    poolEntity: z.string().min(1),
+    poolItemField: z.string().min(1),
+    poolContainerField: z.string().min(1),
+    sourceItemField: z.string().min(1),
+  }).optional(),
+});
+export type PathMatchRule = z.infer<typeof PathMatchRuleSchema>;
+
+export const DateWindowRuleSchema = z.object({
+  kind: z.literal('date-window'),
+  name: z.string().min(1),
+  sourceEntity: z.string().min(1),
+  dateField: z.string().min(1),
+  linkEntity: z.string().optional(),
+  linkSourceField: z.string().optional(),
+  linkTargetField: z.string().optional(),
+  windowEntity: z.string().min(1),
+  windowForeignKey: z.string().min(1),
+  windowStartField: z.string().min(1),
+  windowEndField: z.string().min(1),
+});
+export type DateWindowRule = z.infer<typeof DateWindowRuleSchema>;
+
+export const TextContainsPathRuleSchema = z.object({
+  kind: z.literal('text-contains-path'),
+  name: z.string().min(1),
+  sourceEntity: z.string().min(1),
+  textField: z.string().min(1),
+  path: z.array(z.string()).min(1),
+  targetFields: z.array(z.string()).min(1),
+  childReferences: z.object({
+    childEntity: z.string().min(1),
+    foreignKey: z.string().min(1),
+    childField: z.string().min(1),
+  }).optional(),
+});
+export type TextContainsPathRule = z.infer<typeof TextContainsPathRuleSchema>;
+
+export const RelationalRuleSchema = z.discriminatedUnion('kind', [
+  PathMatchRuleSchema,
+  DateWindowRuleSchema,
+  TextContainsPathRuleSchema,
+]);
+export type RelationalRule = z.infer<typeof RelationalRuleSchema>;
+
 export const DomainConfigSchema = z.object({
   name: z.string().min(1),
   namespace: z.string().uuid(),
   description: z.string().optional(),
   entities: z.record(z.string(), EntityConfigSchema),
   packs: z.record(z.string(), PackConfigSchema),
+  relationalRules: z.array(RelationalRuleSchema).optional().default([]),
 });
 export type DomainConfig = z.infer<typeof DomainConfigSchema>;
 
@@ -162,6 +216,7 @@ export function createDomainConfigFromMJEntities(
     description: `Domain generated directly from MemberJunction EntityInfo metadata`,
     entities: entityConfigs,
     packs,
+    relationalRules: [],
   };
 }
 

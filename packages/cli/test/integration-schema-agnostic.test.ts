@@ -13,6 +13,20 @@ describe('Loom Schema-Agnostic & Custom Output Layout Integration', () => {
 
   beforeAll(async () => {
     await fs.mkdir(projectDir, { recursive: true });
+    await fs.mkdir(path.join(projectDir, 'catalogs'), { recursive: true });
+
+    // Write external catalog
+    await fs.writeFile(
+      path.join(projectDir, 'catalogs', 'org-types.json'),
+      JSON.stringify(
+        [
+          { ID: '11111111-1111-1111-1111-111111111111', Name: 'LLC' },
+          { ID: '22222222-2222-2222-2222-222222222222', Name: 'Corporation' },
+        ],
+        null,
+        2
+      )
+    );
 
     // Write loom.config.json
     await fs.writeFile(
@@ -26,6 +40,9 @@ describe('Loom Schema-Agnostic & Custom Output Layout Integration', () => {
           startCycle: 2024,
           releaseDate: '2026-09-02',
           cycleUnit: 'year',
+          catalogs: {
+            'MJ_BizApps_Common: Organization Types': './catalogs/org-types.json',
+          },
           output: {
             metadataDir: './metadata',
           },
@@ -67,7 +84,7 @@ describe('Loom Schema-Agnostic & Custom Output Layout Integration', () => {
                   fieldName: 'OrgTypeID',
                   targetEntity: 'MJ_BizApps_Common: Organization Types',
                   targetField: 'ID',
-                  lookupPattern: '@lookup:MJ_BizApps_Common: Organization Types.Name=LLC',
+                  lookupPattern: '@lookup:MJ_BizApps_Common: Organization Types.Name=${parent.Name}',
                 },
               },
             },
@@ -137,6 +154,7 @@ describe('Loom Schema-Agnostic & Custom Output Layout Integration', () => {
     const { records: orgRecords } = await readEntityMetadata(orgDir, 'Test: Organizations');
     expect(orgRecords.length).toBe(10);
     expect(orgRecords[0]!['OrgTypeID']).toBe('@lookup:MJ_BizApps_Common: Organization Types.Name=LLC');
+    expect(orgRecords[1]!['OrgTypeID']).toBe('@lookup:MJ_BizApps_Common: Organization Types.Name=Corporation');
 
     // 6. Execute validation gates and verify 100% pass including @lookup gate
     const report = await executeValidate({

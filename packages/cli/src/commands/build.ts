@@ -14,8 +14,42 @@ import {
   type SimulationNode,
   type EntityCandidate,
 } from '@memberjunction/loom-engine';
-import type { SimulationCheckpoint, HeroOutcomePin, EraConfig } from '@memberjunction/loom-contracts';
+import type { SimulationCheckpoint, HeroOutcomePin, EraConfig, FieldConfig } from '@memberjunction/loom-contracts';
 import { generateEntityRecord } from '../generation.js';
+
+function resolveComplement(targetVal: unknown, fieldCfg?: FieldConfig): unknown {
+  if (typeof targetVal === 'boolean') {
+    return !targetVal;
+  }
+  if (typeof targetVal === 'string') {
+    const norm = targetVal.trim().toLowerCase();
+    const binaryComplements: Record<string, string> = {
+      active: 'Inactive',
+      inactive: 'Active',
+      true: 'false',
+      false: 'true',
+      yes: 'no',
+      no: 'yes',
+      enabled: 'Disabled',
+      disabled: 'Enabled',
+      open: 'Closed',
+      closed: 'Open',
+      valid: 'Invalid',
+      invalid: 'Valid',
+      pass: 'Fail',
+      fail: 'Pass',
+      passed: 'Failed',
+      failed: 'Passed',
+    };
+    if (binaryComplements[norm]) {
+      return binaryComplements[norm];
+    }
+    if (fieldCfg?.defaultValue !== undefined && String(fieldCfg.defaultValue).toLowerCase() !== norm) {
+      return fieldCfg.defaultValue;
+    }
+  }
+  return undefined;
+}
 
 export interface BuildCommandOptions {
   project?: string;
@@ -215,6 +249,11 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
   // Create simulation DAG nodes for each entity defined in domain.json
   const bgRecordsByEntity = new Map<string, Record<string, unknown>[]>();
   const allRecords: Record<string, Record<string, unknown>[]> = {};
+  if (loaded.catalogs) {
+    for (const [catEnt, catRows] of Object.entries(loaded.catalogs)) {
+      allRecords[catEnt] = [...catRows] as Record<string, unknown>[];
+    }
+  }
 
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
     const node: SimulationNode = {
@@ -249,6 +288,13 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         const parentPool: Record<string, Record<string, unknown>[]> = {};
         for (const [pEnt, pRows] of ctx.generatedData.entries()) {
           parentPool[pEnt] = bgRecordsByEntity.get(pEnt) ?? pRows;
+        }
+        if (loaded.catalogs) {
+          for (const [catEnt, catRows] of Object.entries(loaded.catalogs)) {
+            if (!parentPool[catEnt]) {
+              parentPool[catEnt] = [...catRows] as Record<string, unknown>[];
+            }
+          }
         }
 
         // 1. Generate background records deterministically (1..targetCount)
@@ -412,9 +458,17 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
                 } else if (row[field] !== targetVal) {
                   // Row already has an alternative non-target value from base generation; keep it
                 } else {
-                  throw new Error(
-                    `Factor '${contract.id}': negative outcome for field '${entityName}.${field}' cannot be resolved. Specify an explicit 'otherwise' clause in the factor outcome.`
+                  const complement = resolveComplement(
+                    targetVal,
+                    loaded.domain.entities[entityName]?.fields[field]
                   );
+                  if (complement !== undefined) {
+                    row[field] = complement;
+                  } else {
+                    throw new Error(
+                      `Factor '${contract.id}': negative outcome for field '${entityName}.${field}' cannot be resolved. Specify an explicit 'otherwise' clause in the factor outcome.`
+                    );
+                  }
                 }
               }
             }

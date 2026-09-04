@@ -30,6 +30,7 @@ export interface LoadedProject {
   motifsManifest?: MotifsManifest;
   laddersManifest?: LaddersManifest;
   erasManifest?: ErasManifest;
+  catalogs?: Record<string, readonly Record<string, unknown>[]>;
 }
 
 function isEnoent(err: unknown): boolean {
@@ -191,6 +192,69 @@ export async function loadProject(projectPath: string): Promise<LoadedProject> {
     }
   }
 
+  // 4. Load external/seed catalogs declared in manifest or discoverable in catalogs/
+  const catalogs: Record<string, readonly Record<string, unknown>[]> = {};
+  if (manifest.catalogs) {
+    for (const [entityName, catalogRelPath] of Object.entries(manifest.catalogs)) {
+      const catalogPath = path.resolve(resolvedDir, catalogRelPath);
+      try {
+        const catRaw = await fs.readFile(catalogPath, 'utf8');
+        const parsed = JSON.parse(catRaw);
+        if (Array.isArray(parsed)) {
+          catalogs[entityName] = parsed;
+        } else if (parsed && typeof parsed === 'object') {
+          const obj = parsed as Record<string, unknown>;
+          if (Array.isArray(obj['records'])) {
+            catalogs[entityName] = obj['records'];
+          } else if (Array.isArray(obj['data'])) {
+            catalogs[entityName] = obj['data'];
+          } else {
+            catalogs[entityName] = [obj];
+          }
+        }
+      } catch (err) {
+        if (!isEnoent(err)) {
+          throw new Error(`Failed to read catalog for '${entityName}' at '${catalogPath}': ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+  }
+
+  // Auto-discover catalogs in catalogs/ directory if present
+  const catalogsDir = path.join(resolvedDir, 'catalogs');
+  try {
+    const catEntries = await fs.readdir(catalogsDir, { withFileTypes: true });
+    for (const entry of catEntries) {
+      if (entry.isFile() && entry.name.endsWith('.json')) {
+        const catPath = path.join(catalogsDir, entry.name);
+        try {
+          const catRaw = await fs.readFile(catPath, 'utf8');
+          const parsed = JSON.parse(catRaw);
+          const baseName = path.basename(entry.name, '.json');
+          if (Array.isArray(parsed)) {
+            if (!catalogs[baseName]) {
+              catalogs[baseName] = parsed;
+            }
+          } else if (parsed && typeof parsed === 'object') {
+            const obj = parsed as Record<string, unknown>;
+            const entityKey = typeof obj['entity'] === 'string' ? obj['entity'] : (typeof obj['entityName'] === 'string' ? obj['entityName'] : baseName);
+            if (Array.isArray(obj['records'])) {
+              if (!catalogs[entityKey]) catalogs[entityKey] = obj['records'];
+            } else if (Array.isArray(obj['data'])) {
+              if (!catalogs[entityKey]) catalogs[entityKey] = obj['data'];
+            }
+          }
+        } catch {
+          // ignore unparseable optional catalog files
+        }
+      }
+    }
+  } catch (err) {
+    if (!isEnoent(err)) {
+      throw err;
+    }
+  }
+
   return {
     projectDir: resolvedDir,
     manifest,
@@ -200,5 +264,6 @@ export async function loadProject(projectPath: string): Promise<LoadedProject> {
     motifsManifest,
     laddersManifest,
     erasManifest,
+    catalogs,
   };
 }

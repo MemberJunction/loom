@@ -12,11 +12,14 @@ export const ProjectManifestSchema = z.object({
   startCycle: z.number().int(),
   releaseDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   cycleUnit: z.enum(['year', 'week']).default('year'),
-  domainPath: z.string().default('./domain.json').optional(),
+  domainPath: z.string().default('./domain.json'),
+  catalogs: z.record(z.string(), z.string()).optional(),
   output: z.object({
     metadataDir: z.string().default('./metadata'),
-  }).passthrough().default({
+    migrationsDir: z.string().optional(),
+  }).strict().default({
     metadataDir: './metadata',
   }),
 });
 export type ProjectManifest = z.infer<typeof ProjectManifestSchema>;
+

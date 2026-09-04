@@ -141,8 +141,7 @@ loom validate --project=projects/enterprise
 Loom's autonomous Agent Skill executes recurring simulation cycles against running hosts:
 1. **Accumulate:** Invokes `loom accumulate` to generate pure deltas from committed prior state.
 2. **Validate:** Executes deterministic referential closure, hero pins, and factor tolerance gates.
-3. **Ingest (`mj sync push`):** Pushes emitted metadata trees through MemberJunction's `BaseEntity` lifecycle.
-4. **Visual Inspection:** Drives headless Playwright browser sessions to inspect rendered views and verify zero UI, GraphQL, or data regressions before merging.
+3. **Visual Inspection:** Drives headless Playwright browser sessions to inspect rendered views and verify zero UI, GraphQL, or data regressions before merging.
 
 ---
 

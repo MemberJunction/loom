@@ -206,7 +206,13 @@ describe('Validator', () => {
       ],
     };
 
-    const report = validator.Validate(domain, data);
+    const catalogs = {
+      'Committees: Roles': [{ Name: 'Chair' }],
+      'MJ: Entities': [{ Name: 'MJ_BizApps_Common: People' }],
+      'MJ: Users': [{ Email: 'marcus.oduya@morecheesefederation.example' }],
+    };
+
+    const report = validator.Validate(domain, data, catalogs);
     const lookupGate = report.gates.find((g) => g.name.includes('Lookup Resolution'));
     expect(lookupGate).toBeDefined();
     expect(lookupGate?.passed).toBe(true);
@@ -243,6 +249,21 @@ describe('Validator', () => {
         CommitteeMembership: { name: 'CommitteeMembership', targetTable: 'cm', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true }, CommitteeID: { name: 'CommitteeID', type: 'uuid' }, PersonID: { name: 'PersonID', type: 'uuid' } }, foreignKeys: {}, isImmutable: false },
         Comment: { name: 'Comment', targetTable: 'cmt', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true }, AgendaItemID: { name: 'AgendaItemID', type: 'uuid' }, PersonID: { name: 'PersonID', type: 'uuid' } }, foreignKeys: {}, isImmutable: false },
       },
+      relationalRules: [
+        {
+          kind: 'path-match',
+          name: 'Comment Author Committee Membership',
+          sourceEntity: 'Comment',
+          path: ['AgendaItemID:AgendaItem', 'MeetingID:Meeting'],
+          targetField: 'CommitteeID',
+          inclusion: {
+            poolEntity: 'CommitteeMembership',
+            poolItemField: 'PersonID',
+            poolContainerField: 'CommitteeID',
+            sourceItemField: 'PersonID',
+          },
+        },
+      ],
     };
 
     const validData = {
@@ -256,7 +277,7 @@ describe('Validator', () => {
     };
 
     const passReport = validator.Validate(committeeDomain, validData);
-    const commGate = passReport.gates.find((g) => g.name.includes('Committee Comments Membership Attribution'));
+    const commGate = passReport.gates.find((g) => g.name.includes('Comment Author Committee Membership'));
     expect(commGate).toBeDefined();
     expect(commGate?.passed).toBe(true);
 
@@ -266,7 +287,7 @@ describe('Validator', () => {
       Comment: [{ ID: 'cmt-1', AgendaItemID: 'ai-1', PersonID: 'p-outsider' }],
     };
     const failReport = validator.Validate(committeeDomain, mutatedData);
-    const failCommGate = failReport.gates.find((g) => g.name.includes('Committee Comments Membership Attribution'));
+    const failCommGate = failReport.gates.find((g) => g.name.includes('Comment Author Committee Membership'));
     expect(failCommGate).toBeDefined();
     expect(failCommGate?.passed).toBe(false);
     expect(failCommGate?.actual).toBe(1);
@@ -280,6 +301,18 @@ describe('Validator', () => {
         MembershipPeriod: { name: 'MembershipPeriod', targetTable: 'mp', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true }, PersonID: { name: 'PersonID', type: 'uuid' }, StartDate: { name: 'StartDate', type: 'date' }, EndDate: { name: 'EndDate', type: 'date' } }, foreignKeys: {}, isImmutable: false },
         Activity: { name: 'Activity', targetTable: 'act', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true }, PersonID: { name: 'PersonID', type: 'uuid' }, ActivityDate: { name: 'ActivityDate', type: 'date' } }, foreignKeys: {}, isImmutable: false },
       },
+      relationalRules: [
+        {
+          kind: 'date-window',
+          name: 'Activity Within Membership Window',
+          sourceEntity: 'Activity',
+          dateField: 'ActivityDate',
+          windowEntity: 'MembershipPeriod',
+          windowForeignKey: 'PersonID',
+          windowStartField: 'StartDate',
+          windowEndField: 'EndDate',
+        },
+      ],
     };
 
     const validData = {
@@ -290,7 +323,7 @@ describe('Validator', () => {
     };
 
     const passReport = validator.Validate(tenureDomain, validData);
-    const tenureGate = passReport.gates.find((g) => g.name.includes('Member Activities Within Tenure'));
+    const tenureGate = passReport.gates.find((g) => g.name.includes('Activity Within Membership Window'));
     expect(tenureGate).toBeDefined();
     expect(tenureGate?.passed).toBe(true);
 
@@ -300,7 +333,7 @@ describe('Validator', () => {
       Activity: [{ ID: 'act-1', PersonID: 'p-1', ActivityDate: '2025-06-15' }],
     };
     const failReport = validator.Validate(tenureDomain, mutatedData);
-    const failTenureGate = failReport.gates.find((g) => g.name.includes('Member Activities Within Tenure'));
+    const failTenureGate = failReport.gates.find((g) => g.name.includes('Activity Within Membership Window'));
     expect(failTenureGate).toBeDefined();
     expect(failTenureGate?.passed).toBe(false);
     expect(failTenureGate?.actual).toBe(1);
@@ -315,6 +348,21 @@ describe('Validator', () => {
         AgendaItem: { name: 'AgendaItem', targetTable: 'ai', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true }, MeetingID: { name: 'MeetingID', type: 'uuid' }, Title: { name: 'Title', type: 'string' } }, foreignKeys: {}, isImmutable: false },
         Minute: { name: 'Minute', targetTable: 'min', schema: 's', pack: 'p', businessKey: ['ID'], fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true }, MeetingID: { name: 'MeetingID', type: 'uuid' }, Content: { name: 'Content', type: 'string' } }, foreignKeys: {}, isImmutable: false },
       },
+      relationalRules: [
+        {
+          kind: 'text-contains-path',
+          name: 'Minute Context and Agenda Reference',
+          sourceEntity: 'Minute',
+          textField: 'Content',
+          path: ['MeetingID:Meeting'],
+          targetFields: ['Name', 'MeetingDate'],
+          childReferences: {
+            childEntity: 'AgendaItem',
+            foreignKey: 'MeetingID',
+            childField: 'Title',
+          },
+        },
+      ],
     };
 
     const validData = {
@@ -330,7 +378,7 @@ describe('Validator', () => {
     };
 
     const passReport = validator.Validate(minutesDomain, validData);
-    const minGate = passReport.gates.find((g) => g.name.includes('Meeting Minutes Context and Agenda References'));
+    const minGate = passReport.gates.find((g) => g.name.includes('Minute Context and Agenda Reference'));
     expect(minGate).toBeDefined();
     expect(minGate?.passed).toBe(true);
 
@@ -344,7 +392,7 @@ describe('Validator', () => {
       }],
     };
     const failReport = validator.Validate(minutesDomain, mutatedData);
-    const failMinGate = failReport.gates.find((g) => g.name.includes('Meeting Minutes Context and Agenda References'));
+    const failMinGate = failReport.gates.find((g) => g.name.includes('Minute Context and Agenda Reference'));
     expect(failMinGate).toBeDefined();
     expect(failMinGate?.passed).toBe(false);
   });

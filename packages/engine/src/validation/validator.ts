@@ -26,74 +26,137 @@ export interface ValidationReport {
  * factor tolerance bands, and schema constraints.
  * Enforces Invariant 7: every check states the size of the population it visited.
  */
+export interface ValidateOptions {
+  factors?: readonly FactorContract[];
+  heroes?: readonly HeroConfig[];
+  eras?: readonly EraConfig[];
+  catalogs?: Record<string, readonly Record<string, unknown>[]>;
+}
+
 export class Validator {
   public Validate(
     domain: DomainConfig,
     data: Record<string, readonly Record<string, unknown>[]>,
-    factors: readonly FactorContract[] = [],
+    factorsOrOptions: readonly FactorContract[] | ValidateOptions | Record<string, readonly Record<string, unknown>[]> = [],
     heroes: readonly HeroConfig[] = [],
-    eras: readonly EraConfig[] = []
+    eras: readonly EraConfig[] = [],
+    catalogs?: Record<string, readonly Record<string, unknown>[]>
   ): ValidationReport {
+    let actualFactors: readonly FactorContract[] = [];
+    let actualHeroes: readonly HeroConfig[] = heroes;
+    let actualEras: readonly EraConfig[] = eras;
+    let actualCatalogs: Record<string, readonly Record<string, unknown>[]> | undefined = catalogs;
+
+    if (Array.isArray(factorsOrOptions)) {
+      actualFactors = factorsOrOptions;
+    } else if (factorsOrOptions && typeof factorsOrOptions === 'object') {
+      const opts = factorsOrOptions as ValidateOptions;
+      if (opts.factors !== undefined || opts.heroes !== undefined || opts.eras !== undefined || opts.catalogs !== undefined) {
+        actualFactors = opts.factors ?? [];
+        actualHeroes = opts.heroes ?? heroes;
+        actualEras = opts.eras ?? eras;
+        actualCatalogs = opts.catalogs ?? catalogs;
+      } else {
+        actualCatalogs = factorsOrOptions as Record<string, readonly Record<string, unknown>[]>;
+      }
+    }
+
     const gates: GateResult[] = [];
+
+    // Entity record lookup index: entityName -> (id -> record)
+    const entityIndex = new Map<string, Map<string, Record<string, unknown>>>();
+    const getEntityMap = (entityName: string): Map<string, Record<string, unknown>> => {
+      let map = entityIndex.get(entityName);
+      if (!map) {
+        map = new Map();
+        const records = data[entityName] ?? [];
+        for (const r of records) {
+          const rId = r['ID'] ?? r['id'];
+          if (rId !== undefined && rId !== null) {
+            map.set(String(rId).toLowerCase(), r as Record<string, unknown>);
+          }
+        }
+        entityIndex.set(entityName, map);
+      }
+      return map;
+    };
+
+    // Child records lookup index: cacheKey -> (parentId -> records[])
+    const childrenIndex = new Map<string, Map<string, Record<string, unknown>[]>>();
+    const getChildrenMap = (
+      childEntity: string,
+      parentEntity: string,
+      foreignKeyField?: string
+    ): Map<string, Record<string, unknown>[]> => {
+      const cacheKey = `${childEntity}:${parentEntity}:${foreignKeyField ?? ''}`;
+      let map = childrenIndex.get(cacheKey);
+      if (!map) {
+        map = new Map();
+        const records = data[childEntity] ?? [];
+        const entityCfg = domain.entities[childEntity];
+        const matchingFkFields: string[] = [];
+        if (foreignKeyField) {
+          matchingFkFields.push(foreignKeyField);
+        } else if (entityCfg) {
+          for (const [fkKey, fk] of Object.entries(entityCfg.foreignKeys)) {
+            if (fk.targetEntity === parentEntity || !parentEntity) {
+              matchingFkFields.push(fk.fieldName ?? fkKey);
+            }
+          }
+        }
+
+        for (const r of records) {
+          for (const fkField of matchingFkFields) {
+            const val = r[fkField];
+            if (val !== undefined && val !== null && val !== '') {
+              const norm = String(val).toLowerCase();
+              let list = map.get(norm);
+              if (!list) {
+                list = [];
+                map.set(norm, list);
+              }
+              list.push(r as Record<string, unknown>);
+            }
+          }
+        }
+        childrenIndex.set(cacheKey, map);
+      }
+      return map;
+    };
 
     // Construct relational context from available in-memory data
     const relationalCtx: RelationalContext = {
       getEntity: (entityName, id) => {
-        const records = data[entityName];
-        if (!records) return undefined;
-        const norm = id.toLowerCase();
-        return records.find((r) => {
-          const rId = r['ID'] ?? r['id'];
-          return rId && String(rId).toLowerCase() === norm;
-        });
+        return getEntityMap(entityName).get(id.toLowerCase());
       },
       getChildren: (parentEntity, parentId, childEntity, foreignKeyField) => {
-        const records = data[childEntity];
-        if (!records) return [];
-        const parentNorm = parentId.toLowerCase();
-        return records.filter((r) => {
-          if (foreignKeyField) {
-            const val = r[foreignKeyField];
-            return val && String(val).toLowerCase() === parentNorm;
-          }
-          const entityCfg = domain.entities[childEntity];
-          if (entityCfg) {
-            for (const [fkKey, fk] of Object.entries(entityCfg.foreignKeys)) {
-              if (fk.targetEntity === parentEntity || !parentEntity) {
-                const fieldName = fk.fieldName ?? fkKey;
-                const val = r[fieldName];
-                if (val && String(val).toLowerCase() === parentNorm) return true;
-              }
-            }
-          }
-          return false;
-        });
+        return getChildrenMap(childEntity, parentEntity, foreignKeyField).get(parentId.toLowerCase()) ?? [];
       },
     };
 
     // 0. Hero pins validation (Gate 0)
-    this.checkHeroPins(data, heroes, factors, relationalCtx, gates);
+    this.checkHeroPins(data, actualHeroes, actualFactors, relationalCtx, gates);
 
     // 1. Referential integrity gates
-    this.checkReferentialClosure(domain, data, gates);
+    this.checkReferentialClosure(domain, data, actualCatalogs, gates);
 
     // 2. Primary key uniqueness & non-null fields
     this.checkSchemaInvariants(domain, data, gates);
 
     // 3. Factor contract tolerance gates (pure empirical verification)
-    this.checkFactorContracts(data, factors, relationalCtx, gates);
+    this.checkFactorContracts(data, actualFactors, relationalCtx, gates);
 
     // 4. Realized Era volume and factor adjustment gates (B3)
-    this.checkRealizedEras(domain, data, eras, factors, relationalCtx, gates);
+    this.checkRealizedEras(domain, data, actualEras, actualFactors, relationalCtx, gates);
 
     // 5. Dependent child coverage gates (OrderHeader -> OrderLine & Payment)
     this.checkDependentChildCoverage(domain, data, gates);
 
     // 6. @lookup resolution gate (M2)
-    this.checkLookupResolution(data, gates);
+    this.checkLookupResolution(data, actualCatalogs, gates);
 
-    // 7. Relational semantics gates (committee comments, activity tenure, meeting minutes) (M2)
-    this.checkRelationalSemantics(domain, data, gates);
+    // 7. Relational rules gates (M2)
+    this.checkRelationalRules(domain, data, gates);
 
     const passedCount = gates.filter((g) => g.passed).length;
     const failedCount = gates.length - passedCount;
@@ -112,6 +175,7 @@ export class Validator {
   private checkReferentialClosure(
     domain: DomainConfig,
     data: Record<string, readonly Record<string, unknown>[]>,
+    catalogs: Record<string, readonly Record<string, unknown>[]> | undefined,
     gates: GateResult[]
   ): void {
     for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
@@ -124,7 +188,7 @@ export class Validator {
           );
         }
 
-        const targetRecords = data[fk.targetEntity] ?? [];
+        const targetRecords = data[fk.targetEntity] ?? (catalogs ? catalogs[fk.targetEntity] : undefined) ?? [];
         const targetIds = new Set(
           targetRecords.map((r) => {
             const raw = r[fk.targetField];
@@ -142,7 +206,7 @@ export class Validator {
           if (rawVal !== undefined && rawVal !== null && rawVal !== '') {
             examinedFkCount++;
             if (typeof rawVal === 'string' && rawVal.startsWith('@lookup:')) {
-              const res = resolveLookupExpression(rawVal, data);
+              const res = resolveLookupExpression(rawVal, data, catalogs);
               if (!res.resolved) {
                 danglingCount++;
               }
@@ -796,6 +860,7 @@ export class Validator {
 
   private checkLookupResolution(
     data: Record<string, readonly Record<string, unknown>[]>,
+    catalogs: Record<string, readonly Record<string, unknown>[]> | undefined,
     gates: GateResult[]
   ): void {
     let totalLookups = 0;
@@ -807,7 +872,7 @@ export class Validator {
         for (const [field, val] of Object.entries(row)) {
           if (typeof val === 'string' && val.startsWith('@lookup:')) {
             totalLookups++;
-            const res = resolveLookupExpression(val, data);
+            const res = resolveLookupExpression(val, data, catalogs);
             if (!res.resolved) {
               unresolvedCount++;
               if (failureMessages.length < 5) {
@@ -826,219 +891,239 @@ export class Validator {
       passed,
       populationCount: totalLookups,
       message: passed
-        ? `All ${totalLookups} @lookup expressions resolved cleanly across dataset and platform catalogs`
+        ? `All ${totalLookups} @lookup expression(s) resolved cleanly across dataset and catalogs`
         : `Found ${unresolvedCount} unresolved @lookup expression(s) among ${totalLookups} examined: ${failureMessages.join('; ')}`,
       expected: 0,
       actual: unresolvedCount,
     });
   }
 
-  private checkRelationalSemantics(
+  private checkRelationalRules(
     domain: DomainConfig,
     data: Record<string, readonly Record<string, unknown>[]>,
     gates: GateResult[]
   ): void {
-    const findRecords = (...names: string[]) => {
-      for (const n of names) {
-        for (const [k, v] of Object.entries(data)) {
-          if (k.toLowerCase() === n.toLowerCase()) return v;
-          const entityCfg = domain.entities[k];
-          if (entityCfg && ((entityCfg.entityName && entityCfg.entityName.toLowerCase() === n.toLowerCase()) || (entityCfg.outputDirectory && entityCfg.outputDirectory.toLowerCase() === n.toLowerCase()))) {
-            return v;
-          }
+    const findRecords = (name: string): readonly Record<string, unknown>[] => {
+      for (const [k, v] of Object.entries(data)) {
+        if (k.toLowerCase() === name.toLowerCase()) return v;
+        const cfg = domain.entities[k];
+        if (cfg) {
+          if (cfg.entityName && cfg.entityName.toLowerCase() === name.toLowerCase()) return v;
+          if (cfg.outputDirectory && cfg.outputDirectory.toLowerCase() === name.toLowerCase()) return v;
         }
       }
-      return undefined;
+      return [];
     };
 
-    // 1. Committee Comments Membership Attribution
-    const comments = findRecords('Comment', 'committee-comments', 'Committees: Comments');
-    if (comments && comments.length > 0) {
-      const agendaItems = findRecords('AgendaItem', 'committee-agenda-items', 'Committees: Agenda Items') ?? [];
-      const meetings = findRecords('Meeting', 'committee-meetings', 'Committees: Meetings') ?? [];
-      const memberships = findRecords('CommitteeMembership', 'committee-memberships', 'Committees: Memberships') ?? [];
+    for (const rule of domain.relationalRules ?? []) {
+      const sourceRecords = findRecords(rule.sourceEntity);
+      if (sourceRecords.length === 0) continue;
 
-      const agendaToMeeting = new Map<string, string>();
-      for (const ai of agendaItems) {
-        const id = String(ai['ID'] ?? ai['id'] ?? '').toLowerCase();
-        const mId = String(ai['MeetingID'] ?? ai['meetingId'] ?? '').toLowerCase();
-        if (id && mId) agendaToMeeting.set(id, mId);
-      }
+      if (rule.kind === 'path-match') {
+        let invalidCount = 0;
+        for (const row of sourceRecords) {
+          let current: Record<string, unknown> | undefined = row;
+          for (let i = 0; i < rule.path.length; i++) {
+            if (!current) break;
+            const segment = rule.path[i]!;
+            const [fkField, targetEntityName] = segment.split(':');
+            const fkVal: unknown = current[fkField!];
+            if (!fkVal) {
+              current = undefined;
+              break;
+            }
+            const targetTable = findRecords(targetEntityName ?? '');
+            current = targetTable.find(
+              (t) => String(t['ID'] ?? t['id'] ?? '').toLowerCase() === String(fkVal).toLowerCase()
+            );
+          }
 
-      const meetingToCommittee = new Map<string, string>();
-      for (const m of meetings) {
-        const id = String(m['ID'] ?? m['id'] ?? '').toLowerCase();
-        const cId = String(m['CommitteeID'] ?? m['committeeId'] ?? '').toLowerCase();
-        if (id && cId) meetingToCommittee.set(id, cId);
-      }
+          if (!current) {
+            invalidCount++;
+            continue;
+          }
 
-      const committeeMembers = new Map<string, Set<string>>();
-      for (const cm of memberships) {
-        const cId = String(cm['CommitteeID'] ?? cm['committeeId'] ?? '').toLowerCase();
-        const pId = String(cm['PersonID'] ?? cm['personId'] ?? '').toLowerCase();
-        if (cId && pId) {
-          if (!committeeMembers.has(cId)) committeeMembers.set(cId, new Set());
-          committeeMembers.get(cId)!.add(pId);
-        }
-      }
+          const targetVal = current[rule.targetField];
+          if (targetVal === undefined) {
+            invalidCount++;
+            continue;
+          }
 
-      let invalidCommentCount = 0;
-      for (const c of comments) {
-        const aId = String(c['AgendaItemID'] ?? c['agendaItemId'] ?? '').toLowerCase();
-        const pId = String(c['PersonID'] ?? c['personId'] ?? '').toLowerCase();
-        const mId = agendaToMeeting.get(aId);
-        const cId = mId ? meetingToCommittee.get(mId) : undefined;
-        if (!cId || !committeeMembers.get(cId)?.has(pId)) {
-          invalidCommentCount++;
-        }
-      }
+          if (rule.sourceField) {
+            const sourceVal = row[rule.sourceField];
+            if (
+              sourceVal === undefined ||
+              String(sourceVal).toLowerCase() !== String(targetVal).toLowerCase()
+            ) {
+              invalidCount++;
+              continue;
+            }
+          }
 
-      const passed = invalidCommentCount === 0;
-      gates.push({
-        name: 'Relational Semantics: Committee Comments Membership Attribution',
-        category: 'referential',
-        passed,
-        populationCount: comments.length,
-        message: passed
-          ? `All ${comments.length} committee comments are authored by members of the agenda item's committee`
-          : `Found ${invalidCommentCount} committee comment(s) authored by non-committee members across ${comments.length} comments`,
-        expected: 0,
-        actual: invalidCommentCount,
-      });
-    }
-
-    // 2. Member Activities Within Tenure
-    const activities = findRecords('Activity', 'activities', 'MJ_BizApps_Common: Activities');
-    if (activities && activities.length > 0) {
-      const activityLinks = findRecords('ActivityLink', 'activity-links', 'MJ_BizApps_Common: Activity Links') ?? [];
-      const membershipPeriods = findRecords('MembershipPeriod', 'membership-periods', 'MoreCheese: Membership Periods') ?? [];
-
-      const actToPerson = new Map<string, string>();
-      for (const al of activityLinks) {
-        const actId = String(al['ActivityID'] ?? al['activityId'] ?? '').toLowerCase();
-        const recId = String(al['RecordID'] ?? al['recordId'] ?? '').toLowerCase();
-        if (actId && recId) actToPerson.set(actId, recId);
-      }
-
-      const personTenure = new Map<string, Array<{ start: string; end: string }>>();
-      for (const mp of membershipPeriods) {
-        const pId = String(mp['PersonID'] ?? mp['personId'] ?? '').toLowerCase();
-        const start = String(mp['StartDate'] ?? mp['startDate'] ?? '2000-01-01');
-        const end = String(mp['EndDate'] ?? mp['endDate'] ?? '2099-12-31');
-        if (pId) {
-          if (!personTenure.has(pId)) personTenure.set(pId, []);
-          personTenure.get(pId)!.push({ start, end });
-        }
-      }
-
-      let outOfTenureCount = 0;
-      let examinedActivities = 0;
-
-      for (const act of activities) {
-        const actId = String(act['ID'] ?? act['id'] ?? '').toLowerCase();
-        const pId = actToPerson.get(actId) ?? String(act['PersonID'] ?? act['personId'] ?? '').toLowerCase();
-        if (pId && personTenure.has(pId)) {
-          examinedActivities++;
-          const actDate = String(act['ActivityDate'] ?? act['activityDate'] ?? act['CreatedDate'] ?? '').slice(0, 10);
-          if (actDate) {
-            const periods = personTenure.get(pId)!;
-            const inTenure = periods.some((p) => actDate >= p.start.slice(0, 10) && actDate <= p.end.slice(0, 10));
-            if (!inTenure) {
-              outOfTenureCount++;
+          if (rule.inclusion) {
+            const inc = rule.inclusion;
+            const poolRecords = findRecords(inc.poolEntity);
+            const sourceItemVal = String(row[inc.sourceItemField] ?? '').toLowerCase();
+            const containerVal = String(targetVal).toLowerCase();
+            const isIncluded = poolRecords.some((p) => {
+              const pItem = String(p[inc.poolItemField] ?? '').toLowerCase();
+              const pContainer = String(p[inc.poolContainerField] ?? '').toLowerCase();
+              return pItem === sourceItemVal && pContainer === containerVal;
+            });
+            if (!isIncluded) {
+              invalidCount++;
             }
           }
         }
-      }
 
-      const passed = outOfTenureCount === 0;
-      gates.push({
-        name: 'Relational Semantics: Member Activities Within Tenure',
-        category: 'referential',
-        passed,
-        populationCount: examinedActivities,
-        message: passed
-          ? `All ${examinedActivities} member activities fall strictly within the member's tenure window`
-          : `Found ${outOfTenureCount} activity records outside member tenure windows across ${examinedActivities} examined`,
-        expected: 0,
-        actual: outOfTenureCount,
-      });
-    }
+        const passed = invalidCount === 0;
+        gates.push({
+          name: `Relational Integrity: ${rule.name}`,
+          category: 'referential',
+          passed,
+          populationCount: sourceRecords.length,
+          message: passed
+            ? `All ${sourceRecords.length} record(s) conform to rule '${rule.name}'`
+            : `Found ${invalidCount} record(s) violating rule '${rule.name}' across ${sourceRecords.length} records`,
+          expected: 0,
+          actual: invalidCount,
+        });
+      } else if (rule.kind === 'date-window') {
+        const windowRecords = findRecords(rule.windowEntity);
+        const linkRecords = rule.linkEntity ? findRecords(rule.linkEntity) : [];
 
-    // 3. Meeting Minutes Context and Agenda References
-    const minutes = findRecords('Minute', 'committee-minutes', 'Committees: Minutes');
-    if (minutes && minutes.length > 0) {
-      const meetings = findRecords('Meeting', 'committee-meetings', 'Committees: Meetings') ?? [];
-      const agendaItems = findRecords('AgendaItem', 'committee-agenda-items', 'Committees: Agenda Items') ?? [];
-
-      const meetingMap = new Map<string, { name: string; date: string }>();
-      for (const m of meetings) {
-        const id = String(m['ID'] ?? m['id'] ?? '').toLowerCase();
-        const name = String(m['Name'] ?? m['name'] ?? m['Title'] ?? '');
-        const date = String(m['MeetingDate'] ?? m['meetingDate'] ?? '').slice(0, 10);
-        if (id) meetingMap.set(id, { name, date });
-      }
-
-      const meetingAgendaTitles = new Map<string, string[]>();
-      for (const ai of agendaItems) {
-        const mId = String(ai['MeetingID'] ?? ai['meetingId'] ?? '').toLowerCase();
-        const title = String(ai['Title'] ?? ai['title'] ?? '');
-        if (mId && title) {
-          if (!meetingAgendaTitles.has(mId)) meetingAgendaTitles.set(mId, []);
-          meetingAgendaTitles.get(mId)!.push(title);
-        }
-      }
-
-      let invalidMinuteCount = 0;
-      for (const min of minutes) {
-        const mId = String(min['MeetingID'] ?? min['meetingId'] ?? '').toLowerCase();
-        const content = String(min['Content'] ?? min['content'] ?? min['Notes'] ?? min['Text'] ?? '');
-        const mInfo = meetingMap.get(mId);
-        if (!mInfo) {
-          invalidMinuteCount++;
-          continue;
+        const entityToTarget = new Map<string, string>();
+        if (rule.linkEntity && rule.linkSourceField && rule.linkTargetField) {
+          for (const l of linkRecords) {
+            const sId = String(l[rule.linkSourceField] ?? '').toLowerCase();
+            const tId = String(l[rule.linkTargetField] ?? '').toLowerCase();
+            if (sId && tId) entityToTarget.set(sId, tId);
+          }
         }
 
-        // Minutes must mention meeting date or name, plus at least one agenda topic or 'Agenda'
-        const hasDateOrName =
-          (mInfo.date && content.includes(mInfo.date)) ||
-          (mInfo.name && content.toLowerCase().includes(mInfo.name.toLowerCase())) ||
-          content.toLowerCase().includes('meeting');
-        const agendaTopics = meetingAgendaTitles.get(mId) ?? [];
-        const hasAgendaRef =
-          content.toLowerCase().includes('agenda') ||
-          agendaTopics.some((t) => content.toLowerCase().includes(t.toLowerCase()));
-
-        if (!hasDateOrName || !hasAgendaRef || content.length < 30) {
-          invalidMinuteCount++;
+        const targetWindows = new Map<string, Array<{ start: string; end: string }>>();
+        for (const w of windowRecords) {
+          const tId = String(w[rule.windowForeignKey] ?? '').toLowerCase();
+          const start = String(w[rule.windowStartField] ?? '2000-01-01').slice(0, 10);
+          const end = String(w[rule.windowEndField] ?? '2099-12-31').slice(0, 10);
+          if (tId) {
+            if (!targetWindows.has(tId)) targetWindows.set(tId, []);
+            targetWindows.get(tId)!.push({ start, end });
+          }
         }
-      }
 
-      const passed = invalidMinuteCount === 0;
-      gates.push({
-        name: 'Relational Semantics: Meeting Minutes Context and Agenda References',
-        category: 'referential',
-        passed,
-        populationCount: minutes.length,
-        message: passed
-          ? `All ${minutes.length} committee meeting minutes carry contextual meeting headers and agenda references`
-          : `Found ${invalidMinuteCount} meeting minute record(s) lacking meeting context or agenda references across ${minutes.length} records`,
-        expected: 0,
-        actual: invalidMinuteCount,
-      });
+        let outOfWindowCount = 0;
+        let examinedCount = 0;
+
+        for (const row of sourceRecords) {
+          const rowId = String(row['ID'] ?? row['id'] ?? '').toLowerCase();
+          const targetId = entityToTarget.get(rowId) ?? String(row[rule.windowForeignKey] ?? '').toLowerCase();
+          if (targetId && targetWindows.has(targetId)) {
+            examinedCount++;
+            const rawDate = String(row[rule.dateField] ?? '').slice(0, 10);
+            if (rawDate) {
+              const windows = targetWindows.get(targetId)!;
+              const inWindow = windows.some((w) => rawDate >= w.start && rawDate <= w.end);
+              if (!inWindow) {
+                outOfWindowCount++;
+              }
+            }
+          }
+        }
+
+        const passed = outOfWindowCount === 0;
+        gates.push({
+          name: `Relational Integrity: ${rule.name}`,
+          category: 'referential',
+          passed,
+          populationCount: examinedCount,
+          message: passed
+            ? `All ${examinedCount} record(s) fall strictly within declared temporal window`
+            : `Found ${outOfWindowCount} record(s) outside temporal window across ${examinedCount} examined`,
+          expected: 0,
+          actual: outOfWindowCount,
+        });
+      } else if (rule.kind === 'text-contains-path') {
+        let invalidCount = 0;
+        for (const row of sourceRecords) {
+          let current: Record<string, unknown> | undefined = row;
+          for (let i = 0; i < rule.path.length; i++) {
+            if (!current) break;
+            const segment = rule.path[i]!;
+            const [fkField, targetEntityName] = segment.split(':');
+            const fkVal: unknown = current[fkField!];
+            if (!fkVal) {
+              current = undefined;
+              break;
+            }
+            const targetTable = findRecords(targetEntityName ?? '');
+            current = targetTable.find(
+              (t) => String(t['ID'] ?? t['id'] ?? '').toLowerCase() === String(fkVal).toLowerCase()
+            );
+          }
+
+          if (!current) {
+            invalidCount++;
+            continue;
+          }
+
+          const textVal = String(row[rule.textField] ?? '');
+          let missingReference = false;
+          for (const f of rule.targetFields) {
+            const refVal = String(current[f] ?? '').trim();
+            if (refVal && !textVal.includes(refVal)) {
+              missingReference = true;
+              break;
+            }
+          }
+
+          if (rule.childReferences) {
+            const cr = rule.childReferences;
+            const childTable = findRecords(cr.childEntity);
+            const parentId = String(current['ID'] ?? current['id'] ?? '').toLowerCase();
+            const children = childTable.filter(
+              (c) => String(c[cr.foreignKey] ?? '').toLowerCase() === parentId
+            );
+            for (const child of children) {
+              const childVal = String(child[cr.childField] ?? '').trim();
+              if (childVal && !textVal.includes(childVal)) {
+                missingReference = true;
+                break;
+              }
+            }
+          }
+
+          if (missingReference) {
+            invalidCount++;
+          }
+        }
+
+        const passed = invalidCount === 0;
+        gates.push({
+          name: `Relational Integrity: ${rule.name}`,
+          category: 'referential',
+          passed,
+          populationCount: sourceRecords.length,
+          message: passed
+            ? `All ${sourceRecords.length} record(s) contain required contextual references`
+            : `Found ${invalidCount} record(s) lacking required contextual references across ${sourceRecords.length} records`,
+          expected: 0,
+          actual: invalidCount,
+        });
+      }
     }
   }
 }
 
 /**
  * Resolves an '@lookup:<Entity>.<Field>=<Value>' expression against in-memory simulation records
- * or registered static platform/application lookup catalogs.
+ * or supplied external catalog datasets.
  */
 export function resolveLookupExpression(
   lookupExpr: string,
   data: Record<string, readonly Record<string, unknown>[]>,
-  staticLookups?: Record<string, Record<string, Set<string> | string[]>>
+  catalogs?: Record<string, readonly Record<string, unknown>[]>
 ): { resolved: boolean; error?: string } {
-  // Pattern: @lookup:<EntityName>.<FieldName>=<FieldValue> or @lookup:<EntityName>.<FieldName>:<FieldValue>
   const cleanExpr = lookupExpr.replace(/\?.*$/, ''); // strip query params like ?allowDefer
   const match = cleanExpr.match(/^@lookup:([^.]+)\.([^=:]+)[=:](.*)$/);
   if (!match) {
@@ -1052,191 +1137,28 @@ export function resolveLookupExpression(
   }
   const normVal = targetValue.trim().toLowerCase();
 
-  // 1. Check in simulated data (both by direct key and matching entityName)
-  for (const [eName, rows] of Object.entries(data)) {
-    if (eName.toLowerCase() === targetEntity.toLowerCase() || (rows.length > 0 && String(rows[0]?.['_entityName'] ?? '').toLowerCase() === targetEntity.toLowerCase())) {
-      const found = rows.some((r) => {
-        const v = r[targetField];
-        return v !== undefined && v !== null && String(v).trim().toLowerCase() === normVal;
-      });
-      if (found) return { resolved: true };
+  const searchPool = (pool: Record<string, readonly Record<string, unknown>[]>) => {
+    for (const [eName, rows] of Object.entries(pool)) {
+      if (
+        eName.toLowerCase() === targetEntity.toLowerCase() ||
+        (rows.length > 0 && String(rows[0]?.['_entityName'] ?? rows[0]?.['__entityName'] ?? '').toLowerCase() === targetEntity.toLowerCase())
+      ) {
+        const found = rows.some((r) => {
+          const v = r[targetField];
+          return v !== undefined && v !== null && String(v).trim().toLowerCase() === normVal;
+        });
+        if (found) return true;
+      }
     }
-  }
-
-  // 2. Check static/platform lookup registry
-  const platformLookups: Record<string, Record<string, string[]>> = {
-    'MJ: Entities': {
-      Name: [
-        'Committees: Agenda Items',
-        'Committees: Artifact Types',
-        'Committees: Artifacts',
-        'Committees: Attendances',
-        'Committees: Comments',
-        'Committees: Committees',
-        'Committees: Meetings',
-        'Committees: Memberships',
-        'Committees: Minutes',
-        'Committees: Motions',
-        'Committees: Roles',
-        'Committees: Terms',
-        'Committees: Types',
-        'Committees: Votes',
-        'MJ: AI Model Types',
-        'MJ: AI Model Vendors',
-        'MJ: AI Models',
-        'MJ: AI Vendor Type Definitions',
-        'MJ: AI Vendors',
-        'MJ: Companies',
-        'MJ: Entities',
-        'MJ: Users',
-        'MJ_BizApps_Accounting: GL Account Links',
-        'MJ_BizApps_Accounting: GL Account Roles',
-        'MJ_BizApps_Accounting: GL Accounts',
-        'MJ_BizApps_Common: Activities',
-        'MJ_BizApps_Common: Activity Links',
-        'MJ_BizApps_Common: Address Links',
-        'MJ_BizApps_Common: Address Types',
-        'MJ_BizApps_Common: Addresses',
-        'MJ_BizApps_Common: Contact Methods',
-        'MJ_BizApps_Common: Contact Types',
-        'MJ_BizApps_Common: Organization Types',
-        'MJ_BizApps_Common: Organizations',
-        'MJ_BizApps_Common: People',
-        'MJ_BizApps_Common: Relationship Types',
-        'MJ_BizApps_Common: Relationships',
-        'MJ_BizApps_Forms: Form Distributions',
-        'MJ_BizApps_Forms: Form Pages',
-        'MJ_BizApps_Forms: Form Question Options',
-        'MJ_BizApps_Forms: Form Questions',
-        'MJ_BizApps_Forms: Form Response Answers',
-        'MJ_BizApps_Forms: Form Responses',
-        'MJ_BizApps_Forms: Form Versions',
-        'MJ_BizApps_Forms: Forms',
-        'MJ_BizApps_Issues: Issue Comments',
-        'MJ_BizApps_Issues: Issue Number Sequences',
-        'MJ_BizApps_Issues: Issue Status',
-        'MJ_BizApps_Issues: Issue Types',
-        'MJ_BizApps_Issues: Issues',
-        'MJ_BizApps_Orders: Order Headers',
-        'MJ_BizApps_Orders: Order Lines',
-        'MJ_BizApps_Orders: Payment Headers',
-        'MJ_BizApps_Orders: Payment Lines',
-        'MJ_BizApps_Orders: Product Categories',
-        'MJ_BizApps_Orders: Products',
-        'MJ_BizApps_SecureMessaging: Message Files',
-        'MJ_BizApps_SecureMessaging: Portal Sessions',
-        'MJ_BizApps_SecureMessaging: Secure Messages',
-        'MJ_BizApps_SecureMessaging: Secure Threads',
-        'MJ_BizApps_Sonar: Factors',
-        'MJ_BizApps_Sonar: Model Factors',
-        'MJ_BizApps_Sonar: Model Related Entities',
-        'MJ_BizApps_Sonar: Score Band Sets',
-        'MJ_BizApps_Sonar: Score Bands',
-        'MJ_BizApps_Sonar: Score Model Versions',
-        'MJ_BizApps_Sonar: Score Models',
-        'MJ_BizApps_Sonar: Time Windows',
-        'MJ_BizApps_Tasks: Task Activities',
-        'MJ_BizApps_Tasks: Task Assignments',
-        'MJ_BizApps_Tasks: Task Comments',
-        'MJ_BizApps_Tasks: Task Links',
-        'MJ_BizApps_Tasks: Task Tag Links',
-        'MJ_BizApps_Tasks: Task Tags',
-        'MJ_BizApps_Tasks: Task Types',
-        'MJ_BizApps_Tasks: Tasks',
-        'MoreCheese: Advocacy Actions',
-        'MoreCheese: Certifications',
-        'MoreCheese: Competition Entries',
-        'MoreCheese: Course Enrollments',
-        'MoreCheese: Courses',
-        'MoreCheese: Data Quality Labels',
-        'MoreCheese: Event Registrations',
-        'MoreCheese: Events',
-        'MoreCheese: Member Certifications',
-        'MoreCheese: Member Profiles',
-        'MoreCheese: Membership Periods',
-        'MoreCheese: Organization Profiles',
-      ],
-    },
-    'Committees: Roles': {
-      Name: ['Chair', 'Vice Chair', 'Member'],
-    },
-    'Committees: Artifact Types': {
-      Name: ['Agenda', 'Document', 'Presentation', 'Spreadsheet'],
-    },
-    'Committees: Types': {
-      Name: ['Standing', 'Special'],
-    },
-    'MJ_BizApps_Common: Contact Types': {
-      Name: ['Email', 'Mobile Phone', 'Work Phone', 'LinkedIn', 'Website'],
-    },
-    'MJ_BizApps_Common: Address Types': {
-      Name: ['Home', 'Work', 'Mailing'],
-    },
-    'MJ_BizApps_Common: Organization Types': {
-      Name: [
-        'Sole Proprietorship',
-        'LLC',
-        'Partnership',
-        'Corporation',
-        'Non-Profit',
-        'Educational Institution',
-        'Association',
-      ],
-    },
-    'MJ_BizApps_Common: Relationship Types': {
-      Name: ['Employee', 'Affiliate', 'Supplier', 'Partner'],
-    },
-    'MJ_BizApps_Accounting: GL Account Roles': {
-      Name: [
-        'Cash',
-        'Accounts Receivable',
-        'Deferred Revenue',
-        'Sales Discounts',
-        'Sales Returns and Allowances',
-        'Processing Fee',
-        'Dues Revenue',
-        'Events Revenue',
-        'Education Revenue',
-        'Store Revenue',
-        'Accounts Payable',
-      ],
-    },
-    'MJ_BizApps_Issues: Issue Status': {
-      Name: ['New', 'In Progress', 'Resolved', 'Closed'],
-    },
-    'MJ_BizApps_Issues: Issue Types': {
-      Name: ['Bug', 'Feature Request', 'Billing Inquiry', 'General Support'],
-    },
-    'MJ_BizApps_Tasks: Task Types': {
-      Name: ['Action Item', 'Milestone'],
-    },
-    'MJ: AI Model Types': {
-      Name: ['LLM', 'Embedding', 'Image Generation'],
-    },
-    'MJ: AI Vendor Type Definitions': {
-      Name: ['Inference Provider', 'Model Developer'],
-    },
-    'MJ_BizApps_Sonar: Score Model Versions': {
-      ID: ['9ec51fe5-b002-564e-9c7e-7b8e4954cc5b'],
-    },
-    'MJ: Users': {
-      Email: [
-        'marcus.oduya@morecheesefederation.example',
-        'elena.rodriguez@morecheesefederation.example',
-        'admin@morecheesefederation.example',
-      ],
-    },
+    return false;
   };
 
-  const entityLookup = platformLookups[targetEntity] ?? (staticLookups ? staticLookups[targetEntity] : undefined);
-  if (entityLookup) {
-    const vals = entityLookup[targetField];
-    if (vals) {
-      const exists = Array.isArray(vals)
-        ? vals.some((v) => v.toLowerCase() === normVal)
-        : (vals as Set<string>).has(normVal);
-      if (exists) return { resolved: true };
-    }
+  if (searchPool(data)) {
+    return { resolved: true };
+  }
+
+  if (catalogs && searchPool(catalogs)) {
+    return { resolved: true };
   }
 
   return { resolved: false, error: `Target record not found for lookup: ${lookupExpr}` };

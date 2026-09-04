@@ -428,6 +428,16 @@ To preserve focus on delivering the core metadata contracts and retrospective si
 
 ### 8. Implementation Work List & Verification Gates for PR #7 (Completed)
 
+| Item | Description | Verification Target | Status |
+|---|---|---|---|
+| **A1 (R7-1)** | Adding a hero must not change non-hero rows (identity-keyed generation, CLI Invariant 3). Non-hero rows between `heroes: []` and shipped heroes are 100% byte-identical. | Integration test: generating with vs without a hero produces byte-identical non-hero rows. | Completed (`integration-enterprise.test.ts: A1`) |
+| **A2 (R7-2)** | Hero outcomes emerge from factor evaluation path without synthetic post-hoc overwrite. Hero outcome pins condition draws via rejection sampling. | Emitter test: hero outcomes emerge from model evaluation path and pass Gate 0. | Completed (`integration-enterprise.test.ts: A2`) |
+| **A3 (02.7)** | Child rows per cycle: Generate discrete child rows per cycle from `motif.childRates` and ladder bindings. Cross-cycle feature pins satisfy Gate 0. | Integration test: child row counts match rates per cycle across multi-cycle history and pass Gate 0. | Completed (`integration-enterprise.test.ts: A3`) |
+| **A4 (N6)** | State ladder `stateValues` bidirectional mapping on field/childEntity bindings. | Engine & contract test: ladders enforce typed `stateValues` round-trip resolution. | Completed (`ladders.test.ts`) |
+| **A5 (R7-3)** | Dynamic transition count prediction: formula dynamically calculates expected transitions from ladders' `durationCycles`. | CLI test: non-hardcoded cycle advancement with dynamically computed transition count. | Completed (`integration-enterprise.test.ts: A5`) |
+| **A6 (R7-4)** | Single project-wide `cycleUnit` declared on manifest; removed `cycleUnit` from `StateLadderConfigSchema`. | Contract & CLI test: ladders strictly reject local `cycleUnit`; weekly vs yearly projects produce distinct schedules. | Completed (`ladders.test.ts`, `integration-enterprise.test.ts: A6`) |
+| **B1, B2, B3** | Realized Eras: active era volume multipliers evaluated inside cycle loop with scoped `where` matching via FK traversal, and verified via `loom validate` gate. | CLI test: 0 multiplier produces 0 rows, passes validation gate, and fails if multiplier edited to 1.0. | Completed (`integration-enterprise.test.ts: B`) |
+
 ### 9. Aspirational Future Roadmap (Unticked Phased Items)
 
 The following capabilities are aspirational design goals deferred to future phases:

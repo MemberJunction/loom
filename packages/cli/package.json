@@ -10,7 +10,7 @@
     "loom": "dist/bin/loom.js"
   },
   "scripts": {
-    "build": "tsc && chmod +x dist/bin/loom.js",
+    "build": "tsc && chmod +x dist/bin/loom.js && ln -sf loom.js dist/bin/loom",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "clean": "rm -rf dist"
