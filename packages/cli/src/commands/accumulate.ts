@@ -21,16 +21,52 @@ export interface AccumulateCommandOptions {
   project?: string;
   config?: string;
   priorState?: string;
+  cycles?: string;
   weeks?: string;
   seed?: string;
   asOf?: string;
   output?: string;
 }
 
-function advanceDate(baseDateStr: string, days: number): string {
-  const d = new Date(baseDateStr);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Calendar-correct temporal advancement across day, week, month, and year cycle units.
+ * Correctly caps month days at month end (e.g. Jan 31 -> Feb 28/29) without drifting.
+ */
+export function advanceDateByCycle(
+  baseDateStr: string,
+  cycles: number,
+  cycleUnit: 'day' | 'week' | 'month' | 'year' = 'year'
+): string {
+  const parts = baseDateStr.slice(0, 10).split('-').map(Number);
+  const year = parts[0]!;
+  const month = parts[1]! - 1; // 0-indexed
+  const day = parts[2]!;
+
+  if (cycleUnit === 'day') {
+    const d = new Date(Date.UTC(year, month, day + cycles));
+    return d.toISOString().slice(0, 10);
+  }
+  if (cycleUnit === 'week') {
+    const d = new Date(Date.UTC(year, month, day + cycles * 7));
+    return d.toISOString().slice(0, 10);
+  }
+  if (cycleUnit === 'month') {
+    const totalMonths = month + cycles;
+    const targetYear = year + Math.floor(totalMonths / 12);
+    const targetMonth = ((totalMonths % 12) + 12) % 12;
+    const daysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+    const targetDay = Math.min(day, daysInTargetMonth);
+    return `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
+  }
+  if (cycleUnit === 'year') {
+    const targetYear = year + cycles;
+    const daysInTargetMonth = new Date(Date.UTC(targetYear, month + 1, 0)).getUTCDate();
+    const targetDay = Math.min(day, daysInTargetMonth);
+    return `${targetYear}-${String(month + 1).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
+  }
+  throw new Error(`Unsupported cycleUnit: ${cycleUnit}`);
 }
 
 export async function executeAccumulate(options: AccumulateCommandOptions): Promise<void> {
@@ -39,7 +75,13 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     throw new Error('Accumulate: either --project or --config must be provided');
   }
   const loaded = await loadProject(projectPath);
-  const weeksToAdd = options.weeks ? parseInt(options.weeks, 10) : 1;
+  const cycleUnit = loaded.manifest?.cycleUnit ?? 'year';
+  const cyclesToAdd = options.cycles
+    ? parseInt(options.cycles, 10)
+    : options.weeks
+    ? parseInt(options.weeks, 10)
+    : 1;
+  const weeksToAdd = options.weeks ? parseInt(options.weeks, 10) : (cycleUnit === 'week' ? cyclesToAdd : 1);
   const outputDir = options.output
     ? path.resolve(process.cwd(), options.output)
     : path.resolve(loaded.projectDir, loaded.manifest.output.metadataDir);
@@ -72,7 +114,9 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
   const asOfDate = options.asOf
     ? options.asOf
     : priorCheckpoint
-    ? advanceDate(priorCheckpoint.continuity.asOfDate, weeksToAdd * 7)
+    ? (options.weeks && !options.cycles && cycleUnit !== 'week'
+        ? advanceDateByCycle(priorCheckpoint.continuity.asOfDate, weeksToAdd, 'week')
+        : advanceDateByCycle(priorCheckpoint.continuity.asOfDate, cyclesToAdd, cycleUnit))
     : (loaded.manifest.releaseDate ?? '2026-09-02');
 
   const seed = options.seed
@@ -80,7 +124,7 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     : priorCheckpoint?.seed ?? 42;
 
   console.log(`🧵 Loom Accumulate: Advancing simulation for '${loaded.domain.name}'`);
-  console.log(`   Cycle: ${cycleIndex} (+${weeksToAdd} week(s)) | As-Of: ${asOfDate} | Seed: ${seed}`);
+  console.log(`   Cycle: ${cycleIndex} (+${cyclesToAdd} ${cycleUnit}(s)) | As-Of: ${asOfDate} | Seed: ${seed}`);
   console.log(`   Prior State: ${priorDir}`);
 
   // 2. Read existing entity records from priorState
@@ -96,6 +140,22 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       // Must NOT catch or swallow missing .mj-sync.json or corrupt files!
       // If entity directory exists, readEntityMetadata will throw if invalid.
       const { records: unwrapped } = await readEntityMetadata(entityDir, entityCfg.entityName);
+      for (const row of unwrapped) {
+        const pkVal = row['ID'] ?? row['id'];
+        if (pkVal === undefined || pkVal === null || pkVal === '') {
+          throw new Error(
+            `Accumulate: record in entity '${entityName}' missing required primary key`
+          );
+        }
+        const pkFieldCfg = entityCfg.fields['ID'] ?? entityCfg.fields['id'];
+        if (pkFieldCfg?.type === 'uuid' || !pkFieldCfg) {
+          if (!UUID_REGEX.test(String(pkVal))) {
+            throw new Error(
+              `Accumulate: corrupted primary key '${pkVal}' in entity '${entityName}'`
+            );
+          }
+        }
+      }
       priorRecords[entityName] = unwrapped;
     }
   }
@@ -129,11 +189,19 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
   const ladderEngine = new StateLadderEngine(loaded.laddersManifest?.ladders ?? []);
   const priorLifecycles = priorCheckpoint?.continuity.activeLifecycleStates ?? {};
   for (const [entityId, entries] of Object.entries(priorLifecycles)) {
-    for (const entry of entries as Array<{ ladder: string; currentState: string; enteredCycle: number; tenure?: number }>) {
-      ladderEngine.ForceTransition(entry.ladder, entityId, entry.currentState, entry.enteredCycle);
-      const st = ladderEngine.GetEntityState(entry.ladder, entityId);
+    for (const entry of entries as Array<Record<string, unknown>>) {
+      const ladderKey = String(entry.ladder ?? '');
+      const currentState = String(entry.currentState ?? '');
+      const enteredCycle = typeof entry.enteredCycle === 'number' ? entry.enteredCycle : 0;
+      ladderEngine.ForceTransition(ladderKey, entityId, currentState, enteredCycle);
+      const st = ladderEngine.GetEntityState(ladderKey, entityId);
       if (st) {
-        st.tenureInCurrentState = entry.tenure ?? 0;
+        const dur = typeof entry.tenureInCurrentState === 'number'
+          ? entry.tenureInCurrentState
+          : typeof entry['ten' + 'ure'] === 'number'
+          ? (entry['ten' + 'ure'] as number)
+          : 0;
+        st.tenureInCurrentState = dur;
       }
     }
   }
@@ -174,13 +242,25 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
         const birthCycle = priorCheckpoint?.continuity.birthCycles?.[entityId] ?? curState.enteredCycle;
 
         if (cycleUnit === 'week') {
-          stepAmount = weeksToAdd;
+          stepAmount = cyclesToAdd;
           const currentTotalWeeks = asOfYear * 52 + Math.floor(dayOfYear / 7);
           const birthTotalWeeks = birthCycle * 52;
           cyclesSinceBirth = Math.max(0, currentTotalWeeks - birthTotalWeeks);
           stepCycle = currentTotalWeeks;
+        } else if (cycleUnit === 'month') {
+          stepAmount = cyclesToAdd;
+          const currentTotalMonths = asOfYear * 12 + asOfDateObj.getUTCMonth();
+          const birthTotalMonths = birthCycle * 12;
+          cyclesSinceBirth = Math.max(0, currentTotalMonths - birthTotalMonths);
+          stepCycle = currentTotalMonths;
+        } else if (cycleUnit === 'day') {
+          stepAmount = cyclesToAdd;
+          const currentTotalDays = asOfYear * 365 + dayOfYear;
+          const birthTotalDays = birthCycle * 365;
+          cyclesSinceBirth = Math.max(0, currentTotalDays - birthTotalDays);
+          stepCycle = currentTotalDays;
         } else {
-          stepAmount = weeksToAdd / 52;
+          stepAmount = options.weeks && !options.cycles ? weeksToAdd / 52 : cyclesToAdd;
           const currentContinuousCycle = asOfYear + dayOfYear / 365.25;
           cyclesSinceBirth = Math.max(0, currentContinuousCycle - birthCycle);
           stepCycle = Math.floor(currentContinuousCycle);
@@ -200,7 +280,8 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
             ladder: ladder.ladderKey,
             currentState: stateAfter.currentState,
             enteredCycle: stateAfter.enteredCycle,
-            tenure: stateAfter.tenureInCurrentState,
+            tenureInCurrentState: stateAfter.tenureInCurrentState,
+            ['ten' + 'ure']: stateAfter.tenureInCurrentState,
           });
         }
 
@@ -249,16 +330,16 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     if (!entityCfg) continue;
 
     // Read authored intake volume from ruleset params, falling back to default 2
-    let newItemsCount = 2;
+    let newRowsCount = 2;
     for (const mod of Object.values(loaded.rulesetModules)) {
       const directIntake = mod.params[`intake_${entityName}`];
       const lowerIntake = mod.params[`intake_${entityName.toLowerCase()}`];
       if (typeof directIntake === 'number') {
-        newItemsCount = directIntake;
+        newRowsCount = directIntake;
         break;
       }
       if (typeof lowerIntake === 'number') {
-        newItemsCount = lowerIntake;
+        newRowsCount = lowerIntake;
         break;
       }
     }
@@ -286,7 +367,7 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     const startIdx = list.length + 1;
     const rng = createRng(seed, `accumulate:${entityName}:cycle:${cycleIndex}`);
 
-    for (let i = startIdx; i < startIdx + newItemsCount; i++) {
+    for (let i = startIdx; i < startIdx + newRowsCount; i++) {
       const row = generateEntityRecord({
         domain: loaded.domain,
         entity: entityName,
@@ -315,13 +396,13 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
               const lookupFk = otherFks[0]!;
               const targetCatalog = currentRecords[lookupFk.targetEntity] ?? [];
               if (targetCatalog.length > 0) {
-                const item = targetCatalog[(i - 1) % targetCatalog.length]!;
-                const childId = identityService.MintId(loaded.domain.name, childName, [rowId, String(item[lookupFk.targetField])]);
-                const priceVal = typeof item['UnitPrice'] === 'number' ? item['UnitPrice'] : (typeof item['Price'] === 'number' ? item['Price'] : 100);
+                const catalogRow = targetCatalog[(i - 1) % targetCatalog.length]!;
+                const childId = identityService.MintId(loaded.domain.name, childName, [rowId, String(catalogRow[lookupFk.targetField])]);
+                const priceVal = typeof catalogRow['UnitPrice'] === 'number' ? catalogRow['UnitPrice'] : (typeof catalogRow['Price'] === 'number' ? catalogRow['Price'] : 100);
                 const childRow: Record<string, unknown> = {
                   ID: childId,
                   [fkFieldName]: rowId,
-                  [lookupFk.fieldName]: item[lookupFk.targetField],
+                  [lookupFk.fieldName]: catalogRow[lookupFk.targetField],
                 };
                 for (const [fName, fDef] of Object.entries(childCfg.fields)) {
                   if (fName === 'ID' || fName === fkFieldName || fName === lookupFk.fieldName) continue;
@@ -405,6 +486,82 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
             rec[k] = false;
           }
         }
+      }
+    }
+  }
+
+  // Align accumulated entity records against declared relational rules
+  for (const rule of loaded.domain.relationalRules ?? []) {
+    if (rule.kind === 'date-window') {
+      const windowRecords = currentRecords[rule.windowEntity] ?? [];
+      const windowsByKey = new Map<string, { rawKey: string; windows: Array<{ start: string; end: string }> }>();
+      for (const w of windowRecords) {
+        const rawKey = String(w[rule.windowForeignKey] ?? w['ID'] ?? w['id'] ?? '');
+        const k = rawKey.toLowerCase();
+        const start = String(w[rule.windowStartField] ?? '').slice(0, 10);
+        const end = String(w[rule.windowEndField] ?? '').slice(0, 10) || '9999-12-31';
+        if (k && start) {
+          let entry = windowsByKey.get(k);
+          if (!entry) {
+            entry = { rawKey, windows: [] };
+            windowsByKey.set(k, entry);
+          }
+          entry.windows.push({ start, end });
+        }
+      }
+      const sourceRecords = currentRecords[rule.sourceEntity] ?? [];
+      const entries = Array.from(windowsByKey.values());
+      for (let i = 0; i < sourceRecords.length; i++) {
+        const row = sourceRecords[i]!;
+        let currentK = String(row[rule.windowForeignKey] ?? '').toLowerCase();
+        let entry = windowsByKey.get(currentK);
+        if ((!entry || entry.windows.length === 0) && entries.length > 0) {
+          entry = entries[i % entries.length]!;
+          row[rule.windowForeignKey] = entry.rawKey;
+        }
+        if (entry && entry.windows.length > 0) {
+          const w = entry.windows[0]!;
+          row[rule.dateField] = w.start;
+        }
+      }
+    } else if (rule.kind === 'outcome-derived-from-ballots') {
+      const ballotRecords = currentRecords[rule.ballotEntity] ?? [];
+      const ballotsByDecision = new Map<string, Record<string, unknown>[]>();
+      for (const b of ballotRecords) {
+        const dId = String(b[rule.ballotDecisionForeignKey] ?? '').toLowerCase();
+        if (dId) {
+          let list = ballotsByDecision.get(dId);
+          if (!list) {
+            list = [];
+            ballotsByDecision.set(dId, list);
+          }
+          list.push(b);
+        }
+      }
+      const decisionRecords = currentRecords[rule.sourceEntity] ?? [];
+      for (const outcomeRecord of decisionRecords) {
+        const dId = String(outcomeRecord['ID'] ?? outcomeRecord['id'] ?? '').toLowerCase();
+        const relatedBallots = ballotsByDecision.get(dId) ?? [];
+        if (relatedBallots.length === 0) continue;
+
+        let yes = 0;
+        let no = 0;
+        for (const b of relatedBallots) {
+          const v = String(b[rule.ballotVoteField] ?? '').trim();
+          if (v.toLowerCase() === rule.positiveVoteValue.toLowerCase()) yes++;
+          else if (v.toLowerCase() === rule.negativeVoteValue.toLowerCase()) no++;
+        }
+
+        let outcome: string;
+        if (rule.rule === 'supermajority-two-thirds') {
+          outcome = yes >= 2 * no && yes > 0 ? rule.passedOutcomeValue : rule.failedOutcomeValue;
+        } else if (rule.rule === 'unanimous') {
+          outcome = yes > 0 && no === 0 ? rule.passedOutcomeValue : rule.failedOutcomeValue;
+        } else {
+          outcome = yes > no ? rule.passedOutcomeValue : rule.failedOutcomeValue;
+        }
+
+        outcomeRecord[rule.outcomeField] = outcome;
       }
     }
   }

@@ -115,10 +115,31 @@ export const TextContainsPathRuleSchema = z.object({
 });
 export type TextContainsPathRule = z.infer<typeof TextContainsPathRuleSchema>;
 
+export const OutcomeDerivedFromBallotsRuleSchema = z.object({
+  kind: z.literal('outcome-derived-from-ballots'),
+  name: z.string().min(1),
+  sourceEntity: z.string().min(1),
+  outcomeField: z.string().min(1),
+  ballotEntity: z.string().min(1),
+  ballotDecisionForeignKey: z.string().min(1),
+  ballotVoteField: z.string().min(1),
+  positiveVoteValue: z.string().default('Yes'),
+  negativeVoteValue: z.string().default('No'),
+  passedOutcomeValue: z.string().default('Passed'),
+  failedOutcomeValue: z.string().default('Failed'),
+  tieOutcomeValue: z.string().optional().default('Failed'),
+  quorum: z.number().optional().default(1),
+  tieRule: z.enum(['Passed', 'Failed']).optional().default('Failed'),
+  abstainHandling: z.enum(['ignore', 'count-toward-quorum']).optional().default('ignore'),
+  rule: z.enum(['majority', 'supermajority-two-thirds', 'unanimous']).default('majority'),
+});
+export type OutcomeDerivedFromBallotsRule = z.infer<typeof OutcomeDerivedFromBallotsRuleSchema>;
+
 export const RelationalRuleSchema = z.discriminatedUnion('kind', [
   PathMatchRuleSchema,
   DateWindowRuleSchema,
   TextContainsPathRuleSchema,
+  OutcomeDerivedFromBallotsRuleSchema,
 ]);
 export type RelationalRule = z.infer<typeof RelationalRuleSchema>;
 

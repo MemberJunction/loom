@@ -134,11 +134,14 @@ export class Validator {
       },
     };
 
+    // Lookup resolution index for O(1) @lookup checking
+    const lookupIndex = new LookupIndex(data, actualCatalogs);
+
     // 0. Hero pins validation (Gate 0)
     this.checkHeroPins(data, actualHeroes, actualFactors, relationalCtx, gates);
 
     // 1. Referential integrity gates
-    this.checkReferentialClosure(domain, data, actualCatalogs, gates);
+    this.checkReferentialClosure(domain, data, actualCatalogs, gates, lookupIndex);
 
     // 2. Primary key uniqueness & non-null fields
     this.checkSchemaInvariants(domain, data, gates);
@@ -153,7 +156,7 @@ export class Validator {
     this.checkDependentChildCoverage(domain, data, gates);
 
     // 6. @lookup resolution gate (M2)
-    this.checkLookupResolution(data, actualCatalogs, gates);
+    this.checkLookupResolution(data, actualCatalogs, gates, lookupIndex);
 
     // 7. Relational rules gates (M2)
     this.checkRelationalRules(domain, data, gates, actualCatalogs);
@@ -176,7 +179,8 @@ export class Validator {
     domain: DomainConfig,
     data: Record<string, readonly Record<string, unknown>[]>,
     catalogs: Record<string, readonly Record<string, unknown>[]> | undefined,
-    gates: GateResult[]
+    gates: GateResult[],
+    lookupIndex?: LookupIndex
   ): void {
     for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
       const records = data[entityName] ?? [];
@@ -206,7 +210,7 @@ export class Validator {
           if (rawVal !== undefined && rawVal !== null && rawVal !== '') {
             examinedFkCount++;
             if (typeof rawVal === 'string' && rawVal.startsWith('@lookup:')) {
-              const res = resolveLookupExpression(rawVal, data, catalogs);
+              const res = resolveLookupExpression(rawVal, data, catalogs, lookupIndex);
               if (!res.resolved) {
                 danglingCount++;
               }
@@ -468,148 +472,178 @@ export class Validator {
     }
     const derivedCycles = Array.from(allDatasetCycles).sort((a, b) => a - b);
 
+    // Pre-cache for parent records by targetEntity:targetField -> Map<normalizedValue, Record<string, unknown>>
+    const parentRecordCache = new Map<string, Map<string, Record<string, unknown>>>();
+    const getParentRecord = (targetEntity: string, targetField: string, targetVal: string): Record<string, unknown> | undefined => {
+      const cacheKey = `${targetEntity.toLowerCase()}:${targetField.toLowerCase()}`;
+      let map = parentRecordCache.get(cacheKey);
+      if (!map) {
+        map = new Map<string, Record<string, unknown>>();
+        const rows = data[targetEntity] ?? [];
+        for (const row of rows) {
+          const v = row[targetField];
+          if (v !== undefined && v !== null) {
+            map.set(String(v).toLowerCase(), row as Record<string, unknown>);
+          }
+        }
+        parentRecordCache.set(cacheKey, map);
+      }
+      return map.get(targetVal.toLowerCase());
+    };
+
+    // Cache getRowYear per record
+    const rowYearCache = new WeakMap<Record<string, unknown>, number | undefined>();
+    const getRowYear = (r: Record<string, unknown>, entityCfg: DomainConfig['entities'][string]): number | undefined => {
+      if (rowYearCache.has(r)) {
+        return rowYearCache.get(r);
+      }
+      let year: number | undefined;
+      const cycleField = Object.keys(entityCfg.fields).find(
+        (f) => f === 'Cycle' || f === 'Year' || f.endsWith('Date') || f.endsWith('At')
+      );
+      if (cycleField) {
+        const raw = r[cycleField];
+        if (raw !== undefined && raw !== null && raw !== '') {
+          year = typeof raw === 'number' ? raw : new Date(String(raw)).getFullYear();
+        }
+      }
+      if (year === undefined || isNaN(year)) {
+        // Resolve date via foreign keys (e.g. OrderLine -> OrderHeader.OrderDate)
+        for (const fk of Object.values(entityCfg.foreignKeys ?? {})) {
+          const fkVal = r[fk.fieldName ?? ''];
+          if (fkVal !== undefined && fkVal !== null && fkVal !== '') {
+            const parentRow = getParentRecord(fk.targetEntity, fk.targetField, String(fkVal));
+            if (parentRow) {
+              const parentTargetCfg = domain.entities[fk.targetEntity];
+              if (parentTargetCfg) {
+                const parentCycleField = Object.keys(parentTargetCfg.fields).find(
+                  (f) => f === 'Cycle' || f === 'Year' || f.endsWith('Date') || f.endsWith('At')
+                );
+                if (parentCycleField && parentRow[parentCycleField]) {
+                  const raw = parentRow[parentCycleField];
+                  const y = typeof raw === 'number' ? raw : new Date(String(raw)).getFullYear();
+                  if (!isNaN(y)) {
+                    year = y;
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      const finalYear = year !== undefined && !isNaN(year) ? year : undefined;
+      rowYearCache.set(r, finalYear);
+      return finalYear;
+    };
+
+    const matchesWhere = (
+      r: Record<string, unknown>,
+      entityCfg: DomainConfig['entities'][string],
+      where?: Record<string, unknown>
+    ): boolean => {
+      if (!where) return true;
+      for (const [wKey, wVal] of Object.entries(where)) {
+        if (r[wKey] !== undefined) {
+          if (String(r[wKey]).toLowerCase() !== String(wVal).toLowerCase()) return false;
+        } else {
+          let matchedRel = false;
+          for (const fk of Object.values(entityCfg.foreignKeys ?? {})) {
+            const fkVal = r[fk.fieldName ?? ''];
+            if (fkVal !== undefined && fkVal !== null && fkVal !== '') {
+              const parent = getParentRecord(fk.targetEntity, fk.targetField, String(fkVal));
+              if (parent && parent[wKey] !== undefined) {
+                if (String(parent[wKey]).toLowerCase() === String(wVal).toLowerCase()) {
+                  matchedRel = true;
+                  break;
+                }
+              }
+            }
+          }
+          if (!matchedRel) return false;
+        }
+      }
+      return true;
+    };
+
+    const entityRecordsByCycle = new Map<string, Map<number, Record<string, unknown>[]>>();
+    const getRecordsForEntityCycle = (
+      entityName: string,
+      cycle: number
+    ): Record<string, unknown>[] => {
+      let cycleMap = entityRecordsByCycle.get(entityName);
+      if (!cycleMap) {
+        cycleMap = new Map<number, Record<string, unknown>[]>();
+        const rows = data[entityName] ?? [];
+        const cfg = domain.entities[entityName];
+        if (cfg) {
+          for (const row of rows) {
+            const y = getRowYear(row, cfg);
+            if (y !== undefined) {
+              let list = cycleMap.get(y);
+              if (!list) {
+                list = [];
+                cycleMap.set(y, list);
+              }
+              list.push(row as Record<string, unknown>);
+            }
+          }
+        }
+        entityRecordsByCycle.set(entityName, cycleMap);
+      }
+      return cycleMap.get(cycle) ?? [];
+    };
+
+    const baselineScopedCache = new Map<string, number>();
+
     for (const era of eras) {
       // 1. Volume Multipliers Gate
       for (const vm of era.volumeMultipliers) {
-        const records = data[vm.entity] ?? [];
         const entityCfg = domain.entities[vm.entity];
         if (!entityCfg) continue;
 
-        // Determine cycle date/year field
-        const cycleField = Object.keys(entityCfg.fields).find(
-          (f) => f === 'Cycle' || f === 'Year' || f.endsWith('Date') || f.endsWith('At')
+        // Find pure non-era baseline cycles for this entity
+        const allEntityEraCycles = eras.flatMap((e) =>
+          e.volumeMultipliers.some((vm2) => vm2.entity === vm.entity) ? e.cycles : []
         );
+        const nonEraCycles = derivedCycles.filter((cy) => !allEntityEraCycles.includes(cy));
 
-        const getRowYear = (r: Record<string, unknown>): number | undefined => {
-          if (cycleField) {
-            const raw = r[cycleField];
-            if (raw !== undefined && raw !== null && raw !== '') {
-              return typeof raw === 'number' ? raw : new Date(String(raw)).getFullYear();
-            }
+        // Helper to calculate baseline scoped count for any volume multiplier (R13-1)
+        const calcBaselineScoped = (targetVM: typeof vm): number => {
+          const vmKey = `${targetVM.entity}:${JSON.stringify(targetVM.where ?? {})}`;
+          const cached = baselineScopedCache.get(vmKey);
+          if (cached !== undefined) return cached;
+
+          let sc = 0;
+          let samples = 0;
+          for (const cy of nonEraCycles) {
+            const inCyRecords = getRecordsForEntityCycle(targetVM.entity, cy);
+            const inCy = inCyRecords.filter((r) => matchesWhere(r, entityCfg, targetVM.where)).length;
+            sc += inCy;
+            samples++;
           }
-          // Resolve date via foreign keys (e.g. OrderLine -> OrderHeader.OrderDate)
-          for (const fk of Object.values(entityCfg.foreignKeys ?? {})) {
-            const parentRecords = data[fk.targetEntity];
-            if (parentRecords) {
-              const fkVal = r[fk.fieldName ?? ''];
-              if (fkVal !== undefined && fkVal !== null && fkVal !== '') {
-                const parentRow = parentRecords.find(
-                  (p) => String(p[fk.targetField]).toLowerCase() === String(fkVal).toLowerCase()
-                );
-                if (parentRow) {
-                  const parentTargetCfg = domain.entities[fk.targetEntity];
-                  if (parentTargetCfg) {
-                    const parentCycleField = Object.keys(parentTargetCfg.fields).find(
-                      (f) => f === 'Cycle' || f === 'Year' || f.endsWith('Date') || f.endsWith('At')
-                    );
-                    if (parentCycleField && parentRow[parentCycleField]) {
-                      const raw = parentRow[parentCycleField];
-                      return typeof raw === 'number' ? raw : new Date(String(raw)).getFullYear();
-                    }
-                  }
-                }
-              }
-            }
-          }
-          return undefined;
+          const result = samples > 0 ? sc / samples : 0;
+          baselineScopedCache.set(vmKey, result);
+          return result;
         };
 
+        let baselineTotalCount = 0;
+        let nonEraSamples = 0;
+        for (const cy of nonEraCycles) {
+          const totalInCy = getRecordsForEntityCycle(vm.entity, cy).length;
+          baselineTotalCount += totalInCy;
+          nonEraSamples++;
+        }
+        const avgBaselineScoped = calcBaselineScoped(vm);
+        const avgBaselineTotal = nonEraSamples > 0 ? baselineTotalCount / nonEraSamples : 0;
+
         for (const targetCycle of era.cycles) {
-          const filterFn = (r: Record<string, unknown>) => {
-            const rowYear = getRowYear(r);
-            if (rowYear !== undefined && rowYear !== targetCycle) {
-              return false;
-            }
-            if (vm.where) {
-              for (const [wKey, wVal] of Object.entries(vm.where)) {
-                if (r[wKey] !== undefined) {
-                  if (String(r[wKey]).toLowerCase() !== String(wVal).toLowerCase()) return false;
-                } else {
-                  let matchedRel = false;
-                  for (const fk of Object.values(entityCfg.foreignKeys ?? {})) {
-                    const targetTableRecords = data[fk.targetEntity];
-                    if (targetTableRecords) {
-                      const fkVal = r[fk.fieldName ?? ''];
-                      const parent = targetTableRecords.find(
-                        (p) => String(p[fk.targetField]).toLowerCase() === String(fkVal).toLowerCase()
-                      );
-                      if (parent && parent[wKey] !== undefined) {
-                        if (String(parent[wKey]).toLowerCase() === String(wVal).toLowerCase()) {
-                          matchedRel = true;
-                          break;
-                        }
-                      }
-                    }
-                  }
-                  if (!matchedRel) return false;
-                }
-              }
-            }
-            return true;
-          };
+          const allInEraCycle = getRecordsForEntityCycle(vm.entity, targetCycle);
+          const matchingInEraCycle = allInEraCycle.filter((r) => matchesWhere(r, entityCfg, vm.where));
 
-          const matchingInEraCycle = records.filter(filterFn);
-
-          // Find pure non-era baseline cycles for this entity
-          const allEntityEraCycles = eras.flatMap((e) =>
-            e.volumeMultipliers.some((vm2) => vm2.entity === vm.entity) ? e.cycles : []
-          );
-          const candidateCycles = derivedCycles;
-          const nonEraCycles = candidateCycles.filter((cy) => !allEntityEraCycles.includes(cy));
-
-          // Helper to calculate baseline scoped count for any volume multiplier (R13-1)
-          const calcBaselineScoped = (targetVM: typeof vm): number => {
-            let sc = 0;
-            let samples = 0;
-            for (const cy of nonEraCycles) {
-              const inCy = records.filter((r) => {
-                const rowYear = getRowYear(r);
-                if (rowYear !== undefined && rowYear !== cy) return false;
-                if (targetVM.where) {
-                  for (const [wKey, wVal] of Object.entries(targetVM.where)) {
-                    if (r[wKey] !== undefined) {
-                      if (String(r[wKey]).toLowerCase() !== String(wVal).toLowerCase()) return false;
-                    } else {
-                      let matchedRel = false;
-                      for (const fk of Object.values(entityCfg.foreignKeys ?? {})) {
-                        const targetTableRecords = data[fk.targetEntity];
-                        if (targetTableRecords) {
-                          const fkVal = r[fk.fieldName ?? ''];
-                          const parent = targetTableRecords.find(
-                            (p) => String(p[fk.targetField]).toLowerCase() === String(fkVal).toLowerCase()
-                          );
-                          if (parent && parent[wKey] !== undefined) {
-                            if (String(parent[wKey]).toLowerCase() === String(wVal).toLowerCase()) {
-                              matchedRel = true;
-                              break;
-                            }
-                          }
-                        }
-                      }
-                      if (!matchedRel) return false;
-                    }
-                  }
-                }
-                return true;
-              }).length;
-              sc += inCy;
-              samples++;
-            }
-            return samples > 0 ? sc / samples : 0;
-          };
-
-          let baselineTotalCount = 0;
-          let nonEraSamples = 0;
-          for (const cy of nonEraCycles) {
-            const totalInCy = records.filter((r) => getRowYear(r) === cy).length;
-            baselineTotalCount += totalInCy;
-            nonEraSamples++;
-          }
-          const allInEraCycle = records.filter((r) => getRowYear(r) === targetCycle);
-          const avgBaselineScoped = calcBaselineScoped(vm);
-          const avgBaselineTotal = nonEraSamples > 0 ? baselineTotalCount / nonEraSamples : allInEraCycle.length;
           const realizedScoped = matchingInEraCycle.length;
           const realizedTotal = allInEraCycle.length;
+          const effectiveAvgBaselineTotal = avgBaselineTotal > 0 ? avgBaselineTotal : allInEraCycle.length;
 
           let passed = false;
           let message = '';
@@ -630,7 +664,7 @@ export class Validator {
               }
             }
 
-            const effectiveBaselineTotal = avgBaselineTotal * parentMultiplier;
+            const effectiveBaselineTotal = effectiveAvgBaselineTotal * parentMultiplier;
             const effectiveBaselineScoped = avgBaselineScoped * parentMultiplier;
 
             // Combine all active scoped multipliers on this entity in targetCycle (R13-1)
@@ -705,7 +739,7 @@ export class Validator {
                 ? `Era '${era.eraKey}' realized multiplier 0: 0 rows generated for ${vm.entity} in cycle ${targetCycle}`
                 : `Era '${era.eraKey}' expected 0 rows (multiplier=0) for ${vm.entity} in cycle ${targetCycle}, found ${realizedTotal}`;
             } else {
-              const expectedCount = avgBaselineTotal * vm.multiplier * childRetentionRate;
+              const expectedCount = effectiveAvgBaselineTotal * vm.multiplier * childRetentionRate;
               const relDiff = Math.abs(realizedTotal - expectedCount) / Math.max(expectedCount, 1);
               passed = relDiff <= 0.20;
               message = passed
@@ -737,26 +771,23 @@ export class Validator {
         const entityCfg = domain.entities[contract.effect];
         if (!entityCfg) continue;
 
-        const cycleField = Object.keys(entityCfg.fields).find(
-          (f) => f === 'Cycle' || f === 'Year' || f.endsWith('Date') || f.endsWith('At')
-        );
-        const getRowYear = (r: Record<string, unknown>): number | undefined => {
-          if (cycleField) {
-            const raw = r[cycleField];
-            if (raw !== undefined && raw !== null && raw !== '') {
-              return typeof raw === 'number' ? raw : new Date(String(raw)).getFullYear();
-            }
+        const factorEvalCache = new WeakMap<Record<string, unknown>, boolean>();
+        const evalRecord = (r: Record<string, unknown>): boolean => {
+          let res = factorEvalCache.get(r);
+          if (res === undefined) {
+            res = Boolean(evalFn(r, ctx));
+            factorEvalCache.set(r, res);
           }
-          return undefined;
+          return res;
         };
 
         for (const targetCycle of era.cycles) {
-          const cycleRecords = targetRecords.filter((r) => getRowYear(r) === targetCycle);
+          const cycleRecords = getRecordsForEntityCycle(contract.effect, targetCycle);
           if (cycleRecords.length === 0) continue;
 
           let positiveCountInCycle = 0;
           for (const r of cycleRecords) {
-            if (evalFn(r, ctx)) positiveCountInCycle++;
+            if (evalRecord(r)) positiveCountInCycle++;
           }
           const rateInCycle = positiveCountInCycle / cycleRecords.length;
 
@@ -773,9 +804,9 @@ export class Validator {
           let refTotal = 0;
           let refPositive = 0;
           for (const cy of refCycles) {
-            const cyRecords = targetRecords.filter((r) => getRowYear(r) === cy);
+            const cyRecords = getRecordsForEntityCycle(contract.effect, cy);
             for (const r of cyRecords) {
-              if (evalFn(r, ctx)) refPositive++;
+              if (evalRecord(r)) refPositive++;
             }
             refTotal += cyRecords.length;
           }
@@ -861,7 +892,8 @@ export class Validator {
   private checkLookupResolution(
     data: Record<string, readonly Record<string, unknown>[]>,
     catalogs: Record<string, readonly Record<string, unknown>[]> | undefined,
-    gates: GateResult[]
+    gates: GateResult[],
+    lookupIndex?: LookupIndex
   ): void {
     let totalLookups = 0;
     let unresolvedCount = 0;
@@ -872,7 +904,7 @@ export class Validator {
         for (const [field, val] of Object.entries(row)) {
           if (typeof val === 'string' && val.startsWith('@lookup:')) {
             totalLookups++;
-            const res = resolveLookupExpression(val, data, catalogs);
+            const res = resolveLookupExpression(val, data, catalogs, lookupIndex);
             if (!res.resolved) {
               unresolvedCount++;
               if (failureMessages.length < 5) {
@@ -955,6 +987,8 @@ export class Validator {
         if (rule.childReferences) {
           assertEntityDeclared(rule.childReferences.childEntity, rule.name);
         }
+      } else if (rule.kind === 'outcome-derived-from-ballots') {
+        assertEntityDeclared(rule.ballotEntity, rule.name);
       }
     }
 
@@ -1104,7 +1138,8 @@ export class Validator {
 
         const targetWindows = new Map<string, Array<{ start: string; end: string }>>();
         for (const w of windowRecords) {
-          const tId = String(w[rule.windowForeignKey] ?? '').toLowerCase();
+          const rawKey = w[rule.windowForeignKey] ?? w['ID'] ?? w['id'];
+          const tId = rawKey !== undefined && rawKey !== null ? String(rawKey).toLowerCase() : '';
           const rawStart = w[rule.windowStartField];
           const rawEnd = w[rule.windowEndField];
           const start = rawStart !== undefined && rawStart !== null && rawStart !== '' ? String(rawStart).slice(0, 10) : '';
@@ -1235,8 +1270,127 @@ export class Validator {
           expected: 0,
           actual: invalidCount,
         });
+
+      } else if (rule.kind === 'outcome-derived-from-ballots') {
+        const ballotRecords = findRecords(rule.ballotEntity);
+        const ballotsByDecision = new Map<string, Record<string, unknown>[]>();
+        for (const b of ballotRecords) {
+          const dId = String(b[rule.ballotDecisionForeignKey] ?? '').toLowerCase();
+          if (dId) {
+            let list = ballotsByDecision.get(dId);
+            if (!list) {
+              list = [];
+              ballotsByDecision.set(dId, list);
+            }
+            list.push(b);
+          }
+        }
+
+        let disagreeCount = 0;
+        for (const row of sourceRecords) {
+          const decisionId = String(row['ID'] ?? row['id'] ?? '').toLowerCase();
+          const ballots = ballotsByDecision.get(decisionId) ?? [];
+
+          let posVotes = 0;
+          let negVotes = 0;
+          for (const b of ballots) {
+            const voteVal = String(b[rule.ballotVoteField] ?? '').trim();
+            if (voteVal.toLowerCase() === rule.positiveVoteValue.toLowerCase()) {
+              posVotes++;
+            } else if (voteVal.toLowerCase() === rule.negativeVoteValue.toLowerCase()) {
+              negVotes++;
+            }
+          }
+
+          let expectedOutcome: string;
+          if (rule.rule === 'supermajority-two-thirds') {
+            expectedOutcome = posVotes >= 2 * negVotes && posVotes > 0 ? rule.passedOutcomeValue : rule.failedOutcomeValue;
+          } else if (rule.rule === 'unanimous') {
+            expectedOutcome = posVotes > 0 && negVotes === 0 ? rule.passedOutcomeValue : rule.failedOutcomeValue;
+          } else {
+            if (posVotes > negVotes) {
+              expectedOutcome = rule.passedOutcomeValue;
+            } else if (posVotes < negVotes) {
+              expectedOutcome = rule.failedOutcomeValue;
+            } else {
+              expectedOutcome = rule.tieOutcomeValue ?? rule.failedOutcomeValue;
+            }
+          }
+
+          const actualOutcome = String(row[rule.outcomeField] ?? '').trim();
+          if (actualOutcome.toLowerCase() !== expectedOutcome.toLowerCase()) {
+            disagreeCount++;
+          }
+        }
+
+        const passed = disagreeCount === 0;
+        gates.push({
+          name: `Relational Integrity: ${rule.name}`,
+          category: 'referential',
+          passed,
+          populationCount: sourceRecords.length,
+          message: passed
+            ? `All ${sourceRecords.length} outcome record(s) strictly derived from vote tallies`
+            : `Found ${disagreeCount} outcome record(s) disagreeing with vote tallies across ${sourceRecords.length} records`,
+          expected: 0,
+          actual: disagreeCount,
+        });
       }
     }
+  }
+}
+
+export class LookupIndex {
+  private index = new Map<string, Map<string, Set<string>>>();
+
+  constructor(
+    data: Record<string, readonly Record<string, unknown>[]>,
+    catalogs?: Record<string, readonly Record<string, unknown>[]>
+  ) {
+    this.indexPool(data);
+    if (catalogs) {
+      this.indexPool(catalogs);
+    }
+  }
+
+  private indexPool(pool: Record<string, readonly Record<string, unknown>[]>): void {
+    for (const [eName, rows] of Object.entries(pool)) {
+      if (rows.length === 0) continue;
+      const entityNames: string[] = [eName.toLowerCase()];
+      const firstRow = rows[0];
+      const altName = firstRow ? (firstRow['_entityName'] ?? firstRow['__entityName']) : undefined;
+      if (typeof altName === 'string' && altName.length > 0) {
+        entityNames.push(altName.toLowerCase());
+      }
+      for (const name of entityNames) {
+        let fieldMap = this.index.get(name);
+        if (!fieldMap) {
+          fieldMap = new Map<string, Set<string>>();
+          this.index.set(name, fieldMap);
+        }
+        for (const row of rows) {
+          for (const [field, val] of Object.entries(row)) {
+            if (val !== undefined && val !== null) {
+              const fLower = field.toLowerCase();
+              let valSet = fieldMap.get(fLower);
+              if (!valSet) {
+                valSet = new Set<string>();
+                fieldMap.set(fLower, valSet);
+              }
+              valSet.add(String(val).trim().toLowerCase());
+            }
+          }
+        }
+      }
+    }
+  }
+
+  public has(targetEntity: string, targetField: string, targetValue: string): boolean {
+    const fieldMap = this.index.get(targetEntity.toLowerCase());
+    if (!fieldMap) return false;
+    const valSet = fieldMap.get(targetField.toLowerCase());
+    if (!valSet) return false;
+    return valSet.has(targetValue.trim().toLowerCase());
   }
 }
 
@@ -1247,7 +1401,8 @@ export class Validator {
 export function resolveLookupExpression(
   lookupExpr: string,
   data: Record<string, readonly Record<string, unknown>[]>,
-  catalogs?: Record<string, readonly Record<string, unknown>[]>
+  catalogs?: Record<string, readonly Record<string, unknown>[]>,
+  lookupIndex?: LookupIndex
 ): { resolved: boolean; error?: string } {
   const cleanExpr = lookupExpr.replace(/\?.*$/, ''); // strip query params like ?allowDefer
   const match = cleanExpr.match(/^@lookup:([^.]+)\.([^=:]+)[=:](.*)$/);
@@ -1260,6 +1415,14 @@ export function resolveLookupExpression(
   if (!targetEntity || !targetField || targetValue === undefined) {
     return { resolved: false, error: `Malformed @lookup expression: '${lookupExpr}'` };
   }
+
+  if (lookupIndex) {
+    if (lookupIndex.has(targetEntity, targetField, targetValue)) {
+      return { resolved: true };
+    }
+    return { resolved: false, error: `Target record not found for lookup: ${lookupExpr}` };
+  }
+
   const normVal = targetValue.trim().toLowerCase();
 
   const searchPool = (pool: Record<string, readonly Record<string, unknown>[]>) => {

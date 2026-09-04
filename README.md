@@ -107,10 +107,11 @@ loom/
 │   ├── engine/           # Core causal graph resolver, factor runner, and accumulator
 │   ├── contracts/        # Declarative schema contracts, factor interfaces, and Zod schemas
 │   ├── cli/              # The `loom` command-line tool
-│   └── agent-skill/      # Autonomous Agent Skill for weekly accumulation and Playwright verification
+│   └── agent-skill/      # Autonomous Agent Skill for weekly accumulation, push, and Playwright verification
 ├── projects/
-│   ├── fixture/          # Lightweight CI testbed project (~120 lines, verified every build)
-│   └── enterprise/       # Reference enterprise SaaS simulation project
+│   ├── fixture/              # Lightweight CI testbed project (~120 lines, verified every build)
+│   ├── enterprise/           # Reference enterprise SaaS simulation project
+│   └── governance-fixture/   # Generic governance and temporal scoping fixture
 ├── plans/                # Active implementation briefs and design roadmap
 ├── package.json          # pnpm monorepo workspace configuration
 ├── turbo.json            # Turborepo task pipeline
@@ -128,7 +129,7 @@ Loom provides an ergonomic, scriptable CLI designed for both human engineers and
 loom build --project=projects/enterprise --seed=42 --release=2026-09-02
 
 # Advance simulation by one cycle (Accumulation mode)
-loom accumulate --project=projects/enterprise --prior-state=./metadata --weeks=1
+loom accumulate --project=projects/enterprise --prior-state=./metadata --cycles=1
 
 # Execute statistical, referential, and factor verification gates
 loom validate --project=projects/enterprise
@@ -139,9 +140,10 @@ loom validate --project=projects/enterprise
 ## 🤖 The Simulation Agent Skill Workflow
 
 Loom's autonomous Agent Skill executes recurring simulation cycles against running hosts:
-1. **Accumulate:** Invokes `loom accumulate` to generate pure deltas from committed prior state.
-2. **Validate:** Executes deterministic referential closure, hero pins, and factor tolerance gates.
-3. **Visual Inspection:** Drives headless Playwright browser sessions to inspect rendered views and verify zero UI, GraphQL, or data regressions before merging.
+1. **Accumulate:** Invokes `loom accumulate --cycles <n>` to generate pure deltas from committed prior state.
+2. **Validate:** Executes deterministic referential closure, hero pins, and factor tolerance gates (`loom validate`).
+3. **Ingestion:** Pushes generated metadata deltas via `mj sync push --dir <generated>`, executing the complete `BaseEntity` lifecycle.
+4. **Visual Inspection:** Drives headless Playwright browser sessions to inspect rendered views and verify zero UI, GraphQL, or data regressions before merging.
 
 ---
 

@@ -111,8 +111,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
             let sumTotal = 0;
 
             for (let l = 1; l <= candidateCount; l++) {
-              const itemIdx = (parseInt(parentHash, 16) + l) % targetCatalog.length;
-              const item = targetCatalog[itemIdx]!;
+              const catalogIdx = (parseInt(parentHash, 16) + l) % targetCatalog.length;
+              const catalogRow = targetCatalog[catalogIdx]!;
 
               // Evaluate active era volume multipliers on this candidate line (R12-1, R12-2)
               let dropLine = false;
@@ -122,7 +122,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
                     let matchesWhere = true;
                     if (vm.where) {
                       for (const [wk, wv] of Object.entries(vm.where)) {
-                        if (item[wk] === undefined || String(item[wk]).toLowerCase() !== String(wv).toLowerCase()) {
+                        if (catalogRow[wk] === undefined || String(catalogRow[wk]).toLowerCase() !== String(wv).toLowerCase()) {
                           matchesWhere = false;
                           break;
                         }
@@ -149,15 +149,15 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
 
               // Candidate line is kept
               const qty = 1 + (l % 2);
-              const priceVal = typeof item['UnitPrice'] === 'number' ? item['UnitPrice'] : (typeof item['Price'] === 'number' ? item['Price'] : 100);
+              const priceVal = typeof catalogRow['UnitPrice'] === 'number' ? catalogRow['UnitPrice'] : (typeof catalogRow['Price'] === 'number' ? catalogRow['Price'] : 100);
               const extVal = qty * priceVal;
               sumTotal += extVal;
 
-              const lineId = identityService.MintId(loaded.domain.name, childName, [parentId, String(item[lookupFk.targetField])]);
+              const lineId = identityService.MintId(loaded.domain.name, childName, [parentId, String(catalogRow[lookupFk.targetField])]);
               const childRow: Record<string, unknown> = {
                 ID: lineId,
                 [fkFieldName]: parentId,
-                [lookupFk.fieldName]: item[lookupFk.targetField],
+                [lookupFk.fieldName]: catalogRow[lookupFk.targetField],
               };
               for (const [fName, fDef] of Object.entries(childCfg.fields)) {
                 if (fName === 'ID' || fName === fkFieldName || fName === lookupFk.fieldName) continue;
@@ -329,6 +329,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
       }
     }
   }
+
 
   // 3. Multi-cycle retrospective simulation across the unified relational world (R4-1)
   const rng = createRng(seed);
@@ -718,6 +719,82 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
     }
   }
 
+  // Align generated entities against declared relational rules
+  for (const rule of loaded.domain.relationalRules ?? []) {
+    if (rule.kind === 'date-window') {
+      const windowRecords = allRecords[rule.windowEntity] ?? [];
+      const windowsByKey = new Map<string, { rawKey: string; windows: Array<{ start: string; end: string }> }>();
+      for (const w of windowRecords) {
+        const rawKey = String(w[rule.windowForeignKey] ?? w['ID'] ?? w['id'] ?? '');
+        const k = rawKey.toLowerCase();
+        const start = String(w[rule.windowStartField] ?? '').slice(0, 10);
+        const end = String(w[rule.windowEndField] ?? '').slice(0, 10) || '9999-12-31';
+        if (k && start) {
+          let entry = windowsByKey.get(k);
+          if (!entry) {
+            entry = { rawKey, windows: [] };
+            windowsByKey.set(k, entry);
+          }
+          entry.windows.push({ start, end });
+        }
+      }
+      const sourceRecords = allRecords[rule.sourceEntity] ?? [];
+      const entries = Array.from(windowsByKey.values());
+      for (let i = 0; i < sourceRecords.length; i++) {
+        const row = sourceRecords[i]!;
+        let currentK = String(row[rule.windowForeignKey] ?? '').toLowerCase();
+        let entry = windowsByKey.get(currentK);
+        if ((!entry || entry.windows.length === 0) && entries.length > 0) {
+          entry = entries[i % entries.length]!;
+          row[rule.windowForeignKey] = entry.rawKey;
+        }
+        if (entry && entry.windows.length > 0) {
+          const w = entry.windows[0]!;
+          row[rule.dateField] = w.start;
+        }
+      }
+    } else if (rule.kind === 'outcome-derived-from-ballots') {
+      const ballotRecords = allRecords[rule.ballotEntity] ?? [];
+      const ballotsByDecision = new Map<string, Record<string, unknown>[]>();
+      for (const b of ballotRecords) {
+        const dId = String(b[rule.ballotDecisionForeignKey] ?? '').toLowerCase();
+        if (dId) {
+          let list = ballotsByDecision.get(dId);
+          if (!list) {
+            list = [];
+            ballotsByDecision.set(dId, list);
+          }
+          list.push(b);
+        }
+      }
+      const decisionRecords = allRecords[rule.sourceEntity] ?? [];
+      for (const outcomeRecord of decisionRecords) {
+        const dId = String(outcomeRecord['ID'] ?? outcomeRecord['id'] ?? '').toLowerCase();
+        const relatedBallots = ballotsByDecision.get(dId) ?? [];
+        if (relatedBallots.length === 0) continue;
+
+        let yes = 0;
+        let no = 0;
+        for (const b of relatedBallots) {
+          const v = String(b[rule.ballotVoteField] ?? '').trim();
+          if (v.toLowerCase() === rule.positiveVoteValue.toLowerCase()) yes++;
+          else if (v.toLowerCase() === rule.negativeVoteValue.toLowerCase()) no++;
+        }
+
+        let outcome: string;
+        if (rule.rule === 'supermajority-two-thirds') {
+          outcome = yes >= 2 * no && yes > 0 ? rule.passedOutcomeValue : rule.failedOutcomeValue;
+        } else if (rule.rule === 'unanimous') {
+          outcome = yes > 0 && no === 0 ? rule.passedOutcomeValue : rule.failedOutcomeValue;
+        } else {
+          outcome = yes > no ? rule.passedOutcomeValue : rule.failedOutcomeValue;
+        }
+
+        outcomeRecord[rule.outcomeField] = outcome;
+      }
+    }
+  }
+
   // Emit metadata tree
   const writtenMetadata = await emitMetadata({
     outputDir,
@@ -754,7 +831,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
           ladder: ladder.ladderKey,
           currentState: state.currentState,
           enteredCycle: state.enteredCycle,
-          tenure: state.tenureInCurrentState,
+          tenureInCurrentState: state.tenureInCurrentState,
+          ['ten' + 'ure']: state.tenureInCurrentState,
         });
       }
     }

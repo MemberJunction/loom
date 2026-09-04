@@ -1,0 +1,32 @@
+{
+  "name": "common",
+  "domain": "governance-fixture",
+  "catalog": {},
+  "params": {
+    "targetPassingRate": 0.5
+  },
+  "effects": {
+    "factor-decision-outcome": {
+      "id": "factor-decision-outcome",
+      "effect": "Decision",
+      "target": 0.5,
+      "tolerance": 0.2,
+      "evidence": {
+        "source": "Governance Baseline",
+        "confidence": "high",
+        "notes": "Governance test contract"
+      },
+      "outcome": {
+        "from": "self",
+        "where": {
+          "Outcome": "Passed"
+        },
+        "otherwise": {
+          "Outcome": "Failed"
+        }
+      },
+      "arrows": {}
+    }
+  },
+  "mixes": {}
+}

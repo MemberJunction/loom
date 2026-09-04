@@ -1,0 +1,15 @@
+{
+  "name": "governance-fixture",
+  "version": "1.0.0",
+  "domain": "governance-fixture",
+  "uuidNamespace": "c1eebc99-9c0b-4ef8-bb6d-6bb9bd380c11",
+  "description": "Governance fixture domain testing nested causality, temporal scoping, and role coverage in CI",
+  "entrypoint": "./index.ts",
+  "rulesetPath": "./ruleset",
+  "startCycle": 2021,
+  "releaseDate": "2026-09-02",
+  "cycleUnit": "year",
+  "output": {
+    "metadataDir": "./metadata"
+  }
+}

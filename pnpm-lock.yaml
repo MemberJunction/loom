@@ -23,6 +23,9 @@ importers:
 
   packages/agent-skill:
     dependencies:
+      '@memberjunction/loom-cli':
+        specifier: workspace:*
+        version: link:../cli
       '@memberjunction/loom-contracts':
         specifier: workspace:*
         version: link:../contracts
@@ -112,6 +115,8 @@ importers:
   projects/enterprise: {}
 
   projects/fixture: {}
+
+  projects/governance-fixture: {}
 
 packages:
 

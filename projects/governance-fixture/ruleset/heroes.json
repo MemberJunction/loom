@@ -1,0 +1,15 @@
+{
+  "heroes": [
+    {
+      "heroKey": "HERO-GOV-001",
+      "entity": "Body",
+      "businessKeys": {
+        "Name": "Hero Governing Board"
+      },
+      "fixedFields": {
+        "Name": "Hero Governing Board"
+      },
+      "birthCycle": 2021
+    }
+  ]
+}
