@@ -1,4 +1,4 @@
-import { IdentityService, AvatarGenerator, type RngStream } from '@memberjunction/loom-engine';
+import { IdentityService, AvatarGenerator, LogoGenerator, type RngStream } from '@memberjunction/loom-engine';
 import type { DomainConfig } from '@memberjunction/loom-contracts';
 
 export interface GenerateEntityRecordOptions {
@@ -134,6 +134,21 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
         style: avatarCfg.style,
         format: avatarCfg.format,
         backgroundColor: avatarCfg.backgroundColor,
+      });
+    } else if (fieldCfg.logo || fieldName === 'LogoURL') {
+      const logoCfg = fieldCfg.logo ?? {
+        format: 'base64',
+        nameField: 'Name',
+        seedField: 'Name',
+        shape: 'auto',
+      };
+      const nameVal = row[logoCfg.nameField ?? 'Name'] ?? row['Name'] ?? entity;
+      const seedVal = row[logoCfg.seedField ?? 'Name'] ?? row['ID'] ?? `${entity}-${i}`;
+      row[fieldName] = LogoGenerator.Generate({
+        name: String(nameVal),
+        seed: String(seedVal),
+        format: logoCfg.format,
+        shape: logoCfg.shape,
       });
     } else if (fieldCfg.values && fieldCfg.values.length > 0) {
       row[fieldName] = fieldCfg.values[(i - 1) % fieldCfg.values.length];

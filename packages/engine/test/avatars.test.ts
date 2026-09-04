@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { AvatarGenerator } from "../src/avatars/AvatarGenerator.js";
+import { LogoGenerator } from "../src/avatars/LogoGenerator.js";
 
 describe("AvatarGenerator (Loom Deterministic Profile Image Generation)", () => {
   const femaleSeed = "elena.rodriguez.000101@lakemail.example";
@@ -66,5 +67,38 @@ describe("AvatarGenerator (Loom Deterministic Profile Image Generation)", () => 
       expect(femaleUri.length).toBeGreaterThan(100);
       expect(maleUri.length).toBeGreaterThan(100);
     });
+  });
+});
+
+describe("LogoGenerator (Loom Deterministic Organization Logo Generation)", () => {
+  const org1 = "Plumgate Farm";
+  const org2 = "Beauchamp Farmstead Creamery";
+
+  it("generates valid, deterministic SVG vector logos", () => {
+    const svg1 = LogoGenerator.BuildSvg({ name: org1 });
+    const svg2 = LogoGenerator.BuildSvg({ name: org1 });
+
+    expect(svg1).toBe(svg2);
+    expect(svg1.startsWith("<svg")).toBe(true);
+    expect(svg1.endsWith("</svg>")).toBe(true);
+    expect(svg1).toContain("PF");
+  });
+
+  it("extracts clean initials from organization names", () => {
+    const svg = LogoGenerator.BuildSvg({ name: org2 });
+    expect(svg).toContain("BF");
+  });
+
+  it("encodes into base64 data URI strictly under 1000 characters for SQL NVARCHAR(1000) safety", () => {
+    const uri1 = LogoGenerator.Generate({ name: org1, format: "base64" });
+    const uri2 = LogoGenerator.Generate({ name: org2, format: "base64" });
+
+    expect(uri1.startsWith("data:image/svg+xml;base64,")).toBe(true);
+    expect(uri2.startsWith("data:image/svg+xml;base64,")).toBe(true);
+
+    expect(uri1.length).toBeLessThan(1000);
+    expect(uri2.length).toBeLessThan(1000);
+    expect(uri1.length).toBeGreaterThan(100);
+    expect(uri2.length).toBeGreaterThan(100);
   });
 });
