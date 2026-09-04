@@ -115,36 +115,33 @@ describe("L10-3 Governance Fixture Testbed", () => {
   });
 
   it("guarantees hero non-interference: non-hero rows remain identical", async () => {
-    const heroesFile = path.join(govFixturePath, "ruleset", "heroes.json");
-    const originalHeroes = await fs.readFile(heroesFile, "utf8");
-    try {
-      await fs.writeFile(heroesFile, JSON.stringify({ heroes: [] }, null, 2));
-      await executeBuild({
-        project: govFixturePath,
-        seed: "42",
-        output: noHeroBuildDir,
-      });
+    const tempGovFixture = path.join(tempDir, "gov-fixture-no-hero");
+    await fs.cp(govFixturePath, tempGovFixture, { recursive: true });
+    const heroesFile = path.join(tempGovFixture, "ruleset", "heroes.json");
+    await fs.writeFile(heroesFile, JSON.stringify({ heroes: [] }, null, 2));
+    await executeBuild({
+      project: tempGovFixture,
+      seed: "42",
+      output: noHeroBuildDir,
+    });
 
-      // Body differs because hero record HERO-GOV-001 is injected in build1Dir
-      const withHeroBodyRaw = await fs.readFile(path.join(build1Dir, "Body", "Body.json"), "utf8");
-      const noHeroBodyRaw = await fs.readFile(path.join(noHeroBuildDir, "Body", "Body.json"), "utf8");
-      expect(withHeroBodyRaw).not.toBe(noHeroBodyRaw);
+    // Body differs because hero record HERO-GOV-001 is injected in build1Dir
+    const withHeroBodyRaw = await fs.readFile(path.join(build1Dir, "Body", "Body.json"), "utf8");
+    const noHeroBodyRaw = await fs.readFile(path.join(noHeroBuildDir, "Body", "Body.json"), "utf8");
+    expect(withHeroBodyRaw).not.toBe(noHeroBodyRaw);
 
-      const withHeroBody = JSON.parse(withHeroBodyRaw) as Array<{ primaryKey: { ID: string }; fields: { Name: string } }>;
-      const noHeroBody = JSON.parse(noHeroBodyRaw) as Array<{ primaryKey: { ID: string }; fields: { Name: string } }>;
-      expect(withHeroBody.length).toBe(noHeroBody.length + 1);
-      const nonHeroWithHeroBody = withHeroBody.filter((b) => b.fields.Name !== "Hero Governing Board");
-      expect(JSON.stringify(nonHeroWithHeroBody)).toBe(JSON.stringify(noHeroBody));
+    const withHeroBody = JSON.parse(withHeroBodyRaw) as Array<{ primaryKey: { ID: string }; fields: { Name: string } }>;
+    const noHeroBody = JSON.parse(noHeroBodyRaw) as Array<{ primaryKey: { ID: string }; fields: { Name: string } }>;
+    expect(withHeroBody.length).toBe(noHeroBody.length + 1);
+    const nonHeroWithHeroBody = withHeroBody.filter((b) => b.fields.Name !== "Hero Governing Board");
+    expect(JSON.stringify(nonHeroWithHeroBody)).toBe(JSON.stringify(noHeroBody));
 
-      // All child and dependent entities are 100% byte-identical
-      const entities = ["Tenure", "Session", "Item", "Decision", "Ballot"];
-      for (const entity of entities) {
-        const withHeroData = await fs.readFile(path.join(build1Dir, entity, entity + ".json"), "utf8");
-        const noHeroData = await fs.readFile(path.join(noHeroBuildDir, entity, entity + ".json"), "utf8");
-        expect(withHeroData).toBe(noHeroData);
-      }
-    } finally {
-      await fs.writeFile(heroesFile, originalHeroes);
+    // All child and dependent entities are 100% byte-identical
+    const entities = ["Tenure", "Session", "Item", "Decision", "Ballot"];
+    for (const entity of entities) {
+      const withHeroData = await fs.readFile(path.join(build1Dir, entity, entity + ".json"), "utf8");
+      const noHeroData = await fs.readFile(path.join(noHeroBuildDir, entity, entity + ".json"), "utf8");
+      expect(withHeroData).toBe(noHeroData);
     }
   });
 
