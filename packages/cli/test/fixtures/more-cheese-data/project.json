@@ -9,6 +9,6 @@
   "releaseDate": "2026-09-02",
   "cycleUnit": "year",
   "output": {
-    "metadataDir": "./output/metadata"
+    "metadataDir": "../generated"
   }
 }

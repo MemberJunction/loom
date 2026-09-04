@@ -50,11 +50,11 @@ export class RngStream {
       throw new Error('RngStream.pick: array must not be empty');
     }
     const idx = Math.floor(this.next() * array.length);
-    const item = array[idx];
-    if (item === undefined) {
+    const chosen = array[idx];
+    if (chosen === undefined) {
       throw new Error(`RngStream.pick: index ${idx} out of bounds`);
     }
-    return item;
+    return chosen;
   }
 
   /** Pick one element using weighted categorical distribution */

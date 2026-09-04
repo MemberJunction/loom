@@ -1,0 +1,318 @@
+{
+  "name": "governance-fixture",
+  "namespace": "c1eebc99-9c0b-4ef8-bb6d-6bb9bd380c11",
+  "description": "Governance domain testing Body, Session, Item, Decision, Ballot, Tenure",
+  "packs": {
+    "common": {
+      "name": "common",
+      "dependsOn": [],
+      "description": "Core governance pack"
+    }
+  },
+  "entities": {
+    "Body": {
+      "name": "Body",
+      "entityName": "Governance: Bodies",
+      "targetTable": "Body",
+      "schema": "governance",
+      "pack": "common",
+      "businessKey": [
+        "Name"
+      ],
+      "fields": {
+        "ID": {
+          "name": "ID",
+          "type": "uuid",
+          "isPrimaryKey": true
+        },
+        "Name": {
+          "name": "Name",
+          "type": "string"
+        },
+        "CreatedAt": {
+          "name": "CreatedAt",
+          "type": "date"
+        }
+      },
+      "foreignKeys": {}
+    },
+    "Tenure": {
+      "name": "Tenure",
+      "entityName": "Governance: Tenures",
+      "targetTable": "Tenure",
+      "schema": "governance",
+      "pack": "common",
+      "businessKey": [
+        "ID"
+      ],
+      "fields": {
+        "ID": {
+          "name": "ID",
+          "type": "uuid",
+          "isPrimaryKey": true
+        },
+        "BodyID": {
+          "name": "BodyID",
+          "type": "uuid"
+        },
+        "ActorID": {
+          "name": "ActorID",
+          "type": "uuid"
+        },
+        "StartDate": {
+          "name": "StartDate",
+          "type": "date"
+        },
+        "EndDate": {
+          "name": "EndDate",
+          "type": "date"
+        },
+        "CreatedAt": {
+          "name": "CreatedAt",
+          "type": "date"
+        }
+      },
+      "foreignKeys": {
+        "FK_Tenure_Body": {
+          "fieldName": "BodyID",
+          "targetEntity": "Body",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        }
+      }
+    },
+    "Session": {
+      "name": "Session",
+      "entityName": "Governance: Sessions",
+      "targetTable": "Session",
+      "schema": "governance",
+      "pack": "common",
+      "businessKey": [
+        "ID"
+      ],
+      "fields": {
+        "ID": {
+          "name": "ID",
+          "type": "uuid",
+          "isPrimaryKey": true
+        },
+        "BodyID": {
+          "name": "BodyID",
+          "type": "uuid"
+        },
+        "Name": {
+          "name": "Name",
+          "type": "string"
+        },
+        "StartDate": {
+          "name": "StartDate",
+          "type": "date"
+        },
+        "EndDate": {
+          "name": "EndDate",
+          "type": "date"
+        },
+        "CreatedAt": {
+          "name": "CreatedAt",
+          "type": "date"
+        }
+      },
+      "foreignKeys": {
+        "FK_Session_Body": {
+          "fieldName": "BodyID",
+          "targetEntity": "Body",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        }
+      }
+    },
+    "Item": {
+      "name": "Item",
+      "entityName": "Governance: Items",
+      "targetTable": "Item",
+      "schema": "governance",
+      "pack": "common",
+      "businessKey": [
+        "ID"
+      ],
+      "fields": {
+        "ID": {
+          "name": "ID",
+          "type": "uuid",
+          "isPrimaryKey": true
+        },
+        "SessionID": {
+          "name": "SessionID",
+          "type": "uuid"
+        },
+        "Title": {
+          "name": "Title",
+          "type": "string"
+        },
+        "ItemDate": {
+          "name": "ItemDate",
+          "type": "date"
+        },
+        "CreatedAt": {
+          "name": "CreatedAt",
+          "type": "date"
+        }
+      },
+      "foreignKeys": {
+        "FK_Item_Session": {
+          "fieldName": "SessionID",
+          "targetEntity": "Session",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        }
+      }
+    },
+    "Decision": {
+      "name": "Decision",
+      "entityName": "Governance: Decisions",
+      "targetTable": "Decision",
+      "schema": "governance",
+      "pack": "common",
+      "businessKey": [
+        "ID"
+      ],
+      "fields": {
+        "ID": {
+          "name": "ID",
+          "type": "uuid",
+          "isPrimaryKey": true
+        },
+        "ItemID": {
+          "name": "ItemID",
+          "type": "uuid"
+        },
+        "Outcome": {
+          "name": "Outcome",
+          "type": "string"
+        },
+        "DecisionDate": {
+          "name": "DecisionDate",
+          "type": "date"
+        },
+        "CreatedAt": {
+          "name": "CreatedAt",
+          "type": "date"
+        }
+      },
+      "foreignKeys": {
+        "FK_Decision_Item": {
+          "fieldName": "ItemID",
+          "targetEntity": "Item",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        }
+      }
+    },
+    "Ballot": {
+      "name": "Ballot",
+      "entityName": "Governance: Ballots",
+      "targetTable": "Ballot",
+      "schema": "governance",
+      "pack": "common",
+      "businessKey": [
+        "ID"
+      ],
+      "fields": {
+        "ID": {
+          "name": "ID",
+          "type": "uuid",
+          "isPrimaryKey": true
+        },
+        "DecisionID": {
+          "name": "DecisionID",
+          "type": "uuid"
+        },
+        "ActorID": {
+          "name": "ActorID",
+          "type": "uuid"
+        },
+        "Vote": {
+          "name": "Vote",
+          "type": "string",
+          "values": [
+            "Yes",
+            "No",
+            "Abstain"
+          ]
+        },
+        "BallotDate": {
+          "name": "BallotDate",
+          "type": "date"
+        },
+        "CreatedAt": {
+          "name": "CreatedAt",
+          "type": "date"
+        }
+      },
+      "foreignKeys": {
+        "FK_Ballot_Decision": {
+          "fieldName": "DecisionID",
+          "targetEntity": "Decision",
+          "targetField": "ID",
+          "cardinality": "many-to-one"
+        }
+      }
+    }
+  },
+  "relationalRules": [
+    {
+      "kind": "date-window",
+      "name": "item-inside-session",
+      "sourceEntity": "Item",
+      "dateField": "ItemDate",
+      "windowEntity": "Session",
+      "windowForeignKey": "SessionID",
+      "windowStartField": "StartDate",
+      "windowEndField": "EndDate",
+      "requireWindow": true,
+      "timing": {
+        "type": "uniformDays",
+        "min": 1,
+        "max": 4
+      }
+    },
+    {
+      "kind": "date-window",
+      "name": "ballot-actor-covered-by-tenure",
+      "sourceEntity": "Ballot",
+      "dateField": "BallotDate",
+      "windowEntity": "Tenure",
+      "windowForeignKey": "ActorID",
+      "windowStartField": "StartDate",
+      "windowEndField": "EndDate",
+      "requireWindow": true,
+      "roleWindows": [
+        { "startDate": "2021-01-01", "endDate": "2024-12-31" },
+        { "startDate": "2022-01-01", "endDate": "2025-12-31" },
+        { "startDate": "2023-01-01", "endDate": "2027-12-31" },
+        { "startDate": "2025-01-01", "endDate": "2028-12-31" },
+        { "startDate": "2026-01-01", "endDate": "2029-12-31" }
+      ]
+    },
+    {
+      "kind": "outcome-derived-from-ballots",
+      "name": "decision-outcome-derived-from-ballots",
+      "sourceEntity": "Decision",
+      "outcomeField": "Outcome",
+      "ballotEntity": "Ballot",
+      "ballotDecisionForeignKey": "DecisionID",
+      "ballotVoteField": "Vote",
+      "positiveVoteValue": "Yes",
+      "negativeVoteValue": "No",
+      "abstainVoteValue": "Abstain",
+      "passedOutcomeValue": "Passed",
+      "failedOutcomeValue": "Failed",
+      "tieOutcomeValue": "Failed",
+      "quorum": 1,
+      "tieRule": "Failed",
+      "abstainHandling": "ignore",
+      "rule": "majority",
+      "abstainRate": 0.2
+    }
+  ]
+}

@@ -10,6 +10,9 @@ import {
   readEntityMetadata,
   FactorEngine,
   StateLadderEngine,
+  nestedEvent,
+  temporalRole,
+  scopedDecision,
 } from '@memberjunction/loom-engine';
 import {
   SimulationCheckpointSchema,
@@ -21,16 +24,52 @@ export interface AccumulateCommandOptions {
   project?: string;
   config?: string;
   priorState?: string;
+  cycles?: string;
   weeks?: string;
   seed?: string;
   asOf?: string;
   output?: string;
 }
 
-function advanceDate(baseDateStr: string, days: number): string {
-  const d = new Date(baseDateStr);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Calendar-correct temporal advancement across day, week, month, and year cycle units.
+ * Correctly caps month days at month end (e.g. Jan 31 -> Feb 28/29) without drifting.
+ */
+export function advanceDateByCycle(
+  baseDateStr: string,
+  cycles: number,
+  cycleUnit: 'day' | 'week' | 'month' | 'year' = 'year'
+): string {
+  const parts = baseDateStr.slice(0, 10).split('-').map(Number);
+  const year = parts[0]!;
+  const month = parts[1]! - 1; // 0-indexed
+  const day = parts[2]!;
+
+  if (cycleUnit === 'day') {
+    const d = new Date(Date.UTC(year, month, day + cycles));
+    return d.toISOString().slice(0, 10);
+  }
+  if (cycleUnit === 'week') {
+    const d = new Date(Date.UTC(year, month, day + cycles * 7));
+    return d.toISOString().slice(0, 10);
+  }
+  if (cycleUnit === 'month') {
+    const totalMonths = month + cycles;
+    const targetYear = year + Math.floor(totalMonths / 12);
+    const targetMonth = ((totalMonths % 12) + 12) % 12;
+    const daysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+    const targetDay = Math.min(day, daysInTargetMonth);
+    return `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
+  }
+  if (cycleUnit === 'year') {
+    const targetYear = year + cycles;
+    const daysInTargetMonth = new Date(Date.UTC(targetYear, month + 1, 0)).getUTCDate();
+    const targetDay = Math.min(day, daysInTargetMonth);
+    return `${targetYear}-${String(month + 1).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
+  }
+  throw new Error(`Unsupported cycleUnit: ${cycleUnit}`);
 }
 
 export async function executeAccumulate(options: AccumulateCommandOptions): Promise<void> {
@@ -39,7 +78,13 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     throw new Error('Accumulate: either --project or --config must be provided');
   }
   const loaded = await loadProject(projectPath);
-  const weeksToAdd = options.weeks ? parseInt(options.weeks, 10) : 1;
+  const cycleUnit = loaded.manifest?.cycleUnit ?? 'year';
+  const cyclesToAdd = options.cycles
+    ? parseInt(options.cycles, 10)
+    : options.weeks
+    ? parseInt(options.weeks, 10)
+    : 1;
+  const weeksToAdd = options.weeks ? parseInt(options.weeks, 10) : (cycleUnit === 'week' ? cyclesToAdd : 1);
   const outputDir = options.output
     ? path.resolve(process.cwd(), options.output)
     : path.resolve(loaded.projectDir, loaded.manifest.output.metadataDir);
@@ -72,7 +117,9 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
   const asOfDate = options.asOf
     ? options.asOf
     : priorCheckpoint
-    ? advanceDate(priorCheckpoint.continuity.asOfDate, weeksToAdd * 7)
+    ? (options.weeks && !options.cycles && cycleUnit !== 'week'
+        ? advanceDateByCycle(priorCheckpoint.continuity.asOfDate, weeksToAdd, 'week')
+        : advanceDateByCycle(priorCheckpoint.continuity.asOfDate, cyclesToAdd, cycleUnit))
     : (loaded.manifest.releaseDate ?? '2026-09-02');
 
   const seed = options.seed
@@ -80,7 +127,7 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     : priorCheckpoint?.seed ?? 42;
 
   console.log(`🧵 Loom Accumulate: Advancing simulation for '${loaded.domain.name}'`);
-  console.log(`   Cycle: ${cycleIndex} (+${weeksToAdd} week(s)) | As-Of: ${asOfDate} | Seed: ${seed}`);
+  console.log(`   Cycle: ${cycleIndex} (+${cyclesToAdd} ${cycleUnit}(s)) | As-Of: ${asOfDate} | Seed: ${seed}`);
   console.log(`   Prior State: ${priorDir}`);
 
   // 2. Read existing entity records from priorState
@@ -96,6 +143,22 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       // Must NOT catch or swallow missing .mj-sync.json or corrupt files!
       // If entity directory exists, readEntityMetadata will throw if invalid.
       const { records: unwrapped } = await readEntityMetadata(entityDir, entityCfg.entityName);
+      for (const row of unwrapped) {
+        const pkVal = row['ID'] ?? row['id'];
+        if (pkVal === undefined || pkVal === null || pkVal === '') {
+          throw new Error(
+            `Accumulate: record in entity '${entityName}' missing required primary key`
+          );
+        }
+        const pkFieldCfg = entityCfg.fields['ID'] ?? entityCfg.fields['id'];
+        if (pkFieldCfg?.type === 'uuid' || !pkFieldCfg) {
+          if (!UUID_REGEX.test(String(pkVal))) {
+            throw new Error(
+              `Accumulate: corrupted primary key '${pkVal}' in entity '${entityName}'`
+            );
+          }
+        }
+      }
       priorRecords[entityName] = unwrapped;
     }
   }
@@ -129,11 +192,17 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
   const ladderEngine = new StateLadderEngine(loaded.laddersManifest?.ladders ?? []);
   const priorLifecycles = priorCheckpoint?.continuity.activeLifecycleStates ?? {};
   for (const [entityId, entries] of Object.entries(priorLifecycles)) {
-    for (const entry of entries as Array<{ ladder: string; currentState: string; enteredCycle: number; tenure?: number }>) {
-      ladderEngine.ForceTransition(entry.ladder, entityId, entry.currentState, entry.enteredCycle);
-      const st = ladderEngine.GetEntityState(entry.ladder, entityId);
+    for (const entry of entries as Array<Record<string, unknown>>) {
+      const ladderKey = String(entry.ladder ?? '');
+      const currentState = String(entry.currentState ?? '');
+      const enteredCycle = typeof entry.enteredCycle === 'number' ? entry.enteredCycle : 0;
+      ladderEngine.ForceTransition(ladderKey, entityId, currentState, enteredCycle);
+      const st = ladderEngine.GetEntityState(ladderKey, entityId);
       if (st) {
-        st.tenureInCurrentState = entry.tenure ?? 0;
+        const dur = typeof entry.tenureInCurrentState === 'number'
+          ? entry.tenureInCurrentState
+          : 0;
+        st.tenureInCurrentState = dur;
       }
     }
   }
@@ -174,13 +243,25 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
         const birthCycle = priorCheckpoint?.continuity.birthCycles?.[entityId] ?? curState.enteredCycle;
 
         if (cycleUnit === 'week') {
-          stepAmount = weeksToAdd;
+          stepAmount = cyclesToAdd;
           const currentTotalWeeks = asOfYear * 52 + Math.floor(dayOfYear / 7);
           const birthTotalWeeks = birthCycle * 52;
           cyclesSinceBirth = Math.max(0, currentTotalWeeks - birthTotalWeeks);
           stepCycle = currentTotalWeeks;
+        } else if (cycleUnit === 'month') {
+          stepAmount = cyclesToAdd;
+          const currentTotalMonths = asOfYear * 12 + asOfDateObj.getUTCMonth();
+          const birthTotalMonths = birthCycle * 12;
+          cyclesSinceBirth = Math.max(0, currentTotalMonths - birthTotalMonths);
+          stepCycle = currentTotalMonths;
+        } else if (cycleUnit === 'day') {
+          stepAmount = cyclesToAdd;
+          const currentTotalDays = asOfYear * 365 + dayOfYear;
+          const birthTotalDays = birthCycle * 365;
+          cyclesSinceBirth = Math.max(0, currentTotalDays - birthTotalDays);
+          stepCycle = currentTotalDays;
         } else {
-          stepAmount = weeksToAdd / 52;
+          stepAmount = options.weeks && !options.cycles ? weeksToAdd / 52 : cyclesToAdd;
           const currentContinuousCycle = asOfYear + dayOfYear / 365.25;
           cyclesSinceBirth = Math.max(0, currentContinuousCycle - birthCycle);
           stepCycle = Math.floor(currentContinuousCycle);
@@ -200,7 +281,7 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
             ladder: ladder.ladderKey,
             currentState: stateAfter.currentState,
             enteredCycle: stateAfter.enteredCycle,
-            tenure: stateAfter.tenureInCurrentState,
+            tenureInCurrentState: stateAfter.tenureInCurrentState,
           });
         }
 
@@ -243,22 +324,33 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
   // 6. Generate simulated delta additions strictly conforming to ruleset intake
   const identityService = new IdentityService();
   identityService.RegisterNamespace(loaded.domain.name, loaded.domain.namespace);
+  const factorContracts = Object.values(loaded.rulesetModules).flatMap((mod) =>
+    Object.values(mod.effects)
+  );
 
   for (const [entityName, list] of Object.entries(currentRecords)) {
     const entityCfg = loaded.domain.entities[entityName];
     if (!entityCfg) continue;
 
+    const isBallotCascade = (loaded.domain.relationalRules ?? []).some(
+      (r) => r.kind === 'outcome-derived-from-ballots' && r.ballotEntity === entityName
+    );
+    if (isBallotCascade) {
+      // Ballots cascaded via scopedDecision when processing decision entity
+      continue;
+    }
+
     // Read authored intake volume from ruleset params, falling back to default 2
-    let newItemsCount = 2;
+    let newRowsCount = 2;
     for (const mod of Object.values(loaded.rulesetModules)) {
       const directIntake = mod.params[`intake_${entityName}`];
       const lowerIntake = mod.params[`intake_${entityName.toLowerCase()}`];
       if (typeof directIntake === 'number') {
-        newItemsCount = directIntake;
+        newRowsCount = directIntake;
         break;
       }
       if (typeof lowerIntake === 'number') {
-        newItemsCount = lowerIntake;
+        newRowsCount = lowerIntake;
         break;
       }
     }
@@ -286,87 +378,297 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     const startIdx = list.length + 1;
     const rng = createRng(seed, `accumulate:${entityName}:cycle:${cycleIndex}`);
 
-    for (let i = startIdx; i < startIdx + newItemsCount; i++) {
-      const row = generateEntityRecord({
-        domain: loaded.domain,
-        entity: entityName,
-        i,
-        parentPool: currentRecords,
-        rng,
-        identityService,
+    const rolePoolRule = (loaded.domain.relationalRules ?? []).find(
+      (r) =>
+        r.kind === 'date-window' &&
+        r.windowEntity === entityName &&
+        (loaded.domain.relationalRules ?? []).some(
+          (or) => or.kind === 'outcome-derived-from-ballots' && or.ballotEntity === r.sourceEntity
+        )
+    );
+    const nestedDateWindowRule = (loaded.domain.relationalRules ?? []).find(
+      (r) => r.kind === 'date-window' && r.sourceEntity === entityName && currentRecords[r.windowEntity]?.length
+    );
+    const outcomeRule = (loaded.domain.relationalRules ?? []).find(
+      (r) => r.kind === 'outcome-derived-from-ballots' && r.sourceEntity === entityName
+    );
+
+    if (rolePoolRule && rolePoolRule.kind === 'date-window') {
+      const asOfYear = parseInt(asOfDate.slice(0, 4), 10) || 2026;
+      const parentFk = Object.values(entityCfg.foreignKeys)[0];
+      const parentRecords = parentFk ? (currentRecords[parentFk.targetEntity] ?? []) : [];
+      const actorFkField = rolePoolRule.windowForeignKey;
+      const actorType = actorFkField.replace(/ID$/i, '') || 'Participant';
+      const schedule = rolePoolRule.roleWindows && rolePoolRule.roleWindows.length > 0
+        ? rolePoolRule.roleWindows
+        : [
+            { startOffsetYears: -1, durationYears: 3 },
+            { startOffsetYears: 0, durationYears: 3 },
+          ];
+
+      for (const b of parentRecords) {
+        const parentId = String(b['ID'] ?? b['id']);
+        for (let a = 0; a < Math.min(newRowsCount, schedule.length); a++) {
+          const windowDef = schedule[a]!;
+          let startDate = windowDef.startDate;
+          let endDate = windowDef.endDate;
+          if (!startDate && windowDef.startOffsetYears !== undefined) {
+            startDate = `${asOfYear + windowDef.startOffsetYears}-01-01`;
+          }
+          if (!endDate && windowDef.durationYears !== undefined && startDate) {
+            const sYear = new Date(startDate).getFullYear();
+            endDate = `${sYear + windowDef.durationYears}-12-31`;
+          }
+          startDate = startDate ?? asOfDate;
+          endDate = endDate ?? `${asOfYear + 2}-12-31`;
+
+          const actorId = identityService.MintId(loaded.domain.name, actorType, [parentId, `ACCUM-${actorType}-${cycleIndex}-${a + 1}`]);
+          const roleId = identityService.MintId(loaded.domain.name, entityName, [parentId, actorId, startDate, String(cycleIndex)]);
+          list.push({
+            ID: roleId,
+            ...(parentFk ? { [parentFk.fieldName]: parentId } : {}),
+            [actorFkField]: actorId,
+            [rolePoolRule.windowStartField]: startDate,
+            [rolePoolRule.windowEndField]: endDate,
+            CreatedAt: asOfDate,
+          });
+        }
+      }
+    } else if (nestedDateWindowRule && nestedDateWindowRule.kind === 'date-window') {
+      const parentRecords = currentRecords[nestedDateWindowRule.windowEntity]!;
+      const nestedRecords = nestedEvent({
+        seed,
+        parents: parentRecords.slice(-newRowsCount),
+        streamKey: (p) => `accum:nested:${entityName}:${p['ID'] ?? p['id']}:cycle:${cycleIndex}`,
+        countOf: () => 1,
+        timing: nestedDateWindowRule.timing,
+        parentWindow: (p) => ({
+          start: String(p[nestedDateWindowRule.windowStartField] ?? asOfDate),
+          end: String(p[nestedDateWindowRule.windowEndField] ?? asOfDate),
+        }),
+        spawnChild: (_childRng, p, idx, childDate) => {
+          const parentId = String(p['ID'] ?? p['id']);
+          const childId = identityService.MintId(loaded.domain.name, entityName, [parentId, String(idx), childDate, String(cycleIndex)]);
+          return {
+            ID: childId,
+            [nestedDateWindowRule.windowForeignKey]: parentId,
+            Title: `Accumulated ${entityName} ${idx + 1} (${p['Name'] ?? 'Event'})`,
+            [nestedDateWindowRule.dateField]: childDate,
+            CreatedAt: childDate,
+          };
+        },
       });
-      list.push(row);
+      list.push(...nestedRecords);
+    } else if (outcomeRule && outcomeRule.kind === 'outcome-derived-from-ballots') {
+      const parentFk = Object.values(entityCfg.foreignKeys)[0];
+      const eventEntity = parentFk?.targetEntity ?? '';
+      const eventRecords = (eventEntity ? (currentRecords[eventEntity] ?? []) : []).slice(-newRowsCount);
+      const ballotTenureRule = (loaded.domain.relationalRules ?? []).find(
+        (r) => r.kind === 'date-window' && r.sourceEntity === outcomeRule.ballotEntity
+      );
+      if (!ballotTenureRule || ballotTenureRule.kind !== 'date-window') {
+        throw new Error(`Missing required date-window rule for ${outcomeRule.ballotEntity}`);
+      }
+      const tenureRecords = currentRecords[ballotTenureRule.windowEntity] ?? [];
 
-      // Cascade structural dependent children matching domain schema
-      for (const [childName, childCfg] of Object.entries(loaded.domain.entities)) {
-        if (childName === entityName) continue;
-        for (const [fkKey, fk] of Object.entries(childCfg.foreignKeys ?? {})) {
-          if (fk.targetEntity === entityName) {
-            const isDependent = fk.dependent === true;
-            if (!isDependent) continue;
-            const fkFieldName = fk.fieldName ?? fkKey;
+      const actorFkField = ballotTenureRule.windowForeignKey;
+      const tenureStartField = ballotTenureRule.windowStartField;
+      const tenureEndField = ballotTenureRule.windowEndField;
+      const ballotDateField = ballotTenureRule.dateField;
 
-            if (!currentRecords[childName]) currentRecords[childName] = [];
+      const roleEntityCfg = loaded.domain.entities[ballotTenureRule.windowEntity];
+      const roleParentFk = roleEntityCfg ? Object.values(roleEntityCfg.foreignKeys)[0] : undefined;
 
-            const rowId = String(row['ID'] ?? row['id']);
-            const otherFks = Object.values(childCfg.foreignKeys ?? {}).filter((f) => f.targetEntity !== entityName);
+      const actorIds = Array.from(new Set(tenureRecords.map((t) => String(t[actorFkField] ?? '')))).filter(Boolean);
+      const actors = actorIds.map((id) => ({ ID: id }));
+      const rolePool = temporalRole({
+        actors,
+        roleAssignments: tenureRecords,
+        actorIdOf: (a) => a.ID,
+        assignmentActorIdOf: (t) => String(t[actorFkField]),
+        assignmentWindowOf: (t) => ({
+          start: String(t[tenureStartField]),
+          end: String(t[tenureEndField]),
+        }),
+        scopeOf: roleParentFk ? (t) => String(t[roleParentFk.fieldName] ?? '') : undefined,
+      });
 
-            if (otherFks.length > 0) {
-              const lookupFk = otherFks[0]!;
-              const targetCatalog = currentRecords[lookupFk.targetEntity] ?? [];
-              if (targetCatalog.length > 0) {
-                const item = targetCatalog[(i - 1) % targetCatalog.length]!;
-                const childId = identityService.MintId(loaded.domain.name, childName, [rowId, String(item[lookupFk.targetField])]);
-                const priceVal = typeof item['UnitPrice'] === 'number' ? item['UnitPrice'] : (typeof item['Price'] === 'number' ? item['Price'] : 100);
+      // Helper to resolve event scope matching roleParentFk target entity
+      const resolveScopeId = (ev: Record<string, unknown>): string | undefined => {
+        if (!roleParentFk) return undefined;
+        const targetScopeEntity = roleParentFk.targetEntity;
+        const eventCfg = loaded.domain.entities[eventEntity];
+        if (!eventCfg) return undefined;
+
+        const directFk = Object.values(eventCfg.foreignKeys).find((fk) => fk.targetEntity === targetScopeEntity);
+        if (directFk && ev[directFk.fieldName]) {
+          return String(ev[directFk.fieldName]);
+        }
+
+        for (const pFk of Object.values(eventCfg.foreignKeys)) {
+          const parentRecords = currentRecords[pFk.targetEntity];
+          const parentId = String(ev[pFk.fieldName] ?? '');
+          if (!parentRecords || !parentId) continue;
+          const parentRec = parentRecords.find((p) => String(p['ID'] ?? p['id']) === parentId);
+          if (!parentRec) continue;
+          const parentEntityCfg = loaded.domain.entities[pFk.targetEntity];
+          if (parentEntityCfg) {
+            const parentToScopeFk = Object.values(parentEntityCfg.foreignKeys).find(
+              (fk) => fk.targetEntity === targetScopeEntity
+            );
+            if (parentToScopeFk && parentRec[parentToScopeFk.fieldName]) {
+              return String(parentRec[parentToScopeFk.fieldName]);
+            }
+          }
+        }
+        return undefined;
+      };
+
+      // Event date field from relational rule
+      const eventDateRule = (loaded.domain.relationalRules ?? []).find(
+        (r) => r.kind === 'date-window' && r.sourceEntity === eventEntity
+      );
+      const eventDateField = eventDateRule && eventDateRule.kind === 'date-window'
+        ? eventDateRule.dateField
+        : 'Date';
+
+      // Decision date field from entity schema
+      const decisionDateField = Object.keys(entityCfg.fields).find(
+        (f) => entityCfg.fields[f]?.type === 'date' && f !== 'CreatedAt'
+      ) ?? 'CreatedAt';
+
+      const entityFactor = factorContracts.find((fc) => fc.effect === entityName);
+      const targetApprovalRate = entityFactor?.target ?? 0.6;
+      const { ballots, decisions } = scopedDecision({
+        seed,
+        events: eventRecords,
+        eligibleActorsOf: (ev) => {
+          const scopeId = resolveScopeId(ev);
+          return rolePool.getActiveActors(String(ev[eventDateField] ?? asOfDate), scopeId).map((r) => r.actor);
+        },
+        eventDateOf: (ev) => String(ev[eventDateField] ?? asOfDate),
+        streamKey: (ev) => `accum:outcome:${ev['ID'] ?? ev['id']}:cycle:${cycleIndex}`,
+        rule: outcomeRule.rule ?? 'majority',
+        quorum: outcomeRule.quorum,
+        tieRule: outcomeRule.tieRule,
+        abstainHandling: outcomeRule.abstainHandling,
+        abstainRate: outcomeRule.abstainRate,
+        categoricalWeights: outcomeRule.categoricalWeights,
+        targetApprovalRate,
+        createBallot: (_ballotRng, ev, actor, vote, ballotDate) => {
+          const decisionId = identityService.MintId(loaded.domain.name, entityName, [String(ev['ID'] ?? ev['id'])]);
+          const ballotId = identityService.MintId(loaded.domain.name, outcomeRule.ballotEntity, [decisionId, actor.ID, String(cycleIndex)]);
+          return {
+            ID: ballotId,
+            [outcomeRule.ballotDecisionForeignKey]: decisionId,
+            [actorFkField]: actor.ID,
+            [outcomeRule.ballotVoteField]: vote === 'Yes'
+              ? outcomeRule.positiveVoteValue
+              : vote === 'No'
+              ? outcomeRule.negativeVoteValue
+              : (outcomeRule.abstainVoteValue ?? 'Abstain'),
+            [ballotDateField]: ballotDate,
+            CreatedAt: ballotDate,
+          };
+        },
+        createDecision: (ev, outcome, _eventBallots, decisionDate) => {
+          const decisionId = identityService.MintId(loaded.domain.name, entityName, [String(ev['ID'] ?? ev['id'])]);
+          return {
+            ID: decisionId,
+            ...(parentFk ? { [parentFk.fieldName]: ev['ID'] ?? ev['id'] } : {}),
+            [outcomeRule.outcomeField]: outcome === 'Passed' ? outcomeRule.passedOutcomeValue : outcomeRule.failedOutcomeValue,
+            [decisionDateField]: decisionDate,
+            CreatedAt: decisionDate,
+          };
+        },
+      });
+
+      if (!currentRecords[outcomeRule.ballotEntity]) currentRecords[outcomeRule.ballotEntity] = [];
+      currentRecords[outcomeRule.ballotEntity]!.push(...ballots);
+      list.push(...decisions);
+    } else {
+      for (let i = startIdx; i < startIdx + newRowsCount; i++) {
+        const row = generateEntityRecord({
+          domain: loaded.domain,
+          entity: entityName,
+          i,
+          parentPool: currentRecords,
+          rng,
+          identityService,
+        });
+        list.push(row);
+
+        // Cascade structural dependent children matching domain schema
+        for (const [childName, childCfg] of Object.entries(loaded.domain.entities)) {
+          if (childName === entityName) continue;
+          for (const [fkKey, fk] of Object.entries(childCfg.foreignKeys ?? {})) {
+            if (fk.targetEntity === entityName) {
+              const isDependent = fk.dependent === true;
+              if (!isDependent) continue;
+              const fkFieldName = fk.fieldName ?? fkKey;
+
+              if (!currentRecords[childName]) currentRecords[childName] = [];
+
+              const rowId = String(row['ID'] ?? row['id']);
+              const otherFks = Object.values(childCfg.foreignKeys ?? {}).filter((f) => f.targetEntity !== entityName);
+
+              if (otherFks.length > 0) {
+                const lookupFk = otherFks[0]!;
+                const targetCatalog = currentRecords[lookupFk.targetEntity] ?? [];
+                if (targetCatalog.length > 0) {
+                  const catalogRow = targetCatalog[(i - 1) % targetCatalog.length]!;
+                  const childId = identityService.MintId(loaded.domain.name, childName, [rowId, String(catalogRow[lookupFk.targetField])]);
+                  const priceVal = typeof catalogRow['UnitPrice'] === 'number' ? catalogRow['UnitPrice'] : (typeof catalogRow['Price'] === 'number' ? catalogRow['Price'] : 100);
+                  const childRow: Record<string, unknown> = {
+                    ID: childId,
+                    [fkFieldName]: rowId,
+                    [lookupFk.fieldName]: catalogRow[lookupFk.targetField],
+                  };
+                  for (const [fName, fDef] of Object.entries(childCfg.fields)) {
+                    if (fName === 'ID' || fName === fkFieldName || fName === lookupFk.fieldName) continue;
+                    if (fName.toLowerCase().includes('quantity') || fName.toLowerCase().includes('qty')) {
+                      childRow[fName] = 1;
+                    } else if (fName.toLowerCase().includes('unitprice')) {
+                      childRow[fName] = priceVal;
+                    } else if (fName.toLowerCase().includes('extended') || fName.toLowerCase().includes('total')) {
+                      childRow[fName] = priceVal;
+                    } else if (fDef.type === 'string') {
+                      childRow[fName] = 'Standard';
+                    }
+                  }
+                  currentRecords[childName]!.push(childRow);
+                  for (const fName of Object.keys(entityCfg.fields)) {
+                    if (fName.toLowerCase().includes('total') || fName.toLowerCase().includes('amount')) {
+                      row[fName] = priceVal;
+                    }
+                  }
+                }
+              } else {
+                const dateField = Object.keys(childCfg.fields).find(
+                  (f) => f.toLowerCase().includes('date') || f.toLowerCase().includes('time')
+                );
+                const childId = identityService.MintId(loaded.domain.name, childName, [rowId, asOfDate]);
                 const childRow: Record<string, unknown> = {
                   ID: childId,
                   [fkFieldName]: rowId,
-                  [lookupFk.fieldName]: item[lookupFk.targetField],
                 };
                 for (const [fName, fDef] of Object.entries(childCfg.fields)) {
-                  if (fName === 'ID' || fName === fkFieldName || fName === lookupFk.fieldName) continue;
-                  if (fName.toLowerCase().includes('quantity') || fName.toLowerCase().includes('qty')) {
-                    childRow[fName] = 1;
-                  } else if (fName.toLowerCase().includes('unitprice')) {
-                    childRow[fName] = priceVal;
-                  } else if (fName.toLowerCase().includes('extended') || fName.toLowerCase().includes('total')) {
-                    childRow[fName] = priceVal;
+                  if (fName === 'ID' || fName === fkFieldName) continue;
+                  if (fName === dateField) {
+                    childRow[fName] = asOfDate;
+                  } else if (fName.toLowerCase().includes('amount') || fName.toLowerCase().includes('total')) {
+                    const totalField = Object.keys(entityCfg.fields).find(
+                      (f) => f.toLowerCase().includes('total') || f.toLowerCase().includes('amount')
+                    );
+                    childRow[fName] = totalField && typeof row[totalField] === 'number' ? row[totalField] : 100;
+                  } else if (fName.toLowerCase().includes('status')) {
+                    childRow[fName] = 'Completed';
                   } else if (fDef.type === 'string') {
                     childRow[fName] = 'Standard';
                   }
                 }
                 currentRecords[childName]!.push(childRow);
-                for (const fName of Object.keys(entityCfg.fields)) {
-                  if (fName.toLowerCase().includes('total') || fName.toLowerCase().includes('amount')) {
-                    row[fName] = priceVal;
-                  }
-                }
               }
-            } else {
-              const dateField = Object.keys(childCfg.fields).find(
-                (f) => f.toLowerCase().includes('date') || f.toLowerCase().includes('time')
-              );
-              const childId = identityService.MintId(loaded.domain.name, childName, [rowId, asOfDate]);
-              const childRow: Record<string, unknown> = {
-                ID: childId,
-                [fkFieldName]: rowId,
-              };
-              for (const [fName, fDef] of Object.entries(childCfg.fields)) {
-                if (fName === 'ID' || fName === fkFieldName) continue;
-                if (fName === dateField) {
-                  childRow[fName] = asOfDate;
-                } else if (fName.toLowerCase().includes('amount') || fName.toLowerCase().includes('total')) {
-                  const totalField = Object.keys(entityCfg.fields).find(
-                    (f) => f.toLowerCase().includes('total') || f.toLowerCase().includes('amount')
-                  );
-                  childRow[fName] = totalField && typeof row[totalField] === 'number' ? row[totalField] : 100;
-                } else if (fName.toLowerCase().includes('status')) {
-                  childRow[fName] = 'Completed';
-                } else if (fDef.type === 'string') {
-                  childRow[fName] = 'Standard';
-                }
-              }
-              currentRecords[childName]!.push(childRow);
             }
           }
         }
@@ -377,12 +679,16 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
   }
 
   // Apply factor contract outcomes to newly generated intake records
-  const factorContracts = Object.values(loaded.rulesetModules).flatMap((mod) =>
-    Object.values(mod.effects)
-  );
   for (const contract of factorContracts) {
     const list = currentRecords[contract.effect];
     if (!list || !contract.outcome) continue;
+    const isDerivedOutcome = (loaded.domain.relationalRules ?? []).some(
+      (r) => r.kind === 'outcome-derived-from-ballots' && r.sourceEntity === contract.effect
+    );
+    if (isDerivedOutcome) {
+      // Invariant: outcome derived strictly from ballots via scopedDecision; do not decouple
+      continue;
+    }
     const priorCount = priorRecords[contract.effect]?.length ?? 0;
     const newRecords = list.slice(priorCount);
 

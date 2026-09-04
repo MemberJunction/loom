@@ -1,0 +1,13 @@
+[
+  { "directory": "ai-model-vendors", "entity": "MJ: AI Model Vendors" },
+  { "directory": "ai-models", "entity": "MJ: AI Models" },
+  { "directory": "ai-vendors", "entity": "MJ: AI Vendors" },
+  { "directory": "sonar-factors", "entity": "MJ_BizApps_Sonar: Factors" },
+  { "directory": "sonar-model-factors", "entity": "MJ_BizApps_Sonar: Model Factors" },
+  { "directory": "sonar-model-related-entities", "entity": "MJ_BizApps_Sonar: Model Related Entities" },
+  { "directory": "sonar-score-band-sets", "entity": "MJ_BizApps_Sonar: Score Band Sets" },
+  { "directory": "sonar-score-bands", "entity": "MJ_BizApps_Sonar: Score Bands" },
+  { "directory": "sonar-score-model-versions", "entity": "MJ_BizApps_Sonar: Score Model Versions" },
+  { "directory": "sonar-score-models", "entity": "MJ_BizApps_Sonar: Score Models" },
+  { "directory": "sonar-time-windows", "entity": "MJ_BizApps_Sonar: Time Windows" }
+]

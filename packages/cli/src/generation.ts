@@ -115,8 +115,9 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
       continue;
     }
 
-    // Dynamic field mapping based on semantic domain names
-    if (fieldName === 'Name') {
+    if (fieldCfg.values && fieldCfg.values.length > 0) {
+      row[fieldName] = fieldCfg.values[(i - 1) % fieldCfg.values.length];
+    } else if (fieldName === 'Name') {
       row[fieldName] = `${entity} Corp ${i}`;
     } else if (fieldName === 'FirstName') {
       row[fieldName] = `MemberFirst${i}`;
@@ -133,7 +134,7 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
     } else if (fieldName === 'Category') {
       row[fieldName] = i % 2 === 0 ? 'Hardware' : 'Software';
     } else if (fieldName === 'Title') {
-      row[fieldName] = 'Director';
+      row[fieldName] = `Record ${fieldName} ${i}`;
     } else if (fieldName === 'PaymentMethod') {
       row[fieldName] = 'CreditCard';
     } else if (fieldName === 'Status') {
@@ -162,7 +163,14 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
       const year = 2026;
       const month = String(1 + (i % 12)).padStart(2, '0');
       const day = String(1 + (i % 28)).padStart(2, '0');
-      row[fieldName] = `${year}-${month}-${day}`;
+      if (fieldName === 'EndDate' && row['StartDate']) {
+        const startStr = String(row['StartDate']).slice(0, 10);
+        const startDay = parseInt(startStr.slice(8, 10), 10) || 1;
+        const endDay = Math.min(28, startDay + 5);
+        row[fieldName] = `${startStr.slice(0, 8)}${String(endDay).padStart(2, '0')}`;
+      } else {
+        row[fieldName] = `${year}-${month}-${day}`;
+      }
     } else {
       row[fieldName] = `${entity}_${fieldName}_${i}`;
     }

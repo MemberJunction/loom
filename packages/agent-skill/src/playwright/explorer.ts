@@ -82,9 +82,9 @@ export async function runVisualInspection(
     page.on('response', async (res) => {
       if (res.url().includes('/graphql')) {
         try {
-          const body = (await res.json()) as { errors?: Array<{ message: string }> };
-          if (body?.errors && body.errors.length > 0) {
-            for (const err of body.errors) {
+          const payload = (await res.json()) as { errors?: Array<{ message: string }> };
+          if (payload?.errors && payload.errors.length > 0) {
+            for (const err of payload.errors) {
               graphQLErrors.push(err.message);
             }
           }

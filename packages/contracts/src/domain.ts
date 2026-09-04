@@ -84,6 +84,45 @@ export const PathMatchRuleSchema = z.object({
 });
 export type PathMatchRule = z.infer<typeof PathMatchRuleSchema>;
 
+export type TimingDistributionContract =
+  | { type: 'const'; days: number }
+  | { type: 'uniformDays'; min: number; max: number }
+  | { type: 'lognormalDays'; medianDays: number; sigma: number; minDays?: number; capDays?: number }
+  | { type: 'mixture'; bands: readonly [TimingDistributionContract, number][] };
+
+export const TimingDistributionSchema: z.ZodType<TimingDistributionContract> = z.lazy(() =>
+  z.discriminatedUnion('type', [
+    z.object({
+      type: z.literal('const'),
+      days: z.number(),
+    }),
+    z.object({
+      type: z.literal('uniformDays'),
+      min: z.number(),
+      max: z.number(),
+    }),
+    z.object({
+      type: z.literal('lognormalDays'),
+      medianDays: z.number(),
+      sigma: z.number(),
+      minDays: z.number().optional(),
+      capDays: z.number().optional(),
+    }),
+    z.object({
+      type: z.literal('mixture'),
+      bands: z.array(z.tuple([TimingDistributionSchema, z.number()])),
+    }),
+  ])
+);
+
+export const RoleWindowConfigSchema = z.object({
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  startOffsetYears: z.number().optional(),
+  durationYears: z.number().optional(),
+});
+export type RoleWindowConfig = z.infer<typeof RoleWindowConfigSchema>;
+
 export const DateWindowRuleSchema = z.object({
   kind: z.literal('date-window'),
   name: z.string().min(1),
@@ -97,6 +136,8 @@ export const DateWindowRuleSchema = z.object({
   windowStartField: z.string().min(1),
   windowEndField: z.string().min(1),
   requireWindow: z.boolean().optional().default(false),
+  timing: TimingDistributionSchema.optional(),
+  roleWindows: z.array(RoleWindowConfigSchema).optional(),
 });
 export type DateWindowRule = z.infer<typeof DateWindowRuleSchema>;
 
@@ -115,10 +156,38 @@ export const TextContainsPathRuleSchema = z.object({
 });
 export type TextContainsPathRule = z.infer<typeof TextContainsPathRuleSchema>;
 
+export const OutcomeDerivedFromBallotsRuleSchema = z.object({
+  kind: z.literal('outcome-derived-from-ballots'),
+  name: z.string().min(1),
+  sourceEntity: z.string().min(1),
+  outcomeField: z.string().min(1),
+  ballotEntity: z.string().min(1),
+  ballotDecisionForeignKey: z.string().min(1),
+  ballotVoteField: z.string().min(1),
+  positiveVoteValue: z.string().default('Yes'),
+  negativeVoteValue: z.string().default('No'),
+  abstainVoteValue: z.string().optional().default('Abstain'),
+  passedOutcomeValue: z.string().default('Passed'),
+  failedOutcomeValue: z.string().default('Failed'),
+  tieOutcomeValue: z.string().optional().default('Failed'),
+  quorum: z.number().optional().default(1),
+  tieRule: z.enum(['Passed', 'Failed']).optional().default('Failed'),
+  abstainHandling: z.enum(['ignore', 'count-toward-quorum']).optional().default('ignore'),
+  rule: z.enum(['majority', 'supermajority-two-thirds', 'unanimous']).default('majority'),
+  abstainRate: z.number().min(0).max(1).optional().default(0),
+  categoricalWeights: z.object({
+    Yes: z.number().min(0),
+    No: z.number().min(0),
+    Abstain: z.number().min(0).optional(),
+  }).optional(),
+});
+export type OutcomeDerivedFromBallotsRule = z.infer<typeof OutcomeDerivedFromBallotsRuleSchema>;
+
 export const RelationalRuleSchema = z.discriminatedUnion('kind', [
   PathMatchRuleSchema,
   DateWindowRuleSchema,
   TextContainsPathRuleSchema,
+  OutcomeDerivedFromBallotsRuleSchema,
 ]);
 export type RelationalRule = z.infer<typeof RelationalRuleSchema>;
 

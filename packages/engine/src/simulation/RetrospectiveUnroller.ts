@@ -44,8 +44,7 @@ export interface UnrollConfig {
   eras?: EraConfig[];
   domain?: DomainConfig;
   factorContracts?: FactorContract[];
-  annualWanderStdDev?: number;
-  cycleUnit?: 'year' | 'week';
+  cycleUnit?: 'day' | 'week' | 'month' | 'year';
 }
 
 export interface CycleSnapshot {
@@ -249,10 +248,11 @@ export class RetrospectiveUnroller {
         if (!entity.isHero) {
           for (const ladder of ladderEngine.GetAllLadders()) {
             const cycleUnit = this.config.cycleUnit ?? 'year';
-            const ladderCyclesSinceBirth = cycleUnit === 'week' ? cyclesSinceBirth * 52 : cyclesSinceBirth;
-            const stepAmount = cycleUnit === 'week' ? 52 : 1;
+            const multiplier = cycleUnit === 'day' ? 365 : cycleUnit === 'week' ? 52 : cycleUnit === 'month' ? 12 : 1;
+            const ladderCyclesSinceBirth = cyclesSinceBirth * multiplier;
+            const stepAmount = multiplier;
             const stepResult = ladderEngine.StepEntity(ladder.ladderKey, entity.id, {
-              cycle: cycleUnit === 'week' ? c * 52 : c,
+              cycle: c * multiplier,
               cyclesSinceBirth: ladderCyclesSinceBirth,
               latentDials: entity.latentDials,
               stepAmount,
@@ -275,7 +275,8 @@ export class RetrospectiveUnroller {
             const st = ladderEngine.GetEntityState(ladder.ladderKey, entity.id);
             if (st) {
               const cycleUnit = this.config.cycleUnit ?? 'year';
-              st.tenureInCurrentState = cycleUnit === 'week' ? (c - st.enteredCycle) * 52 : c - st.enteredCycle;
+              const multiplier = cycleUnit === 'day' ? 365 : cycleUnit === 'week' ? 52 : cycleUnit === 'month' ? 12 : 1;
+              st.tenureInCurrentState = (c - st.enteredCycle) * multiplier;
             }
           }
         }
@@ -419,8 +420,8 @@ export class RetrospectiveUnroller {
         const finalIntercept = baseIntercept + eraDelta;
 
         // C. Evaluate realized outcomes
-        for (const item of entityScores) {
-          const { entity, score, overrideProb } = item;
+        for (const scoredEntry of entityScores) {
+          const { entity, score, overrideProb } = scoredEntry;
           let realizedOutcome: boolean;
 
           // 1. Hero outcome pin conditioning (Invariant 2): condition the draw

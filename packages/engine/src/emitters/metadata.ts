@@ -244,14 +244,14 @@ export async function readEntityMetadata(
     }
 
     for (let i = 0; i < parsed.length; i++) {
-      const item = parsed[i];
+      const wrappedRecord = parsed[i];
       if (
-        typeof item !== 'object' ||
-        item === null ||
-        !('primaryKey' in item) ||
-        !('fields' in item) ||
-        typeof item.primaryKey !== 'object' ||
-        typeof item.fields !== 'object'
+        typeof wrappedRecord !== 'object' ||
+        wrappedRecord === null ||
+        !('primaryKey' in wrappedRecord) ||
+        !('fields' in wrappedRecord) ||
+        typeof wrappedRecord.primaryKey !== 'object' ||
+        typeof wrappedRecord.fields !== 'object'
       ) {
         throw new Error(
           `Record at index ${i} in '${filePath}' lacks required { primaryKey, fields } wrapper`
@@ -259,8 +259,8 @@ export async function readEntityMetadata(
       }
 
       const row: Record<string, unknown> = {
-        ...(item.primaryKey as Record<string, unknown>),
-        ...(item.fields as Record<string, unknown>),
+        ...(wrappedRecord.primaryKey as Record<string, unknown>),
+        ...(wrappedRecord.fields as Record<string, unknown>),
       };
       delete row.sync;
       unwrappedRecords.push(row);

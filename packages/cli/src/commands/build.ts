@@ -11,6 +11,9 @@ import {
   StateLadderEngine,
   FactorEngine,
   RetrospectiveUnroller,
+  nestedEvent,
+  temporalRole,
+  scopedDecision,
   type SimulationNode,
   type EntityCandidate,
 } from '@memberjunction/loom-engine';
@@ -111,8 +114,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
             let sumTotal = 0;
 
             for (let l = 1; l <= candidateCount; l++) {
-              const itemIdx = (parseInt(parentHash, 16) + l) % targetCatalog.length;
-              const item = targetCatalog[itemIdx]!;
+              const catalogIdx = (parseInt(parentHash, 16) + l) % targetCatalog.length;
+              const catalogRow = targetCatalog[catalogIdx]!;
 
               // Evaluate active era volume multipliers on this candidate line (R12-1, R12-2)
               let dropLine = false;
@@ -122,7 +125,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
                     let matchesWhere = true;
                     if (vm.where) {
                       for (const [wk, wv] of Object.entries(vm.where)) {
-                        if (item[wk] === undefined || String(item[wk]).toLowerCase() !== String(wv).toLowerCase()) {
+                        if (catalogRow[wk] === undefined || String(catalogRow[wk]).toLowerCase() !== String(wv).toLowerCase()) {
                           matchesWhere = false;
                           break;
                         }
@@ -149,15 +152,15 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
 
               // Candidate line is kept
               const qty = 1 + (l % 2);
-              const priceVal = typeof item['UnitPrice'] === 'number' ? item['UnitPrice'] : (typeof item['Price'] === 'number' ? item['Price'] : 100);
+              const priceVal = typeof catalogRow['UnitPrice'] === 'number' ? catalogRow['UnitPrice'] : (typeof catalogRow['Price'] === 'number' ? catalogRow['Price'] : 100);
               const extVal = qty * priceVal;
               sumTotal += extVal;
 
-              const lineId = identityService.MintId(loaded.domain.name, childName, [parentId, String(item[lookupFk.targetField])]);
+              const lineId = identityService.MintId(loaded.domain.name, childName, [parentId, String(catalogRow[lookupFk.targetField])]);
               const childRow: Record<string, unknown> = {
                 ID: lineId,
                 [fkFieldName]: parentId,
-                [lookupFk.fieldName]: item[lookupFk.targetField],
+                [lookupFk.fieldName]: catalogRow[lookupFk.targetField],
               };
               for (const [fName, fDef] of Object.entries(childCfg.fields)) {
                 if (fName === 'ID' || fName === fkFieldName || fName === lookupFk.fieldName) continue;
@@ -280,16 +283,242 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         // 1. Generate background records deterministically (1..targetCount)
         const backgroundRecords: Record<string, unknown>[] = [];
         const entityRng = createRng(ctx.seed, `entity:${entityName}`);
-        for (let i = 1; i <= targetCount; i++) {
-          const row = generateEntityRecord({
-            domain: loaded.domain,
-            entity: entityName,
-            i,
-            parentPool,
-            rng: entityRng,
-            identityService,
+
+        const rolePoolRule = (loaded.domain.relationalRules ?? []).find(
+          (r) =>
+            r.kind === 'date-window' &&
+            r.windowEntity === entityName &&
+            (loaded.domain.relationalRules ?? []).some(
+              (or) => or.kind === 'outcome-derived-from-ballots' && or.ballotEntity === r.sourceEntity
+            )
+        );
+        const nestedDateWindowRule = (loaded.domain.relationalRules ?? []).find(
+          (r) => r.kind === 'date-window' && r.sourceEntity === entityName && parentPool[r.windowEntity]?.length
+        );
+        const outcomeRule = (loaded.domain.relationalRules ?? []).find(
+          (r) => r.kind === 'outcome-derived-from-ballots' && r.sourceEntity === entityName
+        );
+
+        if (rolePoolRule && rolePoolRule.kind === 'date-window') {
+          // Temporal role assignment pool generation: generate role records spanning the simulation era
+          const parentFk = Object.values(entityCfg.foreignKeys)[0];
+          const parentRecords = parentFk ? (parentPool[parentFk.targetEntity] ?? []) : [];
+          const actorFkField = rolePoolRule.windowForeignKey;
+          const actorType = actorFkField.replace(/ID$/i, '') || 'Participant';
+          const schedule = rolePoolRule.roleWindows && rolePoolRule.roleWindows.length > 0
+            ? rolePoolRule.roleWindows
+            : [
+                { startOffsetYears: -5, durationYears: 3 },
+                { startOffsetYears: -4, durationYears: 3 },
+                { startOffsetYears: -3, durationYears: 5 },
+                { startOffsetYears: -1, durationYears: 4 },
+                { startOffsetYears: 0, durationYears: 3 },
+              ];
+
+          for (const b of parentRecords) {
+            const parentId = String(b['ID'] ?? b['id']);
+            for (let a = 0; a < schedule.length; a++) {
+              const windowDef = schedule[a]!;
+              let startDate = windowDef.startDate;
+              let endDate = windowDef.endDate;
+              if (!startDate && windowDef.startOffsetYears !== undefined) {
+                startDate = `${asOfYear + windowDef.startOffsetYears}-01-01`;
+              }
+              if (!endDate && windowDef.durationYears !== undefined && startDate) {
+                const sYear = new Date(startDate).getFullYear();
+                endDate = `${sYear + windowDef.durationYears}-12-31`;
+              }
+              startDate = startDate ?? `${startCycle}-01-01`;
+              endDate = endDate ?? `${asOfYear + 2}-12-31`;
+
+              const actorId = identityService.MintId(loaded.domain.name, actorType, [parentId, `ACTOR-${a + 1}`]);
+              const roleId = identityService.MintId(loaded.domain.name, entityName, [parentId, actorId, startDate]);
+              backgroundRecords.push({
+                ID: roleId,
+                ...(parentFk ? { [parentFk.fieldName]: parentId } : {}),
+                [actorFkField]: actorId,
+                [rolePoolRule.windowStartField]: startDate,
+                [rolePoolRule.windowEndField]: endDate,
+                CreatedAt: startDate,
+              });
+            }
+          }
+        } else if (nestedDateWindowRule && nestedDateWindowRule.kind === 'date-window') {
+          // Pattern A: nestedEvent - events bounded within parent window
+          const parentRecords = parentPool[nestedDateWindowRule.windowEntity]!;
+          const itemsPerParent = Math.max(1, Math.floor(targetCount / parentRecords.length)) || 2;
+          const nestedRecords = nestedEvent({
+            seed: ctx.seed,
+            parents: parentRecords,
+            streamKey: (p) => `nested:${entityName}:${p['ID'] ?? p['id']}`,
+            countOf: () => itemsPerParent,
+            timing: nestedDateWindowRule.timing,
+            parentWindow: (p) => ({
+              start: String(p[nestedDateWindowRule.windowStartField] ?? releaseDate),
+              end: String(p[nestedDateWindowRule.windowEndField] ?? releaseDate),
+            }),
+            spawnChild: (_childRng, p, idx, childDate) => {
+              const parentId = String(p['ID'] ?? p['id']);
+              const childId = identityService.MintId(loaded.domain.name, entityName, [parentId, String(idx), childDate]);
+              const childRow: Record<string, unknown> = {
+                ID: childId,
+                [nestedDateWindowRule.windowForeignKey]: parentId,
+                [nestedDateWindowRule.dateField]: childDate,
+                CreatedAt: childDate,
+              };
+              for (const [fName, fDef] of Object.entries(entityCfg.fields)) {
+                if (fName in childRow) continue;
+                if (fDef.type === 'string') {
+                  childRow[fName] = `${entityName} ${idx + 1} (${p['Name'] ?? 'Event'})`;
+                } else if (fDef.type === 'date') {
+                  childRow[fName] = childDate;
+                }
+              }
+              return childRow;
+            },
           });
-          backgroundRecords.push(row);
+          backgroundRecords.push(...nestedRecords);
+        } else if (outcomeRule && outcomeRule.kind === 'outcome-derived-from-ballots') {
+          // Pattern B: temporalRole + Pattern C: scopedDecision
+          const parentFk = Object.values(entityCfg.foreignKeys)[0];
+          const eventEntity = parentFk?.targetEntity ?? '';
+          const eventRecords = (eventEntity ? (parentPool[eventEntity] ?? allRecords[eventEntity]) : undefined) ?? [];
+          const ballotTenureRule = (loaded.domain.relationalRules ?? []).find(
+            (r) => r.kind === 'date-window' && r.sourceEntity === outcomeRule.ballotEntity
+          );
+          if (!ballotTenureRule || ballotTenureRule.kind !== 'date-window') {
+            throw new Error(`Missing required date-window rule for ${outcomeRule.ballotEntity}`);
+          }
+          const tenureRecords = allRecords[ballotTenureRule.windowEntity] ?? parentPool[ballotTenureRule.windowEntity] ?? [];
+
+          const actorFkField = ballotTenureRule.windowForeignKey;
+          const tenureStartField = ballotTenureRule.windowStartField;
+          const tenureEndField = ballotTenureRule.windowEndField;
+          const ballotDateField = ballotTenureRule.dateField;
+
+          const roleEntityCfg = loaded.domain.entities[ballotTenureRule.windowEntity];
+          const roleParentFk = roleEntityCfg ? Object.values(roleEntityCfg.foreignKeys)[0] : undefined;
+
+          const actorIds = Array.from(new Set(tenureRecords.map((t) => String(t[actorFkField] ?? '')))).filter(Boolean);
+          const actors = actorIds.map((id) => ({ ID: id }));
+          const rolePool = temporalRole({
+            actors,
+            roleAssignments: tenureRecords,
+            actorIdOf: (a) => a.ID,
+            assignmentActorIdOf: (t) => String(t[actorFkField]),
+            assignmentWindowOf: (t) => ({
+              start: String(t[tenureStartField]),
+              end: String(t[tenureEndField]),
+            }),
+            scopeOf: roleParentFk ? (t) => String(t[roleParentFk.fieldName] ?? '') : undefined,
+          });
+
+          // Helper to resolve event scope matching roleParentFk target entity
+          const resolveScopeId = (ev: Record<string, unknown>): string | undefined => {
+            if (!roleParentFk) return undefined;
+            const targetScopeEntity = roleParentFk.targetEntity;
+            const eventCfg = loaded.domain.entities[eventEntity];
+            if (!eventCfg) return undefined;
+
+            const directFk = Object.values(eventCfg.foreignKeys).find((fk) => fk.targetEntity === targetScopeEntity);
+            if (directFk && ev[directFk.fieldName]) {
+              return String(ev[directFk.fieldName]);
+            }
+
+            for (const pFk of Object.values(eventCfg.foreignKeys)) {
+              const parentRecords = allRecords[pFk.targetEntity] ?? parentPool[pFk.targetEntity];
+              const parentId = String(ev[pFk.fieldName] ?? '');
+              if (!parentRecords || !parentId) continue;
+              const parentRec = parentRecords.find((p) => String(p['ID'] ?? p['id']) === parentId);
+              if (!parentRec) continue;
+              const parentEntityCfg = loaded.domain.entities[pFk.targetEntity];
+              if (parentEntityCfg) {
+                const parentToScopeFk = Object.values(parentEntityCfg.foreignKeys).find(
+                  (fk) => fk.targetEntity === targetScopeEntity
+                );
+                if (parentToScopeFk && parentRec[parentToScopeFk.fieldName]) {
+                  return String(parentRec[parentToScopeFk.fieldName]);
+                }
+              }
+            }
+            return undefined;
+          };
+
+          // Event date field from relational rule
+          const eventDateRule = (loaded.domain.relationalRules ?? []).find(
+            (r) => r.kind === 'date-window' && r.sourceEntity === eventEntity
+          );
+          const eventDateField = eventDateRule && eventDateRule.kind === 'date-window'
+            ? eventDateRule.dateField
+            : 'Date';
+
+          // Decision date field from entity schema
+          const decisionDateField = Object.keys(entityCfg.fields).find(
+            (f) => entityCfg.fields[f]?.type === 'date' && f !== 'CreatedAt'
+          ) ?? 'CreatedAt';
+
+          const entityFactor = factorContracts.find((fc) => fc.effect === entityName);
+          const targetApprovalRate = entityFactor?.target ?? 0.6;
+          const { ballots, decisions } = scopedDecision({
+            seed: ctx.seed,
+            events: eventRecords,
+            eligibleActorsOf: (ev) => {
+              const scopeId = resolveScopeId(ev);
+              return rolePool.getActiveActors(String(ev[eventDateField] ?? releaseDate), scopeId).map((r) => r.actor);
+            },
+            eventDateOf: (ev) => String(ev[eventDateField] ?? releaseDate),
+            streamKey: (ev) => `scopedDecision:${ev['ID'] ?? ev['id']}`,
+            rule: outcomeRule.rule ?? 'majority',
+            quorum: outcomeRule.quorum,
+            tieRule: outcomeRule.tieRule,
+            abstainHandling: outcomeRule.abstainHandling,
+            abstainRate: outcomeRule.abstainRate,
+            categoricalWeights: outcomeRule.categoricalWeights,
+            targetApprovalRate,
+            createBallot: (_ballotRng, ev, actor, vote, ballotDate) => {
+              const decisionId = identityService.MintId(loaded.domain.name, entityName, [String(ev['ID'] ?? ev['id'])]);
+              const ballotId = identityService.MintId(loaded.domain.name, outcomeRule.ballotEntity, [decisionId, actor.ID]);
+              return {
+                ID: ballotId,
+                [outcomeRule.ballotDecisionForeignKey]: decisionId,
+                [actorFkField]: actor.ID,
+                [outcomeRule.ballotVoteField]: vote === 'Yes'
+                  ? outcomeRule.positiveVoteValue
+                  : vote === 'No'
+                  ? outcomeRule.negativeVoteValue
+                  : (outcomeRule.abstainVoteValue ?? 'Abstain'),
+                [ballotDateField]: ballotDate,
+                CreatedAt: ballotDate,
+              };
+            },
+            createDecision: (ev, outcome, _eventBallots, decisionDate) => {
+              const decisionId = identityService.MintId(loaded.domain.name, entityName, [String(ev['ID'] ?? ev['id'])]);
+              return {
+                ID: decisionId,
+                ...(parentFk ? { [parentFk.fieldName]: ev['ID'] ?? ev['id'] } : {}),
+                [outcomeRule.outcomeField]: outcome === 'Passed' ? outcomeRule.passedOutcomeValue : outcomeRule.failedOutcomeValue,
+                [decisionDateField]: decisionDate,
+                CreatedAt: decisionDate,
+              };
+            },
+          });
+
+          allRecords[outcomeRule.ballotEntity] = ballots;
+          bgRecordsByEntity.set(outcomeRule.ballotEntity, ballots);
+
+          backgroundRecords.push(...decisions);
+        } else {
+          for (let i = 1; i <= targetCount; i++) {
+            const row = generateEntityRecord({
+              domain: loaded.domain,
+              entity: entityName,
+              i,
+              parentPool,
+              rng: entityRng,
+              identityService,
+            });
+            backgroundRecords.push(row);
+          }
         }
 
         for (const row of backgroundRecords) {
@@ -330,6 +559,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
     }
   }
 
+
   // 3. Multi-cycle retrospective simulation across the unified relational world (R4-1)
   const rng = createRng(seed);
   const startCycle = loaded.manifest.startCycle ?? asOfYear - 4;
@@ -362,7 +592,12 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
 
       // Spread temporal dates across birthCycle for cohort entities (entities with foreign keys)
       const isCohortEntity = Object.keys(loaded.domain.entities[entityName]?.foreignKeys ?? {}).length > 0;
-      if (isCohortEntity) {
+      const isRelationalRuleEntity = (loaded.domain.relationalRules ?? []).some(
+        (r) =>
+          (r.kind === 'date-window' && (r.windowEntity === entityName || r.sourceEntity === entityName)) ||
+          (r.kind === 'outcome-derived-from-ballots' && (r.sourceEntity === entityName || r.ballotEntity === entityName))
+      );
+      if (isCohortEntity && !isRelationalRuleEntity) {
         const month = String(1 + (bgIdx % 12)).padStart(2, '0');
         const day = String(1 + (bgIdx % 28)).padStart(2, '0');
         if (r['JoinDate'] !== undefined) {
@@ -426,6 +661,13 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
             for (const [field, targetVal] of Object.entries(contract.outcome.where)) {
               if (hero && hero.fixedFields && field in hero.fixedFields) {
                 // Invariant: hero fixedFields take precedence over factor outcome calibration
+                continue;
+              }
+              const isDerivedOutcomeField = (loaded.domain.relationalRules ?? []).some(
+                (r) => r.kind === 'outcome-derived-from-ballots' && r.sourceEntity === entityName && r.outcomeField === field
+              );
+              if (isDerivedOutcomeField) {
+                // Invariant: outcome derived strictly from ballots via scopedDecision; do not decouple
                 continue;
               }
               if (realized) {
@@ -754,7 +996,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
           ladder: ladder.ladderKey,
           currentState: state.currentState,
           enteredCycle: state.enteredCycle,
-          tenure: state.tenureInCurrentState,
+          tenureInCurrentState: state.tenureInCurrentState,
         });
       }
     }

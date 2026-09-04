@@ -32,7 +32,7 @@ Real organizations do not drop their database and re-seed every quarter; they ac
 - Loom treats accumulation as a first-class engine primitive:
   $$\text{Loom: } (\text{domainConfig}, \text{seed}, \text{releaseDate}, \text{ruleset}, \text{priorState}) \longrightarrow \text{deltaRecords}$$
 - Each simulation cycle ingests the committed prior state (`metadata/` JSON tree), respects continuity boundaries (active committee terms, open billing tickets, pending renewal grace periods), and emits **only new records**.
-- Every delta is naturally a pure, additive MemberJunction metadata sync diff, ingested via `mj sync push` and executing `BaseEntity` lifecycles.
+- Every delta is naturally a pure, additive MemberJunction metadata sync diff, ingested via `mj sync push`.
 
 ### 1.4 Canonical Engine Invariants
 The Loom simulation engine strictly preserves seven architectural invariants across all packages, seeds, and execution modes:
@@ -43,7 +43,7 @@ The Loom simulation engine strictly preserves seven architectural invariants acr
 - **Invariant 5 (Deep Immutability)**: Emitted transaction history from earlier cycles is never mutated in subsequent cycles.
 - **Invariant 6 (Factor Recovery)**: Statistical logistic regression over emitted crowd data recovers authored $\beta$ weights within defined tolerance bounds ($\pm 0.15$ at $N \ge 5000$).
 - **Invariant 7 (Topological & Referential Closure)**: Emitted datasets strictly preserve foreign key closure in topological DAG dependency order with zero orphaned records.
-- **Invariant 8 (Metadata Sole Delivery & BaseEntity Integrity)**: Metadata is the sole engine for synthetic data delivery. All simulated records are emitted as partitioned declarative metadata files (`metadata/` tree) and ingested exclusively via MemberJunction's metadata sync push (`mj sync push`), ensuring every record triggers the complete `BaseEntity` subclass lifecycle, server hooks, validation rules, status transitions, vector embeddings, and audit tracking. Direct SQL `INSERT` bypasses are strictly prohibited.
+- **Invariant 8 (Metadata Sole Delivery)**: Metadata is the sole engine for synthetic data delivery. All simulated records are emitted as partitioned declarative metadata files (`metadata/` tree) and ingested exclusively via MemberJunction's metadata sync push (`mj sync push`) through server metadata APIs. Direct SQL `INSERT` bypasses are strictly prohibited.
 
 ---
 
@@ -70,12 +70,12 @@ flowchart TD
         FR["Factor Engine (Latent Dials θ, φ)"]
         IS["Deterministic Identity (uuidv5)"]
         AR["Accumulation & Delta Resolver"]
-        VR["Bidirectional Validator (300+ Gates)"]
+        VR["Bidirectional Validator (Referential & Statistical Gates)"]
     end
 
     subgraph Emitters ["3. Exclusive Metadata Emission"]
         MS["Open App Metadata Tree<br/>(/metadata/** JSON)"]
-        BE["Full BaseEntity Lifecycle<br/>(mj sync push)"]
+        BE["Server Metadata Push<br/>(mj sync push)"]
         ARF["In-App Operational Residue<br/>(Dashboards, Views, Conversations)"]
     end
 
@@ -121,7 +121,7 @@ loom/
 │   │
 │   ├── cli/                  # @memberjunction/loom-cli
 │   │   ├── src/
-│   │   │   ├── commands/     # build, accumulate, validate, inspect, emit
+│   │   │   ├── commands/     # build, accumulate, validate, emit
 │   │   │   ├── bin/loom.ts   # Executable CLI entrypoint
 │   │   │   └── index.ts
 │   │   └── package.json
@@ -135,11 +135,13 @@ loom/
 │       └── package.json
 │
 ├── projects/
-│   └── fixture/              # Lightweight CI testbed project (~120 lines, verified every build)
+│   ├── fixture/              # Lightweight CI testbed project (~120 lines, verified every build)
+│   ├── enterprise/           # Reference enterprise SaaS simulation project
+│   └── governance-fixture/   # Generic governance and temporal scoping fixture
 │
 ├── docs/                     # Architecture specs, factor contract guide, CLI manual
 ├── plans/                    # Active implementation briefs and design roadmap
-├── .github/workflows/        # CI: suite execution (335 gates + fixture build)
+├── .github/workflows/        # CI: suite execution (validation gates + fixture build)
 ├── package.json              # Monorepo root
 ├── turbo.json                # Turborepo task pipeline
 └── tsconfig.json             # Root strict TypeScript configuration
@@ -200,29 +202,29 @@ Loom codifies the clean separation between causal data generation and in-app ope
 
 ---
 
-## 5. The Weekly Simulation Agent Skill with Playwright
+## 5. The Simulation Agent Skill with Playwright
 
-Loom introduces an autonomous **Agent Skill** to automate the recurring weekly accumulation cycle:
+Loom introduces an autonomous **Agent Skill** (`weeklyCycle`) to automate recurring simulation cycles:
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor Scheduler as Scheduler / Workflow
-    participant Skill as Simulation Agent Skill
-    participant LLM as Story Evolution LLM
+    participant Skill as Simulation Agent Skill (weeklyCycle)
     participant Loom as Loom Engine CLI
+    participant Sync as MemberJunction Sync
     participant Host as Local MJ Host (MJAPI + Explorer)
     participant PW as Playwright Inspector
     participant Git as Git Repository
 
-    Scheduler->>Skill: Trigger Weekly Run
-    Skill->>LLM: Advance Narrative Bible (Current Events & Story Arcs)
-    LLM-->>Skill: Updated Narrative & Factor Rules
-    Skill->>Loom: loom accumulate --weeks=1
-    Loom-->>Skill: Generated Delta Records & Metadata Sync
+    Scheduler->>Skill: Trigger Cycle Advance
+    Skill->>Loom: loom accumulate --cycles=1
+    Loom-->>Skill: Generated Delta Records & Checkpoint
     Skill->>Loom: loom validate
-    Loom-->>Skill: 300+ Automated Gates Passed
-    Skill->>Host: Boot Local Host Stack (Port 4103 / 4303)
+    Loom-->>Skill: All Validation Gates Passed
+    Skill->>Sync: mj sync push --dir <generated>
+    Sync-->>Skill: Push Completed
+    Skill->>Host: Verify Running Host Stack
     Skill->>PW: Run Visual Inspection Suite
     PW->>Host: Navigate Dashboards & Persona Views
     PW-->>Skill: Visual Invariants Verified (No Render/GraphQL Errors)
@@ -254,7 +256,7 @@ sequenceDiagram
 ### Phase 3: The `loom` CLI (`@memberjunction/loom-cli`)
 - [x] Implement `loom build` (full baseline generation).
 - [x] Implement `loom validate` (comprehensive gate execution with Invariant 7).
-- [ ] Implement `loom inspect` (interactive graph and factor inspection).
+- [x] Interactive inspection via structured CLI logs, validator reports, and Playwright verification (standalone inspect CLI dropped in favor of declarative logging).
 - [x] Wire CLI into monorepo and verify end-to-end execution against `projects/fixture`.
 
 ### Phase 4: Accumulation Engine & Delta Resolver
@@ -263,16 +265,41 @@ sequenceDiagram
 - [x] Implement delta resolver updating metadata records in place via differential status updates (SQL spCreate migrations superseded by Invariant 8).
 - [x] Verify multi-cycle accumulation on `projects/fixture`.
 
-### Phase 5: More Cheese Migration to Loom
-- [ ] Define More Cheese domain manifest and factor ruleset in Loom.
-- [ ] Retire `morecheese_orders` stand-in tables; wire direct generation into real `bizapps-orders` and `bizapps-accounting` schemas.
-- [ ] Emit initial 5-year baseline history and one-time date alignment script.
-- [ ] Verify all 335 More Cheese validation gates pass against the new Loom engine.
+### Phase 5: More Cheese Migration to Loom (Measured Reality)
+- [x] Define More Cheese domain manifest (`data/domain.json`) and factor rulesets in Loom.
+- [x] Direct generation targeting standard BizApps/Core schemas (`generated/` metadata trees partitioned per entity).
+- [x] Schema & Directory Ownership manifest (`data/ownership.json`): Measured reality at cheese #27 `0ae53cd`: 10 `loom`, 44 `frozen`, 11 `config`.
+- [x] Referential closure and schema integrity: 9 closure invariants (FK closure, directoryOrder completeness, PK uniqueness, TotalGross balance, balance identity, no overpayment, period-to-order 1:1 within 90 days, DuesAmount equals UnitPrice, status shape by category).
+- [x] Relational integrity gates: Relational rules evaluated on generic test fixtures (`projects/governance-fixture/`); cheese #26 consolidated production More Cheese rules into closure invariants.
+- [x] Accumulation and checkpoint persistence: deterministic multi-cycle advancement from prior state via `checkpoint.json`.
+- [x] Elimination of Direct SQL Bypasses: all synthetic data emitted as partitioned declarative metadata files ingested via `mj sync push`.
 
-### Phase 6: Weekly Simulation Agent Skill & Playwright Automation
-- [ ] Implement the Weekly Simulation Agent Skill package.
-- [ ] Implement Playwright visual inspection scripts for MJExplorer dashboards and persona views.
-- [ ] Configure recurring GitHub Actions workflow for weekly automated simulation advances.
+### Phase 6: Simulation Agent Skill & First-Class Cadence
+- [x] Implement the Simulation Agent Skill package (`@memberjunction/loom-agent-skill`).
+- [x] Implement `weeklyCycle` orchestrator executing strict pipeline: Accumulate (`loom accumulate --cycles <n>`) -> Validate (`loom validate`) -> Push (`mj sync push --dir <generated>`) -> Visual verification (Playwright).
+- [x] First-class cadence abstraction (L10-6): `cycleUnit` supporting `day` | `week` | `month` | `year`; `--cycles <n>` CLI option replacing `--weeks`; calendar-correct month advances across 31-day, leap-year, and month-end boundaries.
+- [x] Implement Playwright visual inspection scripts for MJExplorer dashboards and persona views (`@memberjunction/loom-agent-skill/src/playwright`).
+- [ ] Configure recurring GitHub Actions workflow / cron runner for automated simulation advances.
+
+---
+
+## 7. Iterative Authoring & Counterfactual Branching
+
+### 7.1 Iterative Authoring Workflow
+Real-world enterprise world authoring is never done in a single monolithic "one-shot" pass. Attempting to author an entire year's worth of complex causal rules, hero arcs, and edge cases at once produces noisy, uncalibrated datasets where bugs compound.
+Instead, Loom enforces an **iterative authoring discipline**:
+1. **Baseline Inception**: The author starts with structural entities, core identities (`Person`, `Organization`), and baseline demographic distributions.
+2. **Layering Narrative Boundaries**: Eras (`eras.json`) and Hero rosters (`heroes.json`) are introduced to define macroeconomic phases and key character arcs.
+3. **Factor & Pattern Layering**: Causal factors (`ruleset/common.json`), nested events, and temporal role patterns are layered incrementally over single cycles, verifying with `loom validate` at each step.
+4. **Continuity & Accumulation**: Once baseline cycles pass all validation gates, the author advances simulation via `loom accumulate --cycles 1`, observing emergent downstream behaviors without mutating prior state.
+
+### 7.2 Counterfactual Branching & Signature Isolation
+Loom's deterministic architecture enables precise **counterfactual branching**: running "what-if" organizational simulations from identical starting conditions by varying a single factor or ruleset parameter.
+
+**Signature Isolation Assessment**:
+The execution signature tuple `(project, seed, release, ruleset)` cleanly and completely isolates causal mutations:
+- Because PRNG sequences are deterministically keyed per `seed:entity:id:cycle`, altering a factor parameter on one entity leaves unrelated entities and upstream generators entirely untouched.
+- **Tooling Gap Identified**: While raw `diff -u -r` proves physical isolation, dedicated CLI tooling (`loom diff --baseline <dir> --variant <dir>`) is planned to summarize causal divergences in business terms (e.g. "Factor target shift 0.80 -> 0.40 resulted in -40% renewal rate across members with zero referential drift").
 
 ---
 
