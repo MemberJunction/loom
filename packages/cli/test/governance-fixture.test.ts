@@ -55,6 +55,65 @@ describe("L10-3 Governance Fixture Testbed", () => {
     expect(diffOutput).toBe("");
   });
 
+  it("proves Abstain votes are generated from declared abstainRate (R3-1)", async () => {
+    const ballotFile = path.join(build1Dir, "Ballot", "Ballot.json");
+    const ballots = JSON.parse(await fs.readFile(ballotFile, "utf8")) as Array<{ fields: { Vote: string } }>;
+    const abstainCount = ballots.filter((b) => b.fields.Vote === "Abstain").length;
+    expect(abstainCount).toBeGreaterThan(0);
+  });
+
+  it("proves child event offsets are drawn from timing distribution and not all equal (R3-2)", async () => {
+    const sessionFile = path.join(build1Dir, "Session", "Session.json");
+    const itemFile = path.join(build1Dir, "Item", "Item.json");
+    const sessions = JSON.parse(await fs.readFile(sessionFile, "utf8")) as Array<{ primaryKey: { ID: string }; fields: { StartDate: string } }>;
+    const items = JSON.parse(await fs.readFile(itemFile, "utf8")) as Array<{ fields: { SessionID: string; ItemDate: string } }>;
+    const sessionMap = new Map(sessions.map((s) => [s.primaryKey.ID, s.fields.StartDate]));
+
+    const offsetDays = items.map((item) => {
+      const sessionStart = sessionMap.get(item.fields.SessionID);
+      expect(sessionStart).toBeDefined();
+      const diffMs = new Date(item.fields.ItemDate).getTime() - new Date(sessionStart!).getTime();
+      return Math.round(diffMs / (1000 * 60 * 60 * 24));
+    });
+
+    const distinctOffsets = new Set(offsetDays);
+    expect(distinctOffsets.size).toBeGreaterThan(1);
+  });
+
+  it("proves tenure windows exclude inactive holders so eligible count is below holder count (R3-3)", async () => {
+    const tenureFile = path.join(build1Dir, "Tenure", "Tenure.json");
+    const decisionFile = path.join(build1Dir, "Decision", "Decision.json");
+    const ballotFile = path.join(build1Dir, "Ballot", "Ballot.json");
+    const itemFile = path.join(build1Dir, "Item", "Item.json");
+    const sessionFile = path.join(build1Dir, "Session", "Session.json");
+
+    const tenures = JSON.parse(await fs.readFile(tenureFile, "utf8")) as Array<{ fields: { BodyID: string; ActorID: string } }>;
+    const decisions = JSON.parse(await fs.readFile(decisionFile, "utf8")) as Array<{ primaryKey: { ID: string }; fields: { ItemID: string } }>;
+    const ballots = JSON.parse(await fs.readFile(ballotFile, "utf8")) as Array<{ fields: { DecisionID: string; ActorID: string } }>;
+    const items = JSON.parse(await fs.readFile(itemFile, "utf8")) as Array<{ primaryKey: { ID: string }; fields: { SessionID: string } }>;
+    const sessions = JSON.parse(await fs.readFile(sessionFile, "utf8")) as Array<{ primaryKey: { ID: string }; fields: { BodyID: string } }>;
+
+    const itemToSession = new Map(items.map((i) => [i.primaryKey.ID, i.fields.SessionID]));
+    const sessionToBody = new Map(sessions.map((s) => [s.primaryKey.ID, s.fields.BodyID]));
+
+    let foundDecisionBelowHolders = false;
+    for (const decision of decisions) {
+      const sessionId = itemToSession.get(decision.fields.ItemID);
+      const bodyId = sessionId ? sessionToBody.get(sessionId) : undefined;
+      expect(bodyId).toBeDefined();
+
+      const totalHoldersForBody = tenures.filter((t) => t.fields.BodyID === bodyId).length;
+      const eligibleBallots = ballots.filter((b) => b.fields.DecisionID === decision.primaryKey.ID).length;
+
+      expect(totalHoldersForBody).toBeGreaterThan(0);
+      expect(eligibleBallots).toBeGreaterThan(0);
+      if (eligibleBallots < totalHoldersForBody) {
+        foundDecisionBelowHolders = true;
+      }
+    }
+    expect(foundDecisionBelowHolders).toBe(true);
+  });
+
   it("guarantees hero non-interference: non-hero rows remain identical", async () => {
     const heroesFile = path.join(govFixturePath, "ruleset", "heroes.json");
     const originalHeroes = await fs.readFile(heroesFile, "utf8");

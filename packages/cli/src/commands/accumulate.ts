@@ -394,19 +394,42 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     );
 
     if (rolePoolRule && rolePoolRule.kind === 'date-window') {
+      const asOfYear = parseInt(asOfDate.slice(0, 4), 10) || 2026;
       const parentFk = Object.values(entityCfg.foreignKeys)[0];
       const parentRecords = parentFk ? (currentRecords[parentFk.targetEntity] ?? []) : [];
+      const actorFkField = rolePoolRule.windowForeignKey;
+      const actorType = actorFkField.replace(/ID$/i, '') || 'Participant';
+      const schedule = rolePoolRule.roleWindows && rolePoolRule.roleWindows.length > 0
+        ? rolePoolRule.roleWindows
+        : [
+            { startOffsetYears: -1, durationYears: 3 },
+            { startOffsetYears: 0, durationYears: 3 },
+          ];
+
       for (const b of parentRecords) {
         const parentId = String(b['ID'] ?? b['id']);
-        for (let a = 1; a <= newRowsCount; a++) {
-          const actorId = identityService.MintId(loaded.domain.name, 'Actor', [parentId, `ACCUM-ACTOR-${cycleIndex}-${a}`]);
-          const roleId = identityService.MintId(loaded.domain.name, entityName, [parentId, actorId, '2021-01-01']);
+        for (let a = 0; a < Math.min(newRowsCount, schedule.length); a++) {
+          const windowDef = schedule[a]!;
+          let startDate = windowDef.startDate;
+          let endDate = windowDef.endDate;
+          if (!startDate && windowDef.startOffsetYears !== undefined) {
+            startDate = `${asOfYear + windowDef.startOffsetYears}-01-01`;
+          }
+          if (!endDate && windowDef.durationYears !== undefined && startDate) {
+            const sYear = new Date(startDate).getFullYear();
+            endDate = `${sYear + windowDef.durationYears}-12-31`;
+          }
+          startDate = startDate ?? asOfDate;
+          endDate = endDate ?? `${asOfYear + 2}-12-31`;
+
+          const actorId = identityService.MintId(loaded.domain.name, actorType, [parentId, `ACCUM-${actorType}-${cycleIndex}-${a + 1}`]);
+          const roleId = identityService.MintId(loaded.domain.name, entityName, [parentId, actorId, startDate, String(cycleIndex)]);
           list.push({
             ID: roleId,
             ...(parentFk ? { [parentFk.fieldName]: parentId } : {}),
-            [rolePoolRule.windowForeignKey]: actorId,
-            [rolePoolRule.windowStartField]: '2021-01-01',
-            [rolePoolRule.windowEndField]: '2028-12-31',
+            [actorFkField]: actorId,
+            [rolePoolRule.windowStartField]: startDate,
+            [rolePoolRule.windowEndField]: endDate,
             CreatedAt: asOfDate,
           });
         }
@@ -418,6 +441,7 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
         parents: parentRecords.slice(-newRowsCount),
         streamKey: (p) => `accum:nested:${entityName}:${p['ID'] ?? p['id']}:cycle:${cycleIndex}`,
         countOf: () => 1,
+        timing: nestedDateWindowRule.timing,
         parentWindow: (p) => ({
           start: String(p[nestedDateWindowRule.windowStartField] ?? asOfDate),
           end: String(p[nestedDateWindowRule.windowEndField] ?? asOfDate),
@@ -446,31 +470,99 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
         ? (currentRecords[ballotTenureRule.windowEntity] ?? [])
         : [];
 
-      const actorIds = Array.from(new Set(tenureRecords.map((t) => String(t['ActorID'] ?? t['Actor']))));
+      const actorFkField = ballotTenureRule && ballotTenureRule.kind === 'date-window'
+        ? ballotTenureRule.windowForeignKey
+        : 'ActorID';
+      const tenureStartField = ballotTenureRule && ballotTenureRule.kind === 'date-window'
+        ? ballotTenureRule.windowStartField
+        : 'StartDate';
+      const tenureEndField = ballotTenureRule && ballotTenureRule.kind === 'date-window'
+        ? ballotTenureRule.windowEndField
+        : 'EndDate';
+      const ballotDateField = ballotTenureRule && ballotTenureRule.kind === 'date-window'
+        ? ballotTenureRule.dateField
+        : 'Date';
+
+      const roleEntityCfg = ballotTenureRule && ballotTenureRule.kind === 'date-window'
+        ? loaded.domain.entities[ballotTenureRule.windowEntity]
+        : undefined;
+      const roleParentFk = roleEntityCfg ? Object.values(roleEntityCfg.foreignKeys)[0] : undefined;
+
+      const actorIds = Array.from(new Set(tenureRecords.map((t) => String(t[actorFkField] ?? '')))).filter(Boolean);
       const actors = actorIds.map((id) => ({ ID: id }));
       const rolePool = temporalRole({
         actors,
         roleAssignments: tenureRecords,
         actorIdOf: (a) => a.ID,
-        assignmentActorIdOf: (t) => String(t[ballotTenureRule && ballotTenureRule.kind === 'date-window' ? ballotTenureRule.windowForeignKey : 'ActorID']),
+        assignmentActorIdOf: (t) => String(t[actorFkField]),
         assignmentWindowOf: (t) => ({
-          start: String(t[ballotTenureRule && ballotTenureRule.kind === 'date-window' ? ballotTenureRule.windowStartField : 'StartDate']),
-          end: String(t[ballotTenureRule && ballotTenureRule.kind === 'date-window' ? ballotTenureRule.windowEndField : 'EndDate']),
+          start: String(t[tenureStartField]),
+          end: String(t[tenureEndField]),
         }),
+        scopeOf: roleParentFk ? (t) => String(t[roleParentFk.fieldName] ?? '') : undefined,
       });
 
-        const entityFactor = factorContracts.find((fc) => fc.effect === entityName);
-        const targetApprovalRate = entityFactor?.target ?? 0.6;
-        const { ballots, decisions } = scopedDecision({
+      // Helper to resolve event scope matching roleParentFk target entity
+      const resolveScopeId = (ev: Record<string, unknown>): string | undefined => {
+        if (!roleParentFk) return undefined;
+        const targetScopeEntity = roleParentFk.targetEntity;
+        const eventCfg = loaded.domain.entities[eventEntity];
+        if (!eventCfg) return undefined;
+
+        const directFk = Object.values(eventCfg.foreignKeys).find((fk) => fk.targetEntity === targetScopeEntity);
+        if (directFk && ev[directFk.fieldName]) {
+          return String(ev[directFk.fieldName]);
+        }
+
+        for (const pFk of Object.values(eventCfg.foreignKeys)) {
+          const parentRecords = currentRecords[pFk.targetEntity];
+          const parentId = String(ev[pFk.fieldName] ?? '');
+          if (!parentRecords || !parentId) continue;
+          const parentRec = parentRecords.find((p) => String(p['ID'] ?? p['id']) === parentId);
+          if (!parentRec) continue;
+          const parentEntityCfg = loaded.domain.entities[pFk.targetEntity];
+          if (parentEntityCfg) {
+            const parentToScopeFk = Object.values(parentEntityCfg.foreignKeys).find(
+              (fk) => fk.targetEntity === targetScopeEntity
+            );
+            if (parentToScopeFk && parentRec[parentToScopeFk.fieldName]) {
+              return String(parentRec[parentToScopeFk.fieldName]);
+            }
+          }
+        }
+        return undefined;
+      };
+
+      // Event date field from relational rule
+      const eventDateRule = (loaded.domain.relationalRules ?? []).find(
+        (r) => r.kind === 'date-window' && r.sourceEntity === eventEntity
+      );
+      const eventDateField = eventDateRule && eventDateRule.kind === 'date-window'
+        ? eventDateRule.dateField
+        : 'Date';
+
+      // Decision date field from entity schema
+      const decisionDateField = Object.keys(entityCfg.fields).find(
+        (f) => entityCfg.fields[f]?.type === 'date' && f !== 'CreatedAt'
+      ) ?? 'CreatedAt';
+
+      const entityFactor = factorContracts.find((fc) => fc.effect === entityName);
+      const targetApprovalRate = entityFactor?.target ?? 0.6;
+      const { ballots, decisions } = scopedDecision({
         seed,
         events: eventRecords,
-        eligibleActorsOf: (ev) => rolePool.getActiveActors(String(ev['ItemDate'] ?? ev['Date'] ?? asOfDate)).map((r) => r.actor),
-        eventDateOf: (ev) => String(ev['ItemDate'] ?? ev['Date'] ?? asOfDate),
+        eligibleActorsOf: (ev) => {
+          const scopeId = resolveScopeId(ev);
+          return rolePool.getActiveActors(String(ev[eventDateField] ?? asOfDate), scopeId).map((r) => r.actor);
+        },
+        eventDateOf: (ev) => String(ev[eventDateField] ?? asOfDate),
         streamKey: (ev) => `accum:outcome:${ev['ID'] ?? ev['id']}:cycle:${cycleIndex}`,
         rule: outcomeRule.rule ?? 'majority',
         quorum: outcomeRule.quorum,
         tieRule: outcomeRule.tieRule,
         abstainHandling: outcomeRule.abstainHandling,
+        abstainRate: outcomeRule.abstainRate,
+        categoricalWeights: outcomeRule.categoricalWeights,
         targetApprovalRate,
         createBallot: (_ballotRng, ev, actor, vote, ballotDate) => {
           const decisionId = identityService.MintId(loaded.domain.name, entityName, [String(ev['ID'] ?? ev['id'])]);
@@ -478,13 +570,13 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
           return {
             ID: ballotId,
             [outcomeRule.ballotDecisionForeignKey]: decisionId,
-            ActorID: actor.ID,
+            [actorFkField]: actor.ID,
             [outcomeRule.ballotVoteField]: vote === 'Yes'
               ? outcomeRule.positiveVoteValue
               : vote === 'No'
               ? outcomeRule.negativeVoteValue
-              : 'Abstain',
-            BallotDate: ballotDate,
+              : (outcomeRule.abstainVoteValue ?? 'Abstain'),
+            [ballotDateField]: ballotDate,
             CreatedAt: ballotDate,
           };
         },
@@ -492,9 +584,9 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
           const decisionId = identityService.MintId(loaded.domain.name, entityName, [String(ev['ID'] ?? ev['id'])]);
           return {
             ID: decisionId,
-            ItemID: ev['ID'] ?? ev['id'],
+            ...(parentFk ? { [parentFk.fieldName]: ev['ID'] ?? ev['id'] } : {}),
             [outcomeRule.outcomeField]: outcome === 'Passed' ? outcomeRule.passedOutcomeValue : outcomeRule.failedOutcomeValue,
-            DecisionDate: decisionDate,
+            [decisionDateField]: decisionDate,
             CreatedAt: decisionDate,
           };
         },
