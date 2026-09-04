@@ -11,6 +11,15 @@ export const FieldTypeSchema = z.enum([
 ]);
 export type FieldType = z.infer<typeof FieldTypeSchema>;
 
+export const AvatarConfigSchema = z.object({
+  style: z.enum(['adventurer', 'lorelei', 'avataaars', 'bottts', 'fun-emoji', 'compact-svg']).default('adventurer'),
+  format: z.enum(['url', 'base64', 'svg']).default('url'),
+  genderField: z.string().default('Gender'),
+  seedField: z.string().default('Email'),
+  backgroundColor: z.string().optional(),
+});
+export type AvatarConfig = z.infer<typeof AvatarConfigSchema>;
+
 export const FieldConfigSchema = z.object({
   name: z.string().min(1),
   type: FieldTypeSchema,
@@ -21,6 +30,8 @@ export const FieldConfigSchema = z.object({
   mjFieldType: z.string().optional(),
   valueListType: z.string().optional(),
   values: z.array(z.union([z.string(), z.number(), z.boolean()])).optional(),
+  generator: z.string().optional(),
+  avatar: AvatarConfigSchema.optional(),
 });
 export type FieldConfig = z.infer<typeof FieldConfigSchema>;
 

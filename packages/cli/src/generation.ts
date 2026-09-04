@@ -1,4 +1,4 @@
-import { IdentityService, type RngStream } from '@memberjunction/loom-engine';
+import { IdentityService, AvatarGenerator, type RngStream } from '@memberjunction/loom-engine';
 import type { DomainConfig } from '@memberjunction/loom-contracts';
 
 export interface GenerateEntityRecordOptions {
@@ -115,7 +115,27 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
       continue;
     }
 
-    if (fieldCfg.values && fieldCfg.values.length > 0) {
+    if (fieldCfg.avatar || fieldName === 'PhotoURL' || fieldName === 'AvatarURL') {
+      const avatarCfg = fieldCfg.avatar ?? {
+        style: 'adventurer',
+        format: 'url',
+        genderField: 'Gender',
+        seedField: 'Email',
+      };
+      const genderVal = row[avatarCfg.genderField ?? 'Gender'] ?? row['Gender'];
+      const seedVal =
+        row[avatarCfg.seedField ?? 'Email'] ??
+        row['Email'] ??
+        row['ID'] ??
+        `${entity}-${i}`;
+      row[fieldName] = AvatarGenerator.Generate({
+        seed: String(seedVal),
+        gender: genderVal !== undefined && genderVal !== null ? String(genderVal) : undefined,
+        style: avatarCfg.style,
+        format: avatarCfg.format,
+        backgroundColor: avatarCfg.backgroundColor,
+      });
+    } else if (fieldCfg.values && fieldCfg.values.length > 0) {
       row[fieldName] = fieldCfg.values[(i - 1) % fieldCfg.values.length];
     } else if (fieldName === 'Name') {
       row[fieldName] = `${entity} Corp ${i}`;

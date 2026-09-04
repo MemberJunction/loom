@@ -14,24 +14,11 @@ describe('Loom Downstream Integration Test Suite: More Cheese', () => {
   let activeDataPath: string | undefined;
 
   beforeAll(async () => {
-    // Prefer sibling directory if it has the aligned ruleset; otherwise fallback to committed fixture copy
     try {
-      const commonPath = path.join(siblingDataPath, 'ruleset/common.json');
-      const raw = await fs.readFile(commonPath, 'utf8');
-      if (raw.includes('"otherwise"')) {
-        activeDataPath = siblingDataPath;
-      }
+      await fs.access(fixtureDataPath);
+      activeDataPath = fixtureDataPath;
     } catch {
-      // sibling not present or not readable
-    }
-
-    if (!activeDataPath) {
-      try {
-        await fs.access(fixtureDataPath);
-        activeDataPath = fixtureDataPath;
-      } catch {
-        activeDataPath = undefined;
-      }
+      activeDataPath = undefined;
     }
 
     if (activeDataPath) {
