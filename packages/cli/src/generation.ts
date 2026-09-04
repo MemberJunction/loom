@@ -115,35 +115,27 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
       continue;
     }
 
-    if (fieldCfg.avatar || fieldName === 'PhotoURL' || fieldName === 'AvatarURL') {
-      const avatarCfg = fieldCfg.avatar ?? {
-        style: 'adventurer',
-        format: 'url',
-        genderField: 'Gender',
-        seedField: 'Email',
-      };
-      const genderVal = row[avatarCfg.genderField ?? 'Gender'] ?? row['Gender'];
-      const seedVal =
-        row[avatarCfg.seedField ?? 'Email'] ??
-        row['Email'] ??
-        row['ID'] ??
-        `${entity}-${i}`;
+    if (fieldCfg.avatar) {
+      const avatarCfg = fieldCfg.avatar;
+      const seedKey = avatarCfg.seedField || 'ID';
+      const seedVal = row[seedKey] ?? `${entity}-${i}`;
+      const traitKey = avatarCfg.traitField || avatarCfg.genderField;
+      const traitVal = traitKey ? row[traitKey] : undefined;
       row[fieldName] = AvatarGenerator.Generate({
         seed: String(seedVal),
-        gender: genderVal !== undefined && genderVal !== null ? String(genderVal) : undefined,
+        trait: traitVal !== undefined && traitVal !== null ? String(traitVal) : undefined,
+        traits: avatarCfg.traits,
+        defaultTrait: avatarCfg.defaultTrait,
         style: avatarCfg.style,
         format: avatarCfg.format,
         backgroundColor: avatarCfg.backgroundColor,
       });
-    } else if (fieldCfg.logo || fieldName === 'LogoURL') {
-      const logoCfg = fieldCfg.logo ?? {
-        format: 'base64',
-        nameField: 'Name',
-        seedField: 'Name',
-        shape: 'auto',
-      };
-      const nameVal = row[logoCfg.nameField ?? 'Name'] ?? row['Name'] ?? entity;
-      const seedVal = row[logoCfg.seedField ?? 'Name'] ?? row['ID'] ?? `${entity}-${i}`;
+    } else if (fieldCfg.logo) {
+      const logoCfg = fieldCfg.logo;
+      const nameKey = logoCfg.nameField || 'Name';
+      const seedKey = logoCfg.seedField || 'Name';
+      const nameVal = row[nameKey] ?? `${entity}-${i}`;
+      const seedVal = row[seedKey] ?? `${entity}-${i}`;
       row[fieldName] = LogoGenerator.Generate({
         name: String(nameVal),
         seed: String(seedVal),

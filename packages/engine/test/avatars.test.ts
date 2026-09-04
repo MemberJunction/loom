@@ -6,10 +6,49 @@ describe("AvatarGenerator (Loom Deterministic Profile Image Generation)", () => 
   const femaleSeed = "elena.rodriguez.000101@lakemail.example";
   const maleSeed = "marcus.chen.000102@quillpost.example";
 
-  describe("URL Mode (DiceBear API with Gender Traits)", () => {
-    it("generates deterministic URL with feminine traits for Female gender", () => {
-      const url1 = AvatarGenerator.BuildUrl({ seed: femaleSeed, gender: "Female", style: "adventurer" });
-      const url2 = AvatarGenerator.BuildUrl({ seed: femaleSeed, gender: "Female", style: "adventurer" });
+  describe("Declarative Trait Mapping & Defaults", () => {
+    it("maps custom trait values via declared traits map", () => {
+      const longHair = AvatarGenerator.BuildSvg({
+        seed: femaleSeed,
+        trait: "F",
+        traits: { F: "long-hair", M: "short-hair" },
+        defaultTrait: "neutral",
+      });
+      const shortHair = AvatarGenerator.BuildSvg({
+        seed: femaleSeed,
+        trait: "M",
+        traits: { F: "long-hair", M: "short-hair" },
+        defaultTrait: "neutral",
+      });
+
+      expect(longHair).not.toBe(shortHair);
+    });
+
+    it("falls back to declared defaultTrait when trait is null, undefined, or unmapped", () => {
+      const neutralFromNull = AvatarGenerator.BuildSvg({
+        seed: femaleSeed,
+        trait: undefined,
+        defaultTrait: "neutral",
+      });
+      const neutralExplicit = AvatarGenerator.BuildSvg({
+        seed: femaleSeed,
+        trait: "neutral",
+      });
+
+      expect(neutralFromNull).toBe(neutralExplicit);
+    });
+
+    it("defaults to offline base64 format when no format is specified", () => {
+      const defaultOutput = AvatarGenerator.Generate({ seed: femaleSeed });
+      expect(defaultOutput.startsWith("data:image/svg+xml;base64,")).toBe(true);
+      expect(defaultOutput.length).toBeLessThan(1000);
+    });
+  });
+
+  describe("URL Mode (DiceBear API with Trait Sets)", () => {
+    it("generates deterministic URL with long-hair traits", () => {
+      const url1 = AvatarGenerator.BuildUrl({ seed: femaleSeed, trait: "long-hair", style: "adventurer" });
+      const url2 = AvatarGenerator.BuildUrl({ seed: femaleSeed, trait: "long-hair", style: "adventurer" });
       
       expect(url1).toBe(url2);
       expect(url1).toContain("https://api.dicebear.com/9.x/adventurer/svg");
@@ -18,17 +57,17 @@ describe("AvatarGenerator (Loom Deterministic Profile Image Generation)", () => 
       expect(url1).not.toContain("mustache");
     });
 
-    it("generates deterministic URL with masculine traits for Male gender", () => {
-      const url = AvatarGenerator.BuildUrl({ seed: maleSeed, gender: "Male", style: "adventurer" });
+    it("generates deterministic URL with short-hair traits", () => {
+      const url = AvatarGenerator.BuildUrl({ seed: maleSeed, trait: "short-hair", style: "adventurer" });
       
       expect(url).toContain("https://api.dicebear.com/9.x/adventurer/svg");
       expect(url).toContain("hair=short01");
       expect(url).toContain("mustache");
     });
 
-    it("supports avataaars style with gender-differentiated facialHairProbability", () => {
-      const femaleUrl = AvatarGenerator.BuildUrl({ seed: femaleSeed, gender: "Female", style: "avataaars" });
-      const maleUrl = AvatarGenerator.BuildUrl({ seed: maleSeed, gender: "Male", style: "avataaars" });
+    it("supports avataaars style with trait-differentiated facialHairProbability", () => {
+      const femaleUrl = AvatarGenerator.BuildUrl({ seed: femaleSeed, trait: "long-hair", style: "avataaars" });
+      const maleUrl = AvatarGenerator.BuildUrl({ seed: maleSeed, trait: "short-hair", style: "avataaars" });
 
       expect(femaleUrl).toContain("facialHairProbability=0");
       expect(femaleUrl).toContain("top=longHair");
@@ -39,24 +78,24 @@ describe("AvatarGenerator (Loom Deterministic Profile Image Generation)", () => 
 
   describe("Base64 / SVG Mode (Offline Vector Avatars)", () => {
     it("generates valid, deterministic SVG vectors", () => {
-      const svg1 = AvatarGenerator.BuildSvg({ seed: femaleSeed, gender: "Female" });
-      const svg2 = AvatarGenerator.BuildSvg({ seed: femaleSeed, gender: "Female" });
+      const svg1 = AvatarGenerator.BuildSvg({ seed: femaleSeed, trait: "long-hair" });
+      const svg2 = AvatarGenerator.BuildSvg({ seed: femaleSeed, trait: "long-hair" });
 
       expect(svg1).toBe(svg2);
       expect(svg1.startsWith("<svg")).toBe(true);
       expect(svg1.endsWith("</svg>")).toBe(true);
     });
 
-    it("produces distinct SVG structures for Female vs Male", () => {
-      const femaleSvg = AvatarGenerator.BuildSvg({ seed: femaleSeed, gender: "Female" });
-      const maleSvg = AvatarGenerator.BuildSvg({ seed: femaleSeed, gender: "Male" });
+    it("produces distinct SVG structures for long-hair vs short-hair traits", () => {
+      const longSvg = AvatarGenerator.BuildSvg({ seed: femaleSeed, trait: "long-hair" });
+      const shortSvg = AvatarGenerator.BuildSvg({ seed: femaleSeed, trait: "short-hair" });
 
-      expect(femaleSvg).not.toBe(maleSvg);
+      expect(longSvg).not.toBe(shortSvg);
     });
 
     it("encodes into base64 data URI strictly under 1000 characters for SQL NVARCHAR(1000) safety", () => {
-      const femaleUri = AvatarGenerator.Generate({ seed: femaleSeed, gender: "Female", format: "base64" });
-      const maleUri = AvatarGenerator.Generate({ seed: maleSeed, gender: "Male", format: "base64" });
+      const femaleUri = AvatarGenerator.Generate({ seed: femaleSeed, trait: "long-hair", format: "base64" });
+      const maleUri = AvatarGenerator.Generate({ seed: maleSeed, trait: "short-hair", format: "base64" });
 
       expect(femaleUri.startsWith("data:image/svg+xml;base64,")).toBe(true);
       expect(maleUri.startsWith("data:image/svg+xml;base64,")).toBe(true);

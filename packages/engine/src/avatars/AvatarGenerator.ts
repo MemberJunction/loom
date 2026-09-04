@@ -3,24 +3,44 @@
  *
  * Deterministic avatar generation service for entity profile images.
  * Supports:
- *  - URL mode: Deterministic DiceBear v9 API URLs with gender-tailored traits (hair styles, facial features)
- *  - Base64 / SVG mode: Self-contained offline vector cartoon SVGs fitting within database VARCHAR constraints (<1000 chars)
+ *  - Base64 / SVG mode (default): Self-contained offline vector cartoon SVGs fitting within database VARCHAR constraints (<1000 chars)
+ *  - URL mode (opt-in): Deterministic DiceBear v9 API URLs with configurable trait sets (requires external service availability)
  */
 
 export interface AvatarOptions {
   seed: string;
-  gender?: string;
-  style?: "adventurer" | "lorelei" | "avataaars" | "bottts" | "fun-emoji" | "compact-svg";
-  format?: "url" | "base64" | "svg";
+  trait?: string;
+  traits?: Record<string, string>;
+  defaultTrait?: string;
+  style?: "compact-svg" | "adventurer" | "lorelei" | "avataaars" | "bottts" | "fun-emoji";
+  format?: "base64" | "svg" | "url";
   backgroundColor?: string;
+  /** @deprecated Use trait / traits mapping instead */
+  gender?: string;
 }
 
 export class AvatarGenerator {
   /**
-   * Generates a deterministic avatar string based on format (URL, inline base64 SVG data URI, or raw SVG).
+   * Resolves a declarative trait name from configured traits mapping or fallback.
+   */
+  public static ResolveTrait(options: AvatarOptions): string {
+    const raw = (options.trait ?? options.gender ?? "").trim();
+    if (!raw) return options.defaultTrait ?? "neutral";
+    if (options.traits) {
+      if (options.traits[raw]) return options.traits[raw];
+      const lower = raw.toLowerCase();
+      for (const [k, v] of Object.entries(options.traits)) {
+        if (k.toLowerCase() === lower) return v;
+      }
+    }
+    return options.defaultTrait ?? raw;
+  }
+
+  /**
+   * Generates a deterministic avatar string based on format (inline base64 SVG data URI, raw SVG, or URL).
    */
   public static Generate(options: AvatarOptions): string {
-    const format = options.format ?? "url";
+    const format = options.format ?? "base64";
     if (format === "url") {
       return this.BuildUrl(options);
     }
@@ -33,26 +53,27 @@ export class AvatarGenerator {
   }
 
   /**
-   * Builds a deterministic DiceBear URL with gender-aware features.
+   * Builds a deterministic DiceBear URL with declarative trait sets.
+   * Note: URL mode depends on external third-party service availability (api.dicebear.com).
    */
   public static BuildUrl(options: AvatarOptions): string {
     const style = (options.style === "compact-svg" || !options.style) ? "adventurer" : options.style;
     const params = new URLSearchParams();
     params.set("seed", options.seed);
 
-    const gender = (options.gender ?? "").trim().toLowerCase();
-    const isFemale = gender === "female" || gender === "f" || gender === "woman";
-    const isMale = gender === "male" || gender === "m" || gender === "man";
+    const trait = this.ResolveTrait(options).toLowerCase();
+    const isLongHair = trait === "long-hair" || trait === "variant-a";
+    const isShortHair = trait === "short-hair" || trait === "variant-b";
 
     if (style === "adventurer") {
-      if (isFemale) {
+      if (isLongHair) {
         params.set(
           "hair",
           "long01,long02,long03,long04,long05,long06,long07,long08,long09,long10,long11,long12,long13,long14,long15,long16,long17,long18,long19,long20"
         );
         params.set("features", "blush,freckles,birthmark");
         params.set("featuresProbability", "20");
-      } else if (isMale) {
+      } else if (isShortHair) {
         params.set(
           "hair",
           "short01,short02,short03,short04,short05,short06,short07,short08,short09,short10,short11,short12,short13,short14,short15,short16"
@@ -61,13 +82,13 @@ export class AvatarGenerator {
         params.set("featuresProbability", "25");
       }
     } else if (style === "avataaars") {
-      if (isFemale) {
+      if (isLongHair) {
         params.set("facialHairProbability", "0");
         params.set(
           "top",
           "longHair,straight01,straight02,curly,dreads01,dreads02,fro,frizzle,miaWallace,bob"
         );
-      } else if (isMale) {
+      } else if (isShortHair) {
         params.set("facialHairProbability", "30");
         params.set(
           "top",
@@ -84,7 +105,7 @@ export class AvatarGenerator {
   }
 
   /**
-   * Builds an offline, lightweight deterministic cartoon vector SVG with gender differentiation.
+   * Builds an offline, lightweight deterministic cartoon vector SVG with declarative trait differentiation.
    * Total raw length is ~450-570 bytes, base64 data URI length is ~620-780 chars (guaranteed <1000 chars).
    */
   public static BuildSvg(options: AvatarOptions): string {
@@ -95,9 +116,9 @@ export class AvatarGenerator {
     }
     const h = Math.abs(hash);
 
-    const gender = (options.gender ?? "").trim().toLowerCase();
-    const isFemale = gender === "female" || gender === "f" || gender === "woman";
-    const isMale = gender === "male" || gender === "m" || gender === "man";
+    const trait = this.ResolveTrait(options).toLowerCase();
+    const isLongHair = trait === "long-hair" || trait === "variant-a";
+    const isShortHair = trait === "short-hair" || trait === "variant-b";
 
     const bgColors = ["#e0f2fe", "#fef3c7", "#dcfce7", "#f3e8ff", "#ffe4e6"];
     const skinTones = ["#f8d9b8", "#f2c59f", "#d99d6d", "#bb7744", "#8a4b27"];
@@ -110,21 +131,21 @@ export class AvatarGenerator {
     const shirt = shirtColors[(h >> 9) % shirtColors.length];
 
     let hairSvg = "";
-    if (isFemale) {
+    if (isLongHair) {
       hairSvg =
         '<path d="M28 50C28 20 72 20 72 50C76 65 76 85 70 90C66 82 66 50 66 45C66 32 34 32 34 45C34 50 34 82 30 90C24 85 24 65 28 50Z" fill="' +
         hair +
         '"/><circle cx="50" cy="38" r="17" fill="' +
         hair +
         '"/>';
-    } else if (isMale) {
+    } else if (isShortHair) {
       hairSvg = '<path d="M30 46C30 25 70 25 70 46C68 34 32 34 30 46Z" fill="' + hair + '"/>';
     } else {
       // Neutral: balanced medium cropped hair
       hairSvg = '<path d="M30 48C30 24 70 24 70 48C68 32 32 32 30 48Z" fill="' + hair + '"/>';
     }
 
-    const mustacheSvg = isMale && (h % 3 === 0)
+    const mustacheSvg = isShortHair && (h % 3 === 0)
       ? '<path d="M44 68Q50 70 56 68Q50 66 44 68" fill="' + hair + '"/>'
       : "";
 

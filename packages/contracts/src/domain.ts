@@ -12,11 +12,15 @@ export const FieldTypeSchema = z.enum([
 export type FieldType = z.infer<typeof FieldTypeSchema>;
 
 export const AvatarConfigSchema = z.object({
-  style: z.enum(['adventurer', 'lorelei', 'avataaars', 'bottts', 'fun-emoji', 'compact-svg']).default('adventurer'),
-  format: z.enum(['url', 'base64', 'svg']).default('url'),
-  genderField: z.string().default('Gender'),
-  seedField: z.string().default('Email'),
+  style: z.enum(['compact-svg', 'adventurer', 'lorelei', 'avataaars', 'bottts', 'fun-emoji']).default('compact-svg'),
+  format: z.enum(['base64', 'svg', 'url']).default('base64'),
+  traitField: z.string().optional(),
+  seedField: z.string().default('ID'),
+  traits: z.record(z.string()).optional(),
+  defaultTrait: z.string().default('neutral'),
   backgroundColor: z.string().optional(),
+  /** @deprecated Use traitField and traits instead */
+  genderField: z.string().optional(),
 });
 export const LogoConfigSchema = z.object({
   format: z.enum(['base64', 'svg']).default('base64'),
