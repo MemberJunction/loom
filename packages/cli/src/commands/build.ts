@@ -386,26 +386,17 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
           const ballotTenureRule = (loaded.domain.relationalRules ?? []).find(
             (r) => r.kind === 'date-window' && r.sourceEntity === outcomeRule.ballotEntity
           );
-          const tenureRecords = ballotTenureRule && ballotTenureRule.kind === 'date-window'
-            ? (allRecords[ballotTenureRule.windowEntity] ?? parentPool[ballotTenureRule.windowEntity] ?? [])
-            : [];
+          if (!ballotTenureRule || ballotTenureRule.kind !== 'date-window') {
+            throw new Error(`Missing required date-window rule for ${outcomeRule.ballotEntity}`);
+          }
+          const tenureRecords = allRecords[ballotTenureRule.windowEntity] ?? parentPool[ballotTenureRule.windowEntity] ?? [];
 
-          const actorFkField = ballotTenureRule && ballotTenureRule.kind === 'date-window'
-            ? ballotTenureRule.windowForeignKey
-            : 'ActorID';
-          const tenureStartField = ballotTenureRule && ballotTenureRule.kind === 'date-window'
-            ? ballotTenureRule.windowStartField
-            : 'StartDate';
-          const tenureEndField = ballotTenureRule && ballotTenureRule.kind === 'date-window'
-            ? ballotTenureRule.windowEndField
-            : 'EndDate';
-          const ballotDateField = ballotTenureRule && ballotTenureRule.kind === 'date-window'
-            ? ballotTenureRule.dateField
-            : 'Date';
+          const actorFkField = ballotTenureRule.windowForeignKey;
+          const tenureStartField = ballotTenureRule.windowStartField;
+          const tenureEndField = ballotTenureRule.windowEndField;
+          const ballotDateField = ballotTenureRule.dateField;
 
-          const roleEntityCfg = ballotTenureRule && ballotTenureRule.kind === 'date-window'
-            ? loaded.domain.entities[ballotTenureRule.windowEntity]
-            : undefined;
+          const roleEntityCfg = loaded.domain.entities[ballotTenureRule.windowEntity];
           const roleParentFk = roleEntityCfg ? Object.values(roleEntityCfg.foreignKeys)[0] : undefined;
 
           const actorIds = Array.from(new Set(tenureRecords.map((t) => String(t[actorFkField] ?? '')))).filter(Boolean);

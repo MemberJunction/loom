@@ -320,6 +320,52 @@ describe("L10-3 Governance Fixture Testbed", () => {
     expect(brokenGate?.actual).toBeGreaterThan(0);
   });
 
+  it("mutation 7 fails: custom abstainVoteValue 'Abstained' mismatch fails quorum check (R4-2)", async () => {
+    const mutantProjDir = path.join(tempDir, "mutant-proj-custom-abstain");
+    const mutantDataDir = path.join(tempDir, "mutant-data-custom-abstain");
+    await fs.cp(govFixturePath, mutantProjDir, { recursive: true });
+    await fs.cp(build1Dir, mutantDataDir, { recursive: true });
+
+    // In domain.json, set abstainVoteValue to "Abstained", quorum to 3, and abstainHandling to "count-toward-quorum"
+    const domainPath = path.join(mutantProjDir, "domain.json");
+    const domainJson = JSON.parse(await fs.readFile(domainPath, "utf8"));
+    const rule = domainJson.relationalRules.find((r: { kind: string }) => r.kind === "outcome-derived-from-ballots");
+    rule.abstainVoteValue = "Abstained";
+    rule.quorum = 3;
+    rule.abstainHandling = "count-toward-quorum";
+    await fs.writeFile(domainPath, JSON.stringify(domainJson, null, 2));
+
+    // In mutant data, find first decision that is Passed
+    const decisionFile = path.join(mutantDataDir, "Decision", "Decision.json");
+    const decisions = JSON.parse(await fs.readFile(decisionFile, "utf8"));
+    const targetDecision = decisions[0];
+    targetDecision.fields.Outcome = "Passed";
+    await fs.writeFile(decisionFile, JSON.stringify(decisions, null, 2));
+
+    // Ballots have "Abstain" (not the declared "Abstained").
+    // Because validator checks against rule.abstainVoteValue ("Abstained"),
+    // "Abstain" is not counted toward quorum, giving participants = 1 < 3 quorum, failing the gate.
+    const ballotFile = path.join(mutantDataDir, "Ballot", "Ballot.json");
+    const ballots = JSON.parse(await fs.readFile(ballotFile, "utf8"));
+    const targetDecisionId = targetDecision.primaryKey.ID;
+    const targetBallots = ballots.filter((b: { fields: { DecisionID: string } }) => b.fields.DecisionID === targetDecisionId);
+
+    targetBallots.forEach((b: { fields: { Vote: string } }, idx: number) => {
+      b.fields.Vote = idx === 0 ? "Yes" : "Abstain";
+    });
+    await fs.writeFile(ballotFile, JSON.stringify(ballots, null, 2));
+
+    const report = await executeValidate({
+      project: mutantProjDir,
+      data: mutantDataDir,
+    });
+    expect(report.passed).toBe(false);
+    const brokenGate = report.gates.find((g) => g.name.includes("decision-outcome-derived-from-ballots"));
+    expect(brokenGate).toBeDefined();
+    expect(brokenGate?.passed).toBe(false);
+    expect(brokenGate?.actual).toBeGreaterThan(0);
+  });
+
   it("verifies scripts/check-domain-vocabulary.mjs passes with 0 violations", () => {
     const rootDir = path.resolve(__dirname, "../../..");
     const result = execSync("node scripts/check-domain-vocabulary.mjs", {

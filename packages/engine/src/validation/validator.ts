@@ -1294,13 +1294,14 @@ export class Validator {
           let posVotes = 0;
           let negVotes = 0;
           let abstainVotes = 0;
+          const abstainVal = (rule.abstainVoteValue ?? 'Abstain').trim().toLowerCase();
           for (const b of ballots) {
             const voteVal = String(b[rule.ballotVoteField] ?? '').trim().toLowerCase();
             if (voteVal === rule.positiveVoteValue.toLowerCase()) {
               posVotes++;
             } else if (voteVal === rule.negativeVoteValue.toLowerCase()) {
               negVotes++;
-            } else if (voteVal === 'abstain') {
+            } else if (voteVal === abstainVal) {
               abstainVotes++;
             }
           }
