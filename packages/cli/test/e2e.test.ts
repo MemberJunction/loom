@@ -71,4 +71,21 @@ describe('Loom E2E Fixture Pipeline', () => {
     expect(report2.passed).toBe(true);
     expect(report2.failedCount).toBe(0);
   });
+
+  it('throws with the file path when a catalog file contains invalid JSON (R2-4)', async () => {
+    const catalogsDir = path.join(fixturePath, 'catalogs');
+    await fs.mkdir(catalogsDir, { recursive: true });
+    const badCatalogPath = path.join(catalogsDir, 'BadCatalog.json');
+    await fs.writeFile(badCatalogPath, '{ not valid json');
+
+    try {
+      await expect(executeValidate({ project: fixturePath, data: tempMetadataDir })).rejects.toThrow(
+        `Failed to parse catalog file '${badCatalogPath}'`
+      );
+    } finally {
+      await fs.rm(catalogsDir, { recursive: true, force: true });
+    }
+  });
 });
+
+

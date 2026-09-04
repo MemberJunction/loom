@@ -95,7 +95,14 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
   await fs.mkdir(options.outputDir, { recursive: true });
 
   // 1. Emit root .mj-sync.json for discovery by MetadataSync (findEntityDirectories)
-  const directoryOrder = computeTopologicalOrder(options.domain);
+  const topologicalEntityOrder = computeTopologicalOrder(options.domain);
+  const directoryOrder: string[] = [];
+  for (const entityKey of topologicalEntityOrder) {
+    const dir = options.domain.entities[entityKey]?.outputDirectory ?? entityKey;
+    if (!directoryOrder.includes(dir)) {
+      directoryOrder.push(dir);
+    }
+  }
   const rootSyncConfigPath = path.join(options.outputDir, '.mj-sync.json');
   const rootSyncConfig = {
     directoryOrder,
@@ -111,7 +118,8 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
     const entityCfg = options.domain.entities[entityName];
     if (!entityCfg) continue;
 
-    const entityDir = path.join(options.outputDir, entityName);
+    const dirName = entityCfg.outputDirectory ?? entityName;
+    const entityDir = path.join(options.outputDir, dirName);
 
     await fs.mkdir(entityDir, { recursive: true });
 
@@ -129,12 +137,13 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
       .map(([name]) => name);
     const pkField = pkFields[0] ?? 'ID';
 
-    // 3. Wrap records into { primaryKey, fields }
+    // 3. Wrap records into { primaryKey, fields } (never commit sync blocks)
     const wrappedRecords: SyncMetadataRecord[] = records.map((r) => {
       const primaryKey: Record<string, unknown> = {};
       const fields: Record<string, unknown> = {};
 
       for (const [k, v] of Object.entries(r)) {
+        if (k === 'sync') continue;
         if (k === pkField || pkFields.includes(k)) {
           primaryKey[k] = v;
         } else {
@@ -149,18 +158,28 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
       return { primaryKey, fields };
     });
 
+    // Filename determination: outputFileName override or dot-prefixed outputDirectory, else entityName
+    let baseFileName = entityName;
+    if (entityCfg.outputFileName) {
+      baseFileName = entityCfg.outputFileName.endsWith('.json')
+        ? entityCfg.outputFileName.slice(0, -5)
+        : entityCfg.outputFileName;
+    } else if (entityCfg.outputDirectory) {
+      baseFileName = `.${entityCfg.outputDirectory}`;
+    }
+
     // 4. Partition into .part-*.json if records exceed maxPartSize, else single file
     if (wrappedRecords.length > maxPartSize) {
       const numParts = Math.ceil(wrappedRecords.length / maxPartSize);
       for (let p = 1; p <= numParts; p++) {
         const slice = wrappedRecords.slice((p - 1) * maxPartSize, p * maxPartSize);
-        const fileName = `${entityName}.part-${String(p).padStart(2, '0')}.json`;
+        const fileName = `${baseFileName}.part-${String(p).padStart(2, '0')}.json`;
         const filePath = path.join(entityDir, fileName);
         await fs.writeFile(filePath, JSON.stringify(slice, null, 2) + '\n', 'utf8');
         writtenFiles.push(filePath);
       }
     } else {
-      const fileName = `${entityName}.json`;
+      const fileName = `${baseFileName}.json`;
       const filePath = path.join(entityDir, fileName);
       await fs.writeFile(filePath, JSON.stringify(wrappedRecords, null, 2) + '\n', 'utf8');
       writtenFiles.push(filePath);
@@ -239,10 +258,12 @@ export async function readEntityMetadata(
         );
       }
 
-      unwrappedRecords.push({
+      const row: Record<string, unknown> = {
         ...(item.primaryKey as Record<string, unknown>),
         ...(item.fields as Record<string, unknown>),
-      });
+      };
+      delete row.sync;
+      unwrappedRecords.push(row);
     }
   }
 

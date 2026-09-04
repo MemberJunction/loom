@@ -1,0 +1,14 @@
+{
+  "name": "more-cheese",
+  "version": "1.0.0",
+  "domain": "more-cheese",
+  "uuidNamespace": "8d3e9117-2b36-4078-a6fe-4c60144f8101",
+  "description": "International Cheese Foundation world model, hero personas, motifs, and retrospective simulation configuration",
+  "rulesetPath": "./ruleset",
+  "startCycle": 2019,
+  "releaseDate": "2026-09-02",
+  "cycleUnit": "year",
+  "output": {
+    "metadataDir": "./output/metadata"
+  }
+}

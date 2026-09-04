@@ -35,8 +35,65 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
     const fkIdx = fkList.findIndex((fk) => fk.fieldName === fieldName);
     if (fkIdx >= 0) {
       const fk = fkList[fkIdx]!;
+      if (fk.lookupPattern) {
+        let pattern = fk.lookupPattern;
+        const targetRows = parentPool[fk.targetEntity];
+        const parentIndex =
+          targetRows && targetRows.length > 0
+            ? (fkIdx === 0
+                ? (i - 1) % targetRows.length
+                : Math.floor((i - 1) / Math.pow(targetRows.length, fkIdx)) % targetRows.length)
+            : undefined;
+        const parent = parentIndex !== undefined && targetRows ? targetRows[parentIndex] : undefined;
+
+        if (pattern.includes('${')) {
+          pattern = pattern.replace(/\$\{([^}]+)\}/g, (_, expr: string) => {
+            const key = expr.trim();
+            if (key.startsWith('parent.')) {
+              const field = key.slice(7);
+              if (!parent) {
+                throw new Error(
+                  `lookupPattern template variable '\${${key}}' cannot be resolved: no parent record available for ${entity}.${fieldName} -> ${fk.targetEntity}`
+                );
+              }
+              const val = parent[field];
+              if (val === undefined || val === null || val === '') {
+                throw new Error(
+                  `lookupPattern template variable '\${${key}}' cannot be resolved: field '${field}' not found on parent entity '${fk.targetEntity}'`
+                );
+              }
+              return String(val);
+            }
+            if (key.startsWith('row.')) {
+              const field = key.slice(4);
+              const val = row[field];
+              if (val === undefined || val === null || val === '') {
+                throw new Error(
+                  `lookupPattern template variable '\${${key}}' cannot be resolved: field '${field}' not found on row for entity '${entity}'`
+                );
+              }
+              return String(val);
+            }
+            if (parent && parent[key] !== undefined && parent[key] !== null && parent[key] !== '') {
+              return String(parent[key]);
+            }
+            if (row[key] !== undefined && row[key] !== null && row[key] !== '') {
+              return String(row[key]);
+            }
+            throw new Error(
+              `lookupPattern template variable '\${${key}}' cannot be resolved for ${entity}.${fieldName}`
+            );
+          });
+        }
+        row[fieldName] = pattern;
+        continue;
+      }
       const targetRows = parentPool[fk.targetEntity];
       if (!targetRows || targetRows.length === 0) {
+        if (fieldCfg.defaultValue !== undefined) {
+          row[fieldName] = fieldCfg.defaultValue;
+          continue;
+        }
         throw new Error(
           `No parent records available for foreign key ${entity}.${fieldName} -> ${fk.targetEntity}`
         );

@@ -30,6 +30,7 @@ export interface LoadedProject {
   motifsManifest?: MotifsManifest;
   laddersManifest?: LaddersManifest;
   erasManifest?: ErasManifest;
+  catalogs?: Record<string, readonly Record<string, unknown>[]>;
 }
 
 function isEnoent(err: unknown): boolean {
@@ -43,26 +44,45 @@ function isEnoent(err: unknown): boolean {
  * Only ENOENT (file not found) is permitted to fall through to defaults.
  */
 export async function loadProject(projectPath: string): Promise<LoadedProject> {
-  const resolvedDir = path.resolve(process.cwd(), projectPath);
-
-  // 1. Load project manifest (project.json or loom.json)
-  let manifestRaw: string;
-  const projectJsonPath = path.join(resolvedDir, 'project.json');
-  const loomJsonPath = path.join(resolvedDir, 'loom.json');
+  const resolved = path.resolve(process.cwd(), projectPath);
+  let resolvedDir = resolved;
+  let manifestFile: string | undefined;
 
   try {
-    manifestRaw = await fs.readFile(projectJsonPath, 'utf8');
-  } catch (err) {
-    if (!isEnoent(err)) {
-      throw new Error(`Failed to read project manifest at '${projectJsonPath}': ${err instanceof Error ? err.message : String(err)}`);
+    const stat = await fs.stat(resolved);
+    if (stat.isFile()) {
+      manifestFile = resolved;
+      resolvedDir = path.dirname(resolved);
     }
+  } catch {
+    // Proceed to check resolvedDir candidates
+  }
+
+  // 1. Load project manifest (project.json, loom.json, or loom.config.json)
+  let manifestRaw = '';
+  if (manifestFile) {
     try {
-      manifestRaw = await fs.readFile(loomJsonPath, 'utf8');
-    } catch (loomErr) {
-      if (isEnoent(loomErr)) {
-        throw new Error(`No project manifest found in '${resolvedDir}' (checked project.json and loom.json)`);
+      manifestRaw = await fs.readFile(manifestFile, 'utf8');
+    } catch (err) {
+      throw new Error(`Failed to read project manifest at '${manifestFile}': ${err instanceof Error ? err.message : String(err)}`);
+    }
+  } else {
+    const candidates = ['loom.config.json', 'project.json', 'loom.json'];
+    let found = false;
+    for (const cand of candidates) {
+      const candPath = path.join(resolvedDir, cand);
+      try {
+        manifestRaw = await fs.readFile(candPath, 'utf8');
+        found = true;
+        break;
+      } catch (err) {
+        if (!isEnoent(err)) {
+          throw new Error(`Failed to read project manifest at '${candPath}': ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
-      throw new Error(`Failed to read project manifest at '${loomJsonPath}': ${loomErr instanceof Error ? loomErr.message : String(loomErr)}`);
+    }
+    if (!found) {
+      throw new Error(`No project manifest found in '${resolvedDir}' (checked ${candidates.join(', ')})`);
     }
   }
 
@@ -75,7 +95,9 @@ export async function loadProject(projectPath: string): Promise<LoadedProject> {
   const manifest = ProjectManifestSchema.parse(parsedManifestJson);
 
   // 2. Load domain config
-  const domainPath = path.join(resolvedDir, 'domain.json');
+  const domainPath = manifest.domainPath
+    ? path.resolve(resolvedDir, manifest.domainPath)
+    : path.join(resolvedDir, 'domain.json');
   let domainRaw: string;
   try {
     domainRaw = await fs.readFile(domainPath, 'utf8');
@@ -170,6 +192,77 @@ export async function loadProject(projectPath: string): Promise<LoadedProject> {
     }
   }
 
+  // 4. Load external/seed catalogs declared in manifest or discoverable in catalogs/
+  const catalogs: Record<string, readonly Record<string, unknown>[]> = {};
+  if (manifest.catalogs) {
+    for (const [entityName, catalogRelPath] of Object.entries(manifest.catalogs)) {
+      const catalogPath = path.resolve(resolvedDir, catalogRelPath);
+      try {
+        const catRaw = await fs.readFile(catalogPath, 'utf8');
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(catRaw);
+        } catch (jsonErr) {
+          throw new Error(`Failed to parse catalog file '${catalogPath}': ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`);
+        }
+        if (Array.isArray(parsed)) {
+          catalogs[entityName] = parsed;
+        } else if (parsed && typeof parsed === 'object') {
+          const obj = parsed as Record<string, unknown>;
+          if (Array.isArray(obj['records'])) {
+            catalogs[entityName] = obj['records'];
+          } else if (Array.isArray(obj['data'])) {
+            catalogs[entityName] = obj['data'];
+          } else {
+            catalogs[entityName] = [obj];
+          }
+        }
+      } catch (err) {
+        if (!isEnoent(err)) {
+          throw err instanceof Error && err.message.startsWith('Failed to parse catalog')
+            ? err
+            : new Error(`Failed to read catalog for '${entityName}' at '${catalogPath}': ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+  }
+
+  // Auto-discover catalogs in catalogs/ directory if present
+  const catalogsDir = path.join(resolvedDir, 'catalogs');
+  try {
+    const catEntries = await fs.readdir(catalogsDir, { withFileTypes: true });
+    for (const entry of catEntries) {
+      if (entry.isFile() && entry.name.endsWith('.json')) {
+        const catPath = path.join(catalogsDir, entry.name);
+        const catRaw = await fs.readFile(catPath, 'utf8');
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(catRaw);
+        } catch (jsonErr) {
+          throw new Error(`Failed to parse catalog file '${catPath}': ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`);
+        }
+        const baseName = path.basename(entry.name, '.json');
+        if (Array.isArray(parsed)) {
+          if (!catalogs[baseName]) {
+            catalogs[baseName] = parsed;
+          }
+        } else if (parsed && typeof parsed === 'object') {
+          const obj = parsed as Record<string, unknown>;
+          const entityKey = typeof obj['entity'] === 'string' ? obj['entity'] : (typeof obj['entityName'] === 'string' ? obj['entityName'] : baseName);
+          if (Array.isArray(obj['records'])) {
+            if (!catalogs[entityKey]) catalogs[entityKey] = obj['records'];
+          } else if (Array.isArray(obj['data'])) {
+            if (!catalogs[entityKey]) catalogs[entityKey] = obj['data'];
+          }
+        }
+      }
+    }
+  } catch (err) {
+    if (!isEnoent(err)) {
+      throw err;
+    }
+  }
+
   return {
     projectDir: resolvedDir,
     manifest,
@@ -179,5 +272,6 @@ export async function loadProject(projectPath: string): Promise<LoadedProject> {
     motifsManifest,
     laddersManifest,
     erasManifest,
+    catalogs,
   };
 }

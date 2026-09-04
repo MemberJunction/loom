@@ -189,4 +189,72 @@ describe('CLI Record Generator: generateEntityRecord', () => {
       report.gates.some((g) => g.name.includes('FK Closure: Child.ParentID -> Parent.ID') && g.passed)
     ).toBe(true);
   });
+
+  it('throws with field name when lookupPattern references an unresolvable template variable (R2-5)', () => {
+    const rawDomain = {
+      name: 'lookup-test',
+      namespace: namespaceUuid,
+      packs: { core: { name: 'core' } },
+      entities: {
+        Parent: {
+          name: 'Parent',
+          entityName: 'Parent',
+          targetTable: 'parent',
+          schema: 'dbo',
+          pack: 'core',
+          businessKey: ['ID'],
+          fields: {
+            ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+            Name: { name: 'Name', type: 'string' },
+          },
+          foreignKeys: {},
+          isImmutable: true,
+        },
+        Child: {
+          name: 'Child',
+          entityName: 'Child',
+          targetTable: 'child',
+          schema: 'dbo',
+          pack: 'core',
+          businessKey: ['ID'],
+          fields: {
+            ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+            RefID: {
+              name: 'RefID',
+              type: 'string',
+            },
+          },
+          foreignKeys: {
+            RefID: {
+              fieldName: 'RefID',
+              targetEntity: 'Parent',
+              targetField: 'ID',
+              cardinality: 'many-to-one',
+              lookupPattern: '@lookup:Other.Name=${parent.NoSuchField}',
+            },
+          },
+          isImmutable: true,
+        },
+      },
+    };
+
+    const parsedDomain = DomainConfigSchema.parse(rawDomain);
+    const rng = createRng(42);
+    const identityService = new IdentityService();
+    identityService.RegisterNamespace(parsedDomain.name, parsedDomain.namespace);
+
+    const parentRow = { ID: 'p-1', Name: 'Parent Name' };
+
+    expect(() =>
+      generateEntityRecord({
+        domain: parsedDomain,
+        entity: 'Child',
+        i: 1,
+        parentPool: { Parent: [parentRow] },
+        rng,
+        identityService,
+      })
+    ).toThrow(/lookupPattern template variable '\$\{parent\.NoSuchField\}' cannot be resolved/);
+  });
 });
+

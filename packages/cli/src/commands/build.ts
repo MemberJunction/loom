@@ -14,18 +14,37 @@ import {
   type SimulationNode,
   type EntityCandidate,
 } from '@memberjunction/loom-engine';
-import type { SimulationCheckpoint, HeroOutcomePin, EraConfig } from '@memberjunction/loom-contracts';
+import type { SimulationCheckpoint, HeroOutcomePin, EraConfig, FieldConfig } from '@memberjunction/loom-contracts';
 import { generateEntityRecord } from '../generation.js';
 
+function resolveComplement(targetVal: unknown, fieldCfg?: FieldConfig): unknown {
+  if (typeof targetVal === 'boolean') {
+    return !targetVal;
+  }
+  if (fieldCfg?.values && Array.isArray(fieldCfg.values) && fieldCfg.values.length === 2) {
+    const norm = String(targetVal).trim().toLowerCase();
+    const complement = fieldCfg.values.find((v) => String(v).trim().toLowerCase() !== norm);
+    if (complement !== undefined) {
+      return complement;
+    }
+  }
+  return undefined;
+}
+
 export interface BuildCommandOptions {
-  project: string;
+  project?: string;
+  config?: string;
   seed?: string;
   release?: string;
   output?: string;
 }
 
 export async function executeBuild(options: BuildCommandOptions): Promise<void> {
-  const loaded = await loadProject(options.project);
+  const projectPath = options.config ?? options.project;
+  if (!projectPath) {
+    throw new Error('Build: either --project or --config must be provided');
+  }
+  const loaded = await loadProject(projectPath);
   const seed = options.seed ? parseInt(options.seed, 10) : 42;
   const releaseDate = options.release ?? loaded.manifest.releaseDate ?? '2026-09-02';
   const asOfYear = parseInt(releaseDate.slice(0, 4), 10) || 2026;
@@ -210,11 +229,18 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
   // Create simulation DAG nodes for each entity defined in domain.json
   const bgRecordsByEntity = new Map<string, Record<string, unknown>[]>();
   const allRecords: Record<string, Record<string, unknown>[]> = {};
+  if (loaded.catalogs) {
+    for (const [catEnt, catRows] of Object.entries(loaded.catalogs)) {
+      allRecords[catEnt] = [...catRows] as Record<string, unknown>[];
+    }
+  }
 
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
     const node: SimulationNode = {
       id: `node-${entityName.toLowerCase()}`,
-      consumes: Object.values(entityCfg.foreignKeys).map((fk) => fk.targetEntity),
+      consumes: Object.values(entityCfg.foreignKeys)
+        .map((fk) => fk.targetEntity)
+        .filter((target) => target in loaded.domain.entities),
       produces: [entityName],
       description: `Generates ${entityName} records with causal factor calibration`,
       execute: async (ctx) => {
@@ -242,6 +268,13 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         const parentPool: Record<string, Record<string, unknown>[]> = {};
         for (const [pEnt, pRows] of ctx.generatedData.entries()) {
           parentPool[pEnt] = bgRecordsByEntity.get(pEnt) ?? pRows;
+        }
+        if (loaded.catalogs) {
+          for (const [catEnt, catRows] of Object.entries(loaded.catalogs)) {
+            if (!parentPool[catEnt]) {
+              parentPool[catEnt] = [...catRows] as Record<string, unknown>[];
+            }
+          }
         }
 
         // 1. Generate background records deterministically (1..targetCount)
@@ -405,9 +438,17 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
                 } else if (row[field] !== targetVal) {
                   // Row already has an alternative non-target value from base generation; keep it
                 } else {
-                  throw new Error(
-                    `Factor '${contract.id}': negative outcome for field '${entityName}.${field}' cannot be resolved. Specify an explicit 'otherwise' clause in the factor outcome.`
+                  const complement = resolveComplement(
+                    targetVal,
+                    loaded.domain.entities[entityName]?.fields[field]
                   );
+                  if (complement !== undefined) {
+                    row[field] = complement;
+                  } else {
+                    throw new Error(
+                      `Factor '${contract.id}': negative outcome for field '${entityName}.${field}' cannot be resolved. Specify an explicit 'otherwise' clause in the factor outcome.`
+                    );
+                  }
                 }
               }
             }

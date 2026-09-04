@@ -18,7 +18,8 @@ import {
 import { generateEntityRecord } from '../generation.js';
 
 export interface AccumulateCommandOptions {
-  project: string;
+  project?: string;
+  config?: string;
   priorState?: string;
   weeks?: string;
   seed?: string;
@@ -33,7 +34,11 @@ function advanceDate(baseDateStr: string, days: number): string {
 }
 
 export async function executeAccumulate(options: AccumulateCommandOptions): Promise<void> {
-  const loaded = await loadProject(options.project);
+  const projectPath = options.config ?? options.project;
+  if (!projectPath) {
+    throw new Error('Accumulate: either --project or --config must be provided');
+  }
+  const loaded = await loadProject(projectPath);
   const weeksToAdd = options.weeks ? parseInt(options.weeks, 10) : 1;
   const outputDir = options.output
     ? path.resolve(process.cwd(), options.output)
@@ -81,7 +86,8 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
   // 2. Read existing entity records from priorState
   const priorRecords: Record<string, Record<string, unknown>[]> = {};
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
-    const entityDir = path.join(priorDir, entityName);
+    const dirName = entityCfg.outputDirectory ?? entityName;
+    const entityDir = path.join(priorDir, dirName);
 
     // Only swallow if the entity directory itself does not exist (new entity added to domain)
     if (!syncFs.existsSync(entityDir)) {

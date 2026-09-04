@@ -26,68 +26,137 @@ export interface ValidationReport {
  * factor tolerance bands, and schema constraints.
  * Enforces Invariant 7: every check states the size of the population it visited.
  */
+export interface ValidateOptions {
+  factors?: readonly FactorContract[];
+  heroes?: readonly HeroConfig[];
+  eras?: readonly EraConfig[];
+  catalogs?: Record<string, readonly Record<string, unknown>[]>;
+}
+
 export class Validator {
   public Validate(
     domain: DomainConfig,
     data: Record<string, readonly Record<string, unknown>[]>,
-    factors: readonly FactorContract[] = [],
+    factorsOrOptions: readonly FactorContract[] | ValidateOptions | Record<string, readonly Record<string, unknown>[]> = [],
     heroes: readonly HeroConfig[] = [],
-    eras: readonly EraConfig[] = []
+    eras: readonly EraConfig[] = [],
+    catalogs?: Record<string, readonly Record<string, unknown>[]>
   ): ValidationReport {
+    let actualFactors: readonly FactorContract[] = [];
+    let actualHeroes: readonly HeroConfig[] = heroes;
+    let actualEras: readonly EraConfig[] = eras;
+    let actualCatalogs: Record<string, readonly Record<string, unknown>[]> | undefined = catalogs;
+
+    if (Array.isArray(factorsOrOptions)) {
+      actualFactors = factorsOrOptions;
+    } else if (factorsOrOptions && typeof factorsOrOptions === 'object') {
+      const opts = factorsOrOptions as ValidateOptions;
+      if (opts.factors !== undefined || opts.heroes !== undefined || opts.eras !== undefined || opts.catalogs !== undefined) {
+        actualFactors = opts.factors ?? [];
+        actualHeroes = opts.heroes ?? heroes;
+        actualEras = opts.eras ?? eras;
+        actualCatalogs = opts.catalogs ?? catalogs;
+      } else {
+        actualCatalogs = factorsOrOptions as Record<string, readonly Record<string, unknown>[]>;
+      }
+    }
+
     const gates: GateResult[] = [];
+
+    // Entity record lookup index: entityName -> (id -> record)
+    const entityIndex = new Map<string, Map<string, Record<string, unknown>>>();
+    const getEntityMap = (entityName: string): Map<string, Record<string, unknown>> => {
+      let map = entityIndex.get(entityName);
+      if (!map) {
+        map = new Map();
+        const records = data[entityName] ?? [];
+        for (const r of records) {
+          const rId = r['ID'] ?? r['id'];
+          if (rId !== undefined && rId !== null) {
+            map.set(String(rId).toLowerCase(), r as Record<string, unknown>);
+          }
+        }
+        entityIndex.set(entityName, map);
+      }
+      return map;
+    };
+
+    // Child records lookup index: cacheKey -> (parentId -> records[])
+    const childrenIndex = new Map<string, Map<string, Record<string, unknown>[]>>();
+    const getChildrenMap = (
+      childEntity: string,
+      parentEntity: string,
+      foreignKeyField?: string
+    ): Map<string, Record<string, unknown>[]> => {
+      const cacheKey = `${childEntity}:${parentEntity}:${foreignKeyField ?? ''}`;
+      let map = childrenIndex.get(cacheKey);
+      if (!map) {
+        map = new Map();
+        const records = data[childEntity] ?? [];
+        const entityCfg = domain.entities[childEntity];
+        const matchingFkFields: string[] = [];
+        if (foreignKeyField) {
+          matchingFkFields.push(foreignKeyField);
+        } else if (entityCfg) {
+          for (const [fkKey, fk] of Object.entries(entityCfg.foreignKeys)) {
+            if (fk.targetEntity === parentEntity || !parentEntity) {
+              matchingFkFields.push(fk.fieldName ?? fkKey);
+            }
+          }
+        }
+
+        for (const r of records) {
+          for (const fkField of matchingFkFields) {
+            const val = r[fkField];
+            if (val !== undefined && val !== null && val !== '') {
+              const norm = String(val).toLowerCase();
+              let list = map.get(norm);
+              if (!list) {
+                list = [];
+                map.set(norm, list);
+              }
+              list.push(r as Record<string, unknown>);
+            }
+          }
+        }
+        childrenIndex.set(cacheKey, map);
+      }
+      return map;
+    };
 
     // Construct relational context from available in-memory data
     const relationalCtx: RelationalContext = {
       getEntity: (entityName, id) => {
-        const records = data[entityName];
-        if (!records) return undefined;
-        const norm = id.toLowerCase();
-        return records.find((r) => {
-          const rId = r['ID'] ?? r['id'];
-          return rId && String(rId).toLowerCase() === norm;
-        });
+        return getEntityMap(entityName).get(id.toLowerCase());
       },
       getChildren: (parentEntity, parentId, childEntity, foreignKeyField) => {
-        const records = data[childEntity];
-        if (!records) return [];
-        const parentNorm = parentId.toLowerCase();
-        return records.filter((r) => {
-          if (foreignKeyField) {
-            const val = r[foreignKeyField];
-            return val && String(val).toLowerCase() === parentNorm;
-          }
-          const entityCfg = domain.entities[childEntity];
-          if (entityCfg) {
-            for (const [fkKey, fk] of Object.entries(entityCfg.foreignKeys)) {
-              if (fk.targetEntity === parentEntity || !parentEntity) {
-                const fieldName = fk.fieldName ?? fkKey;
-                const val = r[fieldName];
-                if (val && String(val).toLowerCase() === parentNorm) return true;
-              }
-            }
-          }
-          return false;
-        });
+        return getChildrenMap(childEntity, parentEntity, foreignKeyField).get(parentId.toLowerCase()) ?? [];
       },
     };
 
     // 0. Hero pins validation (Gate 0)
-    this.checkHeroPins(data, heroes, factors, relationalCtx, gates);
+    this.checkHeroPins(data, actualHeroes, actualFactors, relationalCtx, gates);
 
     // 1. Referential integrity gates
-    this.checkReferentialClosure(domain, data, gates);
+    this.checkReferentialClosure(domain, data, actualCatalogs, gates);
 
     // 2. Primary key uniqueness & non-null fields
     this.checkSchemaInvariants(domain, data, gates);
 
     // 3. Factor contract tolerance gates (pure empirical verification)
-    this.checkFactorContracts(data, factors, relationalCtx, gates);
+    this.checkFactorContracts(data, actualFactors, relationalCtx, gates);
 
     // 4. Realized Era volume and factor adjustment gates (B3)
-    this.checkRealizedEras(domain, data, eras, factors, relationalCtx, gates);
+    this.checkRealizedEras(domain, data, actualEras, actualFactors, relationalCtx, gates);
 
     // 5. Dependent child coverage gates (OrderHeader -> OrderLine & Payment)
     this.checkDependentChildCoverage(domain, data, gates);
+
+    // 6. @lookup resolution gate (M2)
+    this.checkLookupResolution(data, actualCatalogs, gates);
+
+    // 7. Relational rules gates (M2)
+    this.checkRelationalRules(domain, data, gates, actualCatalogs);
 
     const passedCount = gates.filter((g) => g.passed).length;
     const failedCount = gates.length - passedCount;
@@ -106,6 +175,7 @@ export class Validator {
   private checkReferentialClosure(
     domain: DomainConfig,
     data: Record<string, readonly Record<string, unknown>[]>,
+    catalogs: Record<string, readonly Record<string, unknown>[]> | undefined,
     gates: GateResult[]
   ): void {
     for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
@@ -118,7 +188,7 @@ export class Validator {
           );
         }
 
-        const targetRecords = data[fk.targetEntity] ?? [];
+        const targetRecords = data[fk.targetEntity] ?? (catalogs ? catalogs[fk.targetEntity] : undefined) ?? [];
         const targetIds = new Set(
           targetRecords.map((r) => {
             const raw = r[fk.targetField];
@@ -135,6 +205,13 @@ export class Validator {
           const rawVal = row[fieldName];
           if (rawVal !== undefined && rawVal !== null && rawVal !== '') {
             examinedFkCount++;
+            if (typeof rawVal === 'string' && rawVal.startsWith('@lookup:')) {
+              const res = resolveLookupExpression(rawVal, data, catalogs);
+              if (!res.resolved) {
+                danglingCount++;
+              }
+              continue;
+            }
             const normalized = typeof rawVal === 'string' ? rawVal.toLowerCase() : String(rawVal);
             if (!targetIds.has(normalized)) {
               danglingCount++;
@@ -780,4 +857,434 @@ export class Validator {
       }
     }
   }
+
+  private checkLookupResolution(
+    data: Record<string, readonly Record<string, unknown>[]>,
+    catalogs: Record<string, readonly Record<string, unknown>[]> | undefined,
+    gates: GateResult[]
+  ): void {
+    let totalLookups = 0;
+    let unresolvedCount = 0;
+    const failureMessages: string[] = [];
+
+    for (const [entityName, records] of Object.entries(data)) {
+      for (const row of records) {
+        for (const [field, val] of Object.entries(row)) {
+          if (typeof val === 'string' && val.startsWith('@lookup:')) {
+            totalLookups++;
+            const res = resolveLookupExpression(val, data, catalogs);
+            if (!res.resolved) {
+              unresolvedCount++;
+              if (failureMessages.length < 5) {
+                failureMessages.push(`${entityName}.${field}: ${res.error ?? val}`);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    const passed = unresolvedCount === 0;
+    gates.push({
+      name: 'Lookup Resolution: @lookup Expression Integrity',
+      category: 'referential',
+      passed,
+      populationCount: totalLookups,
+      message: passed
+        ? `All ${totalLookups} @lookup expression(s) resolved cleanly across dataset and catalogs`
+        : `Found ${unresolvedCount} unresolved @lookup expression(s) among ${totalLookups} examined: ${failureMessages.join('; ')}`,
+      expected: 0,
+      actual: unresolvedCount,
+    });
+  }
+
+  private checkRelationalRules(
+    domain: DomainConfig,
+    data: Record<string, readonly Record<string, unknown>[]>,
+    gates: GateResult[],
+    catalogs?: Record<string, readonly Record<string, unknown>[]>
+  ): void {
+    // 1. Build declared entities set for validation (R2-3)
+    const declaredEntityNames = new Set<string>();
+    for (const [k, cfg] of Object.entries(domain.entities)) {
+      declaredEntityNames.add(k.toLowerCase());
+      if (cfg.entityName) declaredEntityNames.add(cfg.entityName.toLowerCase());
+      if (cfg.outputDirectory) declaredEntityNames.add(cfg.outputDirectory.toLowerCase());
+      if (cfg.targetTable) declaredEntityNames.add(cfg.targetTable.toLowerCase());
+    }
+    for (const k of Object.keys(data)) {
+      declaredEntityNames.add(k.toLowerCase());
+    }
+    if (catalogs) {
+      for (const k of Object.keys(catalogs)) {
+        declaredEntityNames.add(k.toLowerCase());
+      }
+    }
+
+    const assertEntityDeclared = (entityName: string, ruleName: string) => {
+      if (!entityName || !declaredEntityNames.has(entityName.toLowerCase())) {
+        throw new Error(
+          `Relational rule '${ruleName}': unknown entity '${entityName}' referenced in rule definition. Entity must be declared in domain.entities or provided via catalogs.`
+        );
+      }
+    };
+
+    // 2. Validate all entity references upfront across all declared relational rules (R2-3)
+    for (const rule of domain.relationalRules ?? []) {
+      assertEntityDeclared(rule.sourceEntity, rule.name);
+      if (rule.kind === 'path-match') {
+        for (const segment of rule.path) {
+          const colonIdx = segment.indexOf(':');
+          const targetEntityName = colonIdx >= 0 ? segment.slice(colonIdx + 1) : '';
+          if (targetEntityName) assertEntityDeclared(targetEntityName, rule.name);
+        }
+        if (rule.inclusion) {
+          assertEntityDeclared(rule.inclusion.poolEntity, rule.name);
+        }
+      } else if (rule.kind === 'date-window') {
+        assertEntityDeclared(rule.windowEntity, rule.name);
+        if (rule.linkEntity) {
+          assertEntityDeclared(rule.linkEntity, rule.name);
+        }
+      } else if (rule.kind === 'text-contains-path') {
+        for (const segment of rule.path) {
+          const colonIdx = segment.indexOf(':');
+          const targetEntityName = colonIdx >= 0 ? segment.slice(colonIdx + 1) : '';
+          if (targetEntityName) assertEntityDeclared(targetEntityName, rule.name);
+        }
+        if (rule.childReferences) {
+          assertEntityDeclared(rule.childReferences.childEntity, rule.name);
+        }
+      }
+    }
+
+    const findRecords = (name: string): readonly Record<string, unknown>[] => {
+      const norm = name.toLowerCase();
+      for (const [k, v] of Object.entries(data)) {
+        if (k.toLowerCase() === norm) return v;
+        const cfg = domain.entities[k];
+        if (cfg) {
+          if (cfg.entityName && cfg.entityName.toLowerCase() === norm) return v;
+          if (cfg.outputDirectory && cfg.outputDirectory.toLowerCase() === norm) return v;
+          if (cfg.targetTable && cfg.targetTable.toLowerCase() === norm) return v;
+        }
+      }
+      if (catalogs) {
+        for (const [k, v] of Object.entries(catalogs)) {
+          if (k.toLowerCase() === norm) return v;
+        }
+      }
+      return [];
+    };
+
+    // Cached record-by-ID map for O(1) path hop resolution (R2-6)
+    const entityRecordById = new Map<string, Map<string, Record<string, unknown>>>();
+    const getEntityRecordMap = (entityName: string): Map<string, Record<string, unknown>> => {
+      const norm = entityName.toLowerCase();
+      let map = entityRecordById.get(norm);
+      if (!map) {
+        map = new Map();
+        const records = findRecords(entityName);
+        for (const r of records) {
+          const id = r['ID'] ?? r['id'];
+          if (id !== undefined && id !== null) {
+            map.set(String(id).toLowerCase(), r as Record<string, unknown>);
+          }
+        }
+        entityRecordById.set(norm, map);
+      }
+      return map;
+    };
+
+    for (const rule of domain.relationalRules ?? []) {
+      const sourceRecords = findRecords(rule.sourceEntity);
+      if (sourceRecords.length === 0) {
+        // R2-3: an entity with zero rows still emits a gate with populationCount: 0
+        gates.push({
+          name: `Relational Integrity: ${rule.name}`,
+          category: 'referential',
+          passed: true,
+          populationCount: 0,
+          message: `Source entity '${rule.sourceEntity}' has 0 records; rule '${rule.name}' evaluated vacuously`,
+          expected: 0,
+          actual: 0,
+        });
+        continue;
+      }
+
+      if (rule.kind === 'path-match') {
+        let invalidCount = 0;
+
+        // Pre-index inclusion pool into a Set for O(1) membership checks (R2-6)
+        let poolSet: Set<string> | undefined;
+        if (rule.inclusion) {
+          const inc = rule.inclusion;
+          const poolRecords = findRecords(inc.poolEntity);
+          poolSet = new Set<string>();
+          for (const p of poolRecords) {
+            const pItem = String(p[inc.poolItemField] ?? '').toLowerCase();
+            const pContainer = String(p[inc.poolContainerField] ?? '').toLowerCase();
+            poolSet.add(`${pItem}:${pContainer}`);
+          }
+        }
+
+        for (const row of sourceRecords) {
+          let current: Record<string, unknown> | undefined = row;
+          for (let i = 0; i < rule.path.length; i++) {
+            if (!current) break;
+            const segment = rule.path[i]!;
+            const colonIdx = segment.indexOf(':');
+            const fkField = colonIdx >= 0 ? segment.slice(0, colonIdx) : segment;
+            const targetEntityName = colonIdx >= 0 ? segment.slice(colonIdx + 1) : '';
+            const fkVal: unknown = current[fkField];
+            if (!fkVal) {
+              current = undefined;
+              break;
+            }
+            const targetMap = getEntityRecordMap(targetEntityName);
+            current = targetMap.get(String(fkVal).toLowerCase());
+          }
+
+          if (!current) {
+            invalidCount++;
+            continue;
+          }
+
+          const targetVal = current[rule.targetField];
+          if (targetVal === undefined) {
+            invalidCount++;
+            continue;
+          }
+
+          if (rule.sourceField) {
+            const sourceVal = row[rule.sourceField];
+            if (
+              sourceVal === undefined ||
+              String(sourceVal).toLowerCase() !== String(targetVal).toLowerCase()
+            ) {
+              invalidCount++;
+              continue;
+            }
+          }
+
+          if (poolSet && rule.inclusion) {
+            const inc = rule.inclusion;
+            const sourceItemVal = String(row[inc.sourceItemField] ?? '').toLowerCase();
+            const containerVal = String(targetVal).toLowerCase();
+            if (!poolSet.has(`${sourceItemVal}:${containerVal}`)) {
+              invalidCount++;
+            }
+          }
+        }
+
+        const passed = invalidCount === 0;
+        gates.push({
+          name: `Relational Integrity: ${rule.name}`,
+          category: 'referential',
+          passed,
+          populationCount: sourceRecords.length,
+          message: passed
+            ? `All ${sourceRecords.length} record(s) conform to rule '${rule.name}'`
+            : `Found ${invalidCount} record(s) violating rule '${rule.name}' across ${sourceRecords.length} records`,
+          expected: 0,
+          actual: invalidCount,
+        });
+      } else if (rule.kind === 'date-window') {
+        const windowRecords = findRecords(rule.windowEntity);
+        const linkRecords = rule.linkEntity ? findRecords(rule.linkEntity) : [];
+
+        const entityToTarget = new Map<string, string>();
+        if (rule.linkEntity && rule.linkSourceField && rule.linkTargetField) {
+          for (const l of linkRecords) {
+            const sId = String(l[rule.linkSourceField] ?? '').toLowerCase();
+            const tId = String(l[rule.linkTargetField] ?? '').toLowerCase();
+            if (sId && tId) entityToTarget.set(sId, tId);
+          }
+        }
+
+        const targetWindows = new Map<string, Array<{ start: string; end: string }>>();
+        for (const w of windowRecords) {
+          const tId = String(w[rule.windowForeignKey] ?? '').toLowerCase();
+          const rawStart = w[rule.windowStartField];
+          const rawEnd = w[rule.windowEndField];
+          const start = rawStart !== undefined && rawStart !== null && rawStart !== '' ? String(rawStart).slice(0, 10) : '';
+          const end = rawEnd !== undefined && rawEnd !== null && rawEnd !== '' ? String(rawEnd).slice(0, 10) : '\uffff';
+          if (tId) {
+            let list = targetWindows.get(tId);
+            if (!list) {
+              list = [];
+              targetWindows.set(tId, list);
+            }
+            list.push({ start, end });
+          }
+        }
+
+        let outOfWindowCount = 0;
+        let examinedCount = 0;
+
+        for (const row of sourceRecords) {
+          const rowId = String(row['ID'] ?? row['id'] ?? '').toLowerCase();
+          const targetId = entityToTarget.get(rowId) ?? String(row[rule.windowForeignKey] ?? '').toLowerCase();
+          const windows = targetId ? targetWindows.get(targetId) : undefined;
+          if (windows && windows.length > 0) {
+            examinedCount++;
+            const rawDate = String(row[rule.dateField] ?? '').slice(0, 10);
+            if (rawDate) {
+              const inWindow = windows.some((w) => rawDate >= w.start && rawDate <= w.end);
+              if (!inWindow) {
+                outOfWindowCount++;
+              }
+            }
+          } else if (rule.requireWindow) {
+            examinedCount++;
+            outOfWindowCount++;
+          }
+        }
+
+        const passed = outOfWindowCount === 0;
+        gates.push({
+          name: `Relational Integrity: ${rule.name}`,
+          category: 'referential',
+          passed,
+          populationCount: examinedCount,
+          message: passed
+            ? `All ${examinedCount} record(s) fall strictly within declared temporal window`
+            : `Found ${outOfWindowCount} record(s) outside temporal window across ${examinedCount} examined`,
+          expected: 0,
+          actual: outOfWindowCount,
+        });
+      } else if (rule.kind === 'text-contains-path') {
+        let invalidCount = 0;
+
+        // Pre-index child references by foreignKey parent ID for O(1) retrieval (R2-6)
+        const childMap = new Map<string, string[]>();
+        if (rule.childReferences) {
+          const cr = rule.childReferences;
+          const childTable = findRecords(cr.childEntity);
+          for (const child of childTable) {
+            const pId = String(child[cr.foreignKey] ?? '').toLowerCase();
+            const val = String(child[cr.childField] ?? '').trim();
+            if (val) {
+              let arr = childMap.get(pId);
+              if (!arr) {
+                arr = [];
+                childMap.set(pId, arr);
+              }
+              arr.push(val);
+            }
+          }
+        }
+
+        for (const row of sourceRecords) {
+          let current: Record<string, unknown> | undefined = row;
+          for (let i = 0; i < rule.path.length; i++) {
+            if (!current) break;
+            const segment = rule.path[i]!;
+            const colonIdx = segment.indexOf(':');
+            const fkField = colonIdx >= 0 ? segment.slice(0, colonIdx) : segment;
+            const targetEntityName = colonIdx >= 0 ? segment.slice(colonIdx + 1) : '';
+            const fkVal: unknown = current[fkField];
+            if (!fkVal) {
+              current = undefined;
+              break;
+            }
+            const targetMap = getEntityRecordMap(targetEntityName);
+            current = targetMap.get(String(fkVal).toLowerCase());
+          }
+
+          if (!current) {
+            invalidCount++;
+            continue;
+          }
+
+          const textVal = String(row[rule.textField] ?? '');
+          let missingReference = false;
+          for (const f of rule.targetFields) {
+            const refVal = String(current[f] ?? '').trim();
+            if (refVal && !textVal.includes(refVal)) {
+              missingReference = true;
+              break;
+            }
+          }
+
+          if (rule.childReferences) {
+            const parentId = String(current['ID'] ?? current['id'] ?? '').toLowerCase();
+            const childValues = childMap.get(parentId) ?? [];
+            for (const childVal of childValues) {
+              if (!textVal.includes(childVal)) {
+                missingReference = true;
+                break;
+              }
+            }
+          }
+
+          if (missingReference) {
+            invalidCount++;
+          }
+        }
+
+        const passed = invalidCount === 0;
+        gates.push({
+          name: `Relational Integrity: ${rule.name}`,
+          category: 'referential',
+          passed,
+          populationCount: sourceRecords.length,
+          message: passed
+            ? `All ${sourceRecords.length} record(s) contain required contextual references`
+            : `Found ${invalidCount} record(s) lacking required contextual references across ${sourceRecords.length} records`,
+          expected: 0,
+          actual: invalidCount,
+        });
+      }
+    }
+  }
+}
+
+/**
+ * Resolves an '@lookup:<Entity>.<Field>=<Value>' expression against in-memory simulation records
+ * or supplied external catalog datasets.
+ */
+export function resolveLookupExpression(
+  lookupExpr: string,
+  data: Record<string, readonly Record<string, unknown>[]>,
+  catalogs?: Record<string, readonly Record<string, unknown>[]>
+): { resolved: boolean; error?: string } {
+  const cleanExpr = lookupExpr.replace(/\?.*$/, ''); // strip query params like ?allowDefer
+  const match = cleanExpr.match(/^@lookup:([^.]+)\.([^=:]+)[=:](.*)$/);
+  if (!match) {
+    return { resolved: false, error: `Malformed @lookup expression: '${lookupExpr}'` };
+  }
+  const targetEntity = match[1];
+  const targetField = match[2];
+  const targetValue = match[3];
+  if (!targetEntity || !targetField || targetValue === undefined) {
+    return { resolved: false, error: `Malformed @lookup expression: '${lookupExpr}'` };
+  }
+  const normVal = targetValue.trim().toLowerCase();
+
+  const searchPool = (pool: Record<string, readonly Record<string, unknown>[]>) => {
+    for (const [eName, rows] of Object.entries(pool)) {
+      if (
+        eName.toLowerCase() === targetEntity.toLowerCase() ||
+        (rows.length > 0 && String(rows[0]?.['_entityName'] ?? rows[0]?.['__entityName'] ?? '').toLowerCase() === targetEntity.toLowerCase())
+      ) {
+        const found = rows.some((r) => {
+          const v = r[targetField];
+          return v !== undefined && v !== null && String(v).trim().toLowerCase() === normVal;
+        });
+        if (found) return true;
+      }
+    }
+    return false;
+  };
+
+  if (searchPool(data)) {
+    return { resolved: true };
+  }
+
+  if (catalogs && searchPool(catalogs)) {
+    return { resolved: true };
+  }
+
+  return { resolved: false, error: `Target record not found for lookup: ${lookupExpr}` };
 }

@@ -1,0 +1,519 @@
+{
+  "$schema": "https://memberjunction.org/schemas/loom/heroes.v1.json",
+  "heroes": [
+    {
+      "heroKey": "HERO-ICF-001",
+      "entity": "Person",
+      "businessKeys": {
+        "Email": "elena.rodriguez.000101@lakemail.example"
+      },
+      "fixedFields": {
+        "FirstName": "Elena",
+        "LastName": "Rodriguez",
+        "Title": "Head Cheesemaker"
+      },
+      "birthCycle": 2022,
+      "latentDials": {
+        "theta": 1.8,
+        "phi": 0.8
+      },
+      "ladderEntries": [
+        {
+          "ladderKey": "governance-leadership-ladder",
+          "state": "Member",
+          "enterCycle": 2023,
+          "exitCycle": 2024
+        },
+        {
+          "ladderKey": "governance-leadership-ladder",
+          "state": "Member",
+          "enterCycle": 2025,
+          "exitCycle": 2026
+        }
+      ],
+      "pins": [
+        {
+          "kind": "field",
+          "field": "Status",
+          "op": "eq",
+          "value": "Active"
+        },
+        {
+          "kind": "feature",
+          "feature": {
+            "from": "EventRegistration",
+            "where": {
+              "Attended": true
+            },
+            "aggregation": "count"
+          },
+          "op": "gte",
+          "value": 2
+        }
+      ],
+      "description": "Elena Rodriguez: Active Flagship Leader, top-decile engagement, attends annual conferences, chairs Standards Committee"
+    },
+    {
+      "heroKey": "HERO-ICF-002",
+      "entity": "Person",
+      "businessKeys": {
+        "Email": "marcus.chen.000102@quillpost.example"
+      },
+      "fixedFields": {
+        "FirstName": "Marcus",
+        "LastName": "Chen",
+        "Title": "Specialty Cheese Buyer"
+      },
+      "birthCycle": 2021,
+      "latentDials": {
+        "theta": 0.3,
+        "phi": 0.2
+      },
+      "pins": [
+        {
+          "kind": "field",
+          "field": "Status",
+          "op": "eq",
+          "value": "Active"
+        },
+        {
+          "kind": "feature",
+          "feature": {
+            "from": "MembershipPeriod",
+            "where": {
+              "Status": "PendingRenewal"
+            },
+            "aggregation": "exists"
+          },
+          "op": "eq",
+          "value": 1
+        }
+      ],
+      "description": "Marcus Chen: Pending Renewal persona in active grace window with AutoRenew=false",
+      "ladderEntries": []
+    },
+    {
+      "heroKey": "HERO-ICF-003",
+      "entity": "Person",
+      "businessKeys": {
+        "Email": "danielle.okafor.000103@mailhaven.example"
+      },
+      "fixedFields": {
+        "FirstName": "Danielle",
+        "LastName": "Okafor",
+        "Title": "Assistant Cheesemaker"
+      },
+      "birthCycle": 2024,
+      "latentDials": {
+        "theta": 0.2,
+        "phi": -0.8
+      },
+      "eras": [
+        "era-creamery-closures-2025"
+      ],
+      "pins": [
+        {
+          "kind": "feature",
+          "feature": {
+            "from": "MembershipPeriod",
+            "where": {
+              "Status": "Lapsed"
+            },
+            "aggregation": "exists"
+          },
+          "op": "eq",
+          "value": 1
+        },
+        {
+          "kind": "outcome",
+          "factor": "factor-membership-renewal",
+          "cycle": 2026,
+          "value": false
+        }
+      ],
+      "description": "Danielle Okafor: Diagnosable Lapse after employer dissolution in 2025",
+      "ladderEntries": []
+    },
+    {
+      "heroKey": "HERO-ICF-004",
+      "entity": "Person",
+      "businessKeys": {
+        "Email": "priya.natarajan.000104@postfield.example"
+      },
+      "fixedFields": {
+        "FirstName": "Priya",
+        "LastName": "Natarajan",
+        "Title": "Affinage Apprentice"
+      },
+      "birthCycle": 2025,
+      "latentDials": {
+        "theta": 1.5,
+        "phi": -0.6
+      },
+      "pins": [
+        {
+          "kind": "feature",
+          "feature": {
+            "from": "CourseEnrollment",
+            "where": {
+              "Status": "Completed"
+            },
+            "aggregation": "count"
+          },
+          "op": "gte",
+          "value": 1
+        }
+      ],
+      "description": "Priya Natarajan: The Rising Star career-changer apprentice with steep engagement trajectory",
+      "ladderEntries": []
+    },
+    {
+      "heroKey": "HERO-ICF-005",
+      "entity": "Person",
+      "businessKeys": {
+        "Email": "bob.kowalski.000105@bluebarn.example"
+      },
+      "fixedFields": {
+        "FirstName": "Bob",
+        "LastName": "Kowalski",
+        "Title": "Regional Sales Director"
+      },
+      "birthCycle": 2013,
+      "latentDials": {
+        "theta": 0.9,
+        "phi": 0.9
+      },
+      "pins": [
+        {
+          "kind": "field",
+          "field": "Status",
+          "op": "eq",
+          "value": "Active"
+        }
+      ],
+      "description": "Bob Kowalski: 13-year veteran member demonstrating churn win-back workflow",
+      "ladderEntries": []
+    },
+    {
+      "heroKey": "HERO-ICF-006",
+      "entity": "Person",
+      "businessKeys": {
+        "Email": "sofia.marchetti.000106@homestead.example"
+      },
+      "fixedFields": {
+        "FirstName": "Sofia",
+        "LastName": "Marchetti",
+        "Title": "Cheesemonger"
+      },
+      "birthCycle": 2024,
+      "latentDials": {
+        "theta": 1.2,
+        "phi": 0.3
+      },
+      "pins": [
+        {
+          "kind": "feature",
+          "feature": {
+            "from": "CourseEnrollment",
+            "aggregation": "count"
+          },
+          "op": "gte",
+          "value": 2
+        }
+      ],
+      "description": "Sofia Marchetti: The Certification Journey advancing through Certified Cheese Professional",
+      "ladderEntries": []
+    },
+    {
+      "heroKey": "HERO-ICF-007",
+      "entity": "Person",
+      "businessKeys": {
+        "Email": "henri.dubois.000107@lakemail.example"
+      },
+      "fixedFields": {
+        "FirstName": "Henri",
+        "LastName": "Dubois",
+        "Title": "Affineur & Owner"
+      },
+      "birthCycle": 2019,
+      "latentDials": {
+        "theta": 0.3,
+        "phi": 1.8
+      },
+      "pins": [
+        {
+          "kind": "field",
+          "field": "Status",
+          "op": "eq",
+          "value": "Active"
+        }
+      ],
+      "description": "Henri Dubois: The International Member representing European Jura affineur slice",
+      "ladderEntries": []
+    },
+    {
+      "heroKey": "HERO-ICF-008",
+      "entity": "Person",
+      "businessKeys": {
+        "Email": "gwen.whitfield.000108@quillpost.example"
+      },
+      "fixedFields": {
+        "FirstName": "Gwen",
+        "LastName": "Whitfield",
+        "Title": "Principal"
+      },
+      "birthCycle": 2014,
+      "latentDials": {
+        "theta": 1.6,
+        "phi": 0.3
+      },
+      "ladderEntries": [
+        {
+          "ladderKey": "governance-leadership-ladder",
+          "state": "Member",
+          "enterCycle": 2023,
+          "exitCycle": 2024
+        },
+        {
+          "ladderKey": "governance-leadership-ladder",
+          "state": "Chair",
+          "enterCycle": 2025,
+          "exitCycle": 2026
+        }
+      ],
+      "pins": [
+        {
+          "kind": "field",
+          "field": "Status",
+          "op": "eq",
+          "value": "Active"
+        }
+      ],
+      "description": "Gwen Whitfield: The Committee Chair & Governance Leader advancing to Board Chair"
+    },
+    {
+      "heroKey": "HERO-ICF-009",
+      "entity": "Person",
+      "businessKeys": {
+        "Email": "tom.reyes.000109@speltmoorfarmstead.example"
+      },
+      "fixedFields": {
+        "FirstName": "Tom",
+        "LastName": "Reyes",
+        "Title": "Owner"
+      },
+      "birthCycle": 2016,
+      "latentDials": {
+        "theta": 0.1,
+        "phi": -0.2
+      },
+      "pins": [
+        {
+          "kind": "feature",
+          "feature": {
+            "from": "AdvocacyAction",
+            "aggregation": "count"
+          },
+          "op": "gte",
+          "value": 30
+        }
+      ],
+      "description": "Tom Reyes: Grassroots Advocate with 30+ legislative actions and raw-milk testimonies",
+      "ladderEntries": []
+    },
+    {
+      "heroKey": "HERO-ICF-010",
+      "entity": "Person",
+      "businessKeys": {
+        "Email": "aisha.bell.000110@quincewickcreamery.example"
+      },
+      "fixedFields": {
+        "FirstName": "Aisha",
+        "LastName": "Bell",
+        "Title": "Quality Manager"
+      },
+      "birthCycle": 2018,
+      "latentDials": {
+        "theta": 0.4,
+        "phi": 0.3
+      },
+      "pins": [
+        {
+          "kind": "field",
+          "field": "Status",
+          "op": "eq",
+          "value": "Active"
+        }
+      ],
+      "description": "Aisha Bell: The Stale Record with employer transition demonstrating data hygiene workflows",
+      "ladderEntries": []
+    },
+    {
+      "heroKey": "HERO-ICF-011",
+      "entity": "Person",
+      "businessKeys": {
+        "Email": "kate.oleary.000111@orchardmerecheese.example"
+      },
+      "fixedFields": {
+        "FirstName": "Kate",
+        "LastName": "O'Leary",
+        "Title": "Cheese Program Director"
+      },
+      "birthCycle": 2015,
+      "latentDials": {
+        "theta": 0.7,
+        "phi": 0.1
+      },
+      "pins": [
+        {
+          "kind": "field",
+          "field": "Status",
+          "op": "eq",
+          "value": "Active"
+        }
+      ],
+      "description": "Kate O'Leary: Cleansing Pair A (Primary) for deduplication demonstration",
+      "ladderEntries": []
+    },
+    {
+      "heroKey": "HERO-ICF-012",
+      "entity": "Person",
+      "businessKeys": {
+        "Email": "kathy.oleary.000287@orchardmerecheese.example"
+      },
+      "fixedFields": {
+        "FirstName": "Kathy",
+        "LastName": "OLeary",
+        "Title": "Cheese Program Director"
+      },
+      "birthCycle": 2023,
+      "latentDials": {
+        "theta": 0.5,
+        "phi": 0.4
+      },
+      "pins": [
+        {
+          "kind": "field",
+          "field": "Status",
+          "op": "eq",
+          "value": "Active"
+        }
+      ],
+      "description": "Kathy OLeary: Cleansing Pair B (Duplicate) minted via portal with split record history",
+      "ladderEntries": []
+    },
+    {
+      "heroKey": "HERO-ICF-013",
+      "entity": "Person",
+      "businessKeys": {
+        "Email": "jamie.fuller.000113@postfield.example"
+      },
+      "fixedFields": {
+        "FirstName": "Jamie",
+        "LastName": "Fuller"
+      },
+      "birthCycle": 2023,
+      "latentDials": {
+        "theta": 2,
+        "phi": -0.5
+      },
+      "pins": [
+        {
+          "kind": "field",
+          "field": "Status",
+          "op": "eq",
+          "value": "Active"
+        }
+      ],
+      "description": "Jamie Fuller: Engagement != Revenue persona on low enthusiast tier with top activity",
+      "ladderEntries": []
+    },
+    {
+      "heroKey": "HERO-ICF-014",
+      "entity": "Person",
+      "businessKeys": {
+        "Email": "victor.sandoval.000114@reedmeredairysystems.example"
+      },
+      "fixedFields": {
+        "FirstName": "Victor",
+        "LastName": "Sandoval",
+        "Title": "VP Procurement"
+      },
+      "birthCycle": 2017,
+      "latentDials": {
+        "theta": -1.8,
+        "phi": 1.9
+      },
+      "pins": [
+        {
+          "kind": "feature",
+          "feature": {
+            "from": "MembershipPeriod",
+            "where": {
+              "AutoRenew": true
+            },
+            "aggregation": "exists"
+          },
+          "op": "eq",
+          "value": 1
+        }
+      ],
+      "description": "Victor Sandoval: Corporate Auto-Renew Ghost with zero engagement and unbroken renewals",
+      "ladderEntries": []
+    },
+    {
+      "heroKey": "HERO-ICF-015",
+      "entity": "Person",
+      "businessKeys": {
+        "Email": "nia.thompson.000115@thequietcurd.example"
+      },
+      "fixedFields": {
+        "FirstName": "Nia",
+        "LastName": "Thompson",
+        "Title": "Junior Cheesemonger"
+      },
+      "birthCycle": 2026,
+      "latentDials": {
+        "theta": 0.5,
+        "phi": -0.4
+      },
+      "pins": [
+        {
+          "kind": "field",
+          "field": "Status",
+          "op": "eq",
+          "value": "Active"
+        }
+      ],
+      "description": "Nia Thompson: Cold Start persona joined shortly before release validating scoring on priors",
+      "ladderEntries": []
+    },
+    {
+      "heroKey": "HERO-ICF-016",
+      "entity": "Person",
+      "businessKeys": {
+        "Email": "charlie.mason.000116@winterfendairy.example"
+      },
+      "fixedFields": {
+        "FirstName": "Charlie",
+        "LastName": "Mason",
+        "Title": "Cheesemaker & Co-owner"
+      },
+      "birthCycle": 2021,
+      "latentDials": {
+        "theta": 0.3,
+        "phi": 0.5
+      },
+      "pins": [
+        {
+          "kind": "field",
+          "field": "Status",
+          "op": "eq",
+          "value": "Active"
+        }
+      ],
+      "description": "Charlie Mason: Rest-of-World Tasmanian sheep dairy owner representing Southern Hemisphere",
+      "ladderEntries": []
+    }
+  ]
+}

@@ -438,4 +438,13 @@ To preserve focus on delivering the core metadata contracts and retrospective si
 | **A6 (R7-4)** | Single project-wide `cycleUnit` declared on manifest; removed `cycleUnit` from `StateLadderConfigSchema`. | Contract & CLI test: ladders strictly reject local `cycleUnit`; weekly vs yearly projects produce distinct schedules. | Completed (`ladders.test.ts`, `integration-enterprise.test.ts: A6`) |
 | **B1, B2, B3** | Realized Eras: active era volume multipliers evaluated inside cycle loop with scoped `where` matching via FK traversal, and verified via `loom validate` gate. | CLI test: 0 multiplier produces 0 rows, passes validation gate, and fails if multiplier edited to 1.0. | Completed (`integration-enterprise.test.ts: B`) |
 
+### 9. Aspirational Future Roadmap (Unticked Phased Items)
+
+The following capabilities are aspirational design goals deferred to future phases:
+- [ ] **Phase 03: Narrative Bible Authoring & Story Evolution Workflow**: Declarative long-form narrative bible authoring tools that systematically compile historical chronicles, crises, and character storylines into versioned era and hero metadata configs.
+- [ ] **Phase 04: CLI Inspection Tools (`loom inspect`)**: Interactive CLI inspection suite including `loom inspect factors` (evaluating causal graph topologies and dependency chains) and `loom inspect graph`.
+- [ ] **Phase 05: Generated In-App Residue**: Generating synthetic collaborative residue in the host application, including pre-populated dashboard views, saved filters, shared queries, and threaded messaging dialogues.
+- [ ] **Phase 06: Architectural Handbook & Documentation Suite**: Formalized handbook and reference architecture under a dedicated `docs/` tree.
+
+
 

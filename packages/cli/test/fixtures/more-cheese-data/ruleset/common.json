@@ -1,0 +1,140 @@
+{
+  "name": "common",
+  "domain": "more-cheese",
+  "catalog": {},
+  "params": {
+    "baseRenewalTarget": 0.82,
+    "annualConferenceTarget": 0.35,
+    "ccpEnrollmentTarget": 0.12,
+    "advocacyParticipationTarget": 0.20,
+    "volume_Organization": 50,
+    "volume_Person": 300,
+    "volume_MembershipPeriod": 300,
+    "volume_EventRegistration": 150,
+    "volume_CourseEnrollment": 150,
+    "volume_AdvocacyAction": 150,
+    "intake_Organization": 5,
+    "intake_Person": 20,
+    "intake_MembershipPeriod": 20,
+    "intake_EventRegistration": 10,
+    "intake_CourseEnrollment": 10,
+    "intake_AdvocacyAction": 10
+  },
+  "effects": {
+    "factor-membership-renewal": {
+      "id": "factor-membership-renewal",
+      "effect": "MembershipPeriod",
+      "target": 0.82,
+      "tolerance": 0.05,
+      "evidence": {
+        "source": "ICF Historical Membership Data 2018-2025",
+        "confidence": "high",
+        "notes": "Annual member retention baseline"
+      },
+      "outcome": {
+        "from": "self",
+        "where": {
+          "Status": "Active"
+        },
+        "otherwise": {
+          "Status": "Lapsed"
+        }
+      },
+      "arrows": {
+        "theta": {
+          "dial": "theta",
+          "beta": 0.75,
+          "description": "Engagement increases retention probability"
+        },
+        "phi": {
+          "dial": "phi",
+          "beta": 0.25,
+          "description": "Affluence moderates price-sensitivity"
+        }
+      }
+    },
+    "factor-annual-conference-attendance": {
+      "id": "factor-annual-conference-attendance",
+      "effect": "EventRegistration",
+      "target": 0.35,
+      "tolerance": 0.05,
+      "evidence": {
+        "source": "ICF Annual Conference Registration Audits",
+        "confidence": "high",
+        "notes": "Share of active members attending the annual flagship conference"
+      },
+      "outcome": {
+        "from": "self",
+        "where": {
+          "Attended": true
+        }
+      },
+      "arrows": {
+        "theta": {
+          "dial": "theta",
+          "beta": 0.80,
+          "description": "Engaged members travel to conference"
+        },
+        "phi": {
+          "dial": "phi",
+          "beta": 0.40,
+          "description": "Higher travel budget enables conference travel"
+        }
+      }
+    },
+    "factor-ccp-enrollment": {
+      "id": "factor-ccp-enrollment",
+      "effect": "CourseEnrollment",
+      "target": 0.12,
+      "tolerance": 0.04,
+      "evidence": {
+        "source": "ICF Education Commission Annual Report",
+        "confidence": "medium",
+        "notes": "Cohort rate pursuing advanced Certified Cheese Professional exam"
+      },
+      "outcome": {
+        "from": "self",
+        "where": {
+          "Status": "Completed"
+        },
+        "otherwise": {
+          "Status": "Enrolled"
+        }
+      },
+      "arrows": {
+        "theta": {
+          "dial": "theta",
+          "beta": 0.65,
+          "description": "Engaged artisans pursue professional credentials"
+        }
+      }
+    },
+    "factor-advocacy-participation": {
+      "id": "factor-advocacy-participation",
+      "effect": "AdvocacyAction",
+      "target": 0.20,
+      "tolerance": 0.04,
+      "evidence": {
+        "source": "ICF Regulatory & Legislative Committee Logs",
+        "confidence": "medium",
+        "notes": "Participation rate in raw-milk, grazing, and FDA rulemaking advocacy"
+      },
+      "outcome": {
+        "from": "self",
+        "where": {
+          "Kind": "LegislativeComment"
+        },
+        "otherwise": {
+          "Kind": "PetitionSignature"
+        }
+      },
+      "arrows": {
+        "theta": {
+          "dial": "theta",
+          "beta": 0.50,
+          "description": "Dedicated farmsteads participate heavily in policy actions"
+        }
+      }
+    }
+  }
+}
