@@ -6,7 +6,8 @@ import { executeBuild } from '../src/commands/build.js';
 import { executeValidate } from '../src/commands/validate.js';
 
 describe('Loom Downstream Integration Test Suite: More Cheese', () => {
-  const siblingDataPath = path.resolve(__dirname, '../../../../more-cheese/data');
+  // Hermetic on purpose: always read the committed fixture, not a sibling more-cheese
+  // checkout, so dirty local edits in a sibling workspace cannot make CI flaky.
   const fixtureDataPath = path.resolve(__dirname, 'fixtures/more-cheese-data');
   const tempDir = path.join(os.tmpdir(), `loom-morecheese-${Date.now()}`);
   const metaDir = path.join(tempDir, 'metadata');

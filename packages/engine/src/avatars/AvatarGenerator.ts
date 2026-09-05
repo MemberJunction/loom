@@ -15,8 +15,6 @@ export interface AvatarOptions {
   style?: "compact-svg" | "adventurer" | "lorelei" | "avataaars" | "bottts" | "fun-emoji";
   format?: "base64" | "svg" | "url";
   backgroundColor?: string;
-  /** @deprecated Use trait / traits mapping instead */
-  gender?: string;
 }
 
 export class AvatarGenerator {
@@ -24,7 +22,7 @@ export class AvatarGenerator {
    * Resolves a declarative trait name from configured traits mapping or fallback.
    */
   public static ResolveTrait(options: AvatarOptions): string {
-    const raw = (options.trait ?? options.gender ?? "").trim();
+    const raw = (options.trait ?? "").trim();
     if (!raw) return options.defaultTrait ?? "neutral";
     if (options.traits) {
       if (options.traits[raw]) return options.traits[raw];

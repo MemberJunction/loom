@@ -119,7 +119,7 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
       const avatarCfg = fieldCfg.avatar;
       const seedKey = avatarCfg.seedField || 'ID';
       const seedVal = row[seedKey] ?? `${entity}-${i}`;
-      const traitKey = avatarCfg.traitField || avatarCfg.genderField;
+      const traitKey = avatarCfg.traitField;
       const traitVal = traitKey ? row[traitKey] : undefined;
       row[fieldName] = AvatarGenerator.Generate({
         seed: String(seedVal),
@@ -133,9 +133,9 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
     } else if (fieldCfg.logo) {
       const logoCfg = fieldCfg.logo;
       const nameKey = logoCfg.nameField || 'Name';
-      const seedKey = logoCfg.seedField || 'Name';
+      const seedKey = logoCfg.seedField || 'ID';
       const nameVal = row[nameKey] ?? `${entity}-${i}`;
-      const seedVal = row[seedKey] ?? `${entity}-${i}`;
+      const seedVal = row[seedKey] ?? row['ID'] ?? `${entity}-${i}`;
       row[fieldName] = LogoGenerator.Generate({
         name: String(nameVal),
         seed: String(seedVal),

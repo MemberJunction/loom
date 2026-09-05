@@ -19,13 +19,11 @@ export const AvatarConfigSchema = z.object({
   traits: z.record(z.string()).optional(),
   defaultTrait: z.string().default('neutral'),
   backgroundColor: z.string().optional(),
-  /** @deprecated Use traitField and traits instead */
-  genderField: z.string().optional(),
 });
 export const LogoConfigSchema = z.object({
   format: z.enum(['base64', 'svg']).default('base64'),
   nameField: z.string().default('Name'),
-  seedField: z.string().default('Name'),
+  seedField: z.string().default('ID'),
   shape: z.enum(['auto', 'squircle', 'circle', 'hexagon']).default('auto'),
 });
 export type LogoConfig = z.infer<typeof LogoConfigSchema>;

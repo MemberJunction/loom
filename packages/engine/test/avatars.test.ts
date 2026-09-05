@@ -1,6 +1,15 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { LogoConfigSchema } from "@memberjunction/loom-contracts";
 import { AvatarGenerator } from "../src/avatars/AvatarGenerator.js";
 import { LogoGenerator } from "../src/avatars/LogoGenerator.js";
+
+const moreCheeseOrgsPath = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "fixtures/more-cheese-organizations.json",
+);
 
 describe("AvatarGenerator (Loom Deterministic Profile Image Generation)", () => {
   const femaleSeed = "elena.rodriguez.000101@lakemail.example";
@@ -139,5 +148,33 @@ describe("LogoGenerator (Loom Deterministic Organization Logo Generation)", () =
     expect(uri2.length).toBeLessThan(1000);
     expect(uri1.length).toBeGreaterThan(100);
     expect(uri2.length).toBeGreaterThan(100);
+  });
+
+  it("defaults LogoConfigSchema.seedField to ID", () => {
+    expect(LogoConfigSchema.parse({}).seedField).toBe("ID");
+  });
+
+  it("produces 641 distinct images for the 641 More Cheese organizations when seeded by ID", () => {
+    const orgs: { id: string; name: string }[] = JSON.parse(readFileSync(moreCheeseOrgsPath, "utf8"));
+    expect(orgs.length).toBe(641);
+
+    const images = orgs.map((org) =>
+      LogoGenerator.Generate({ name: org.name, seed: org.id, format: "base64" }),
+    );
+    const unique = new Set(images);
+    expect(unique.size).toBe(641);
+
+    for (const img of images) {
+      expect(img.startsWith("data:image/svg+xml;base64,")).toBe(true);
+      expect(img.length).toBeLessThan(1000);
+      expect(img.length).toBeGreaterThan(100);
+    }
+
+    const orchardmere = orgs.filter((org) => org.name === "Orchardmere Cheese & Provisions");
+    expect(orchardmere.length).toBe(2);
+    expect(orchardmere[0]!.id).not.toBe(orchardmere[1]!.id);
+    const a = LogoGenerator.Generate({ name: orchardmere[0]!.name, seed: orchardmere[0]!.id });
+    const b = LogoGenerator.Generate({ name: orchardmere[1]!.name, seed: orchardmere[1]!.id });
+    expect(a).not.toBe(b);
   });
 });
