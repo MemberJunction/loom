@@ -309,7 +309,7 @@ export class Validator {
     for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
       const records = data[entityName] ?? [];
       for (const [fieldName, fieldCfg] of Object.entries(entityCfg.fields)) {
-        if (fieldCfg.uniqueness !== 'generated') continue;
+        if (fieldCfg.uniqueness !== 'generated' && !fieldCfg.avatar && !fieldCfg.logo) continue;
         const values = records.map((r) => r[fieldName]).filter((v) => v !== undefined && v !== null && v !== '');
         const unique = new Set(values.map((v) => String(v)));
         const passed = unique.size === records.length && values.length === records.length;
@@ -368,13 +368,18 @@ export class Validator {
       if (!entityCfg.fields.FirstName || !entityCfg.fields.Gender) continue;
       const records = data[entityName] ?? [];
       let mismatches = 0;
-      let examined = 0;
+      let classified = 0;
+      let unclassified = 0;
       for (const row of records) {
         const gender = String(row.Gender ?? '').trim();
         if (!gender || gender.toLowerCase() === 'unknown') continue;
-        examined++;
         const inferred = IdentityService.GenderFromName(String(row.FirstName ?? ''));
-        if (inferred !== 'Unknown' && inferred.toLowerCase() !== gender.toLowerCase()) {
+        if (inferred === 'Unknown') {
+          unclassified++;
+          continue;
+        }
+        classified++;
+        if (inferred.toLowerCase() !== gender.toLowerCase()) {
           mismatches++;
         }
       }
@@ -382,11 +387,11 @@ export class Validator {
         name: `Name-Gender consistency: ${entityName}`,
         category: 'identity',
         passed: mismatches === 0,
-        populationCount: examined,
+        populationCount: classified,
         message:
           mismatches === 0
-            ? `All ${examined} gendered ${entityName} record(s) match GenderFromName`
-            : `${mismatches} of ${examined} ${entityName} record(s) disagree with GenderFromName`,
+            ? `All ${classified} classified ${entityName} record(s) match GenderFromName (${unclassified} unclassified)`
+            : `${mismatches} of ${classified} classified ${entityName} record(s) disagree with GenderFromName (${unclassified} unclassified)`,
         expected: 0,
         actual: mismatches,
       });

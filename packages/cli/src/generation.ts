@@ -1,4 +1,4 @@
-import { IdentityService, AvatarGenerator, LogoGenerator, type RngStream } from '@memberjunction/loom-engine';
+import { IdentityService, applyFieldGeneratorsToRow, type RngStream } from '@memberjunction/loom-engine';
 import type { DomainConfig } from '@memberjunction/loom-contracts';
 
 export interface GenerateEntityRecordOptions {
@@ -30,6 +30,7 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
 
   for (const [fieldName, fieldCfg] of Object.entries(entityCfg.fields)) {
     if (fieldCfg.isPrimaryKey || fieldName === 'ID' || fieldName === 'id') continue;
+    if (fieldCfg.avatar || fieldCfg.logo) continue;
 
     // Foreign key resolution: match fieldName against declared foreignKeys
     const fkIdx = fkList.findIndex((fk) => fk.fieldName === fieldName);
@@ -115,35 +116,7 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
       continue;
     }
 
-    if (fieldCfg.avatar) {
-      const avatarCfg = fieldCfg.avatar;
-      const seedKey = avatarCfg.seedField || 'ID';
-      const seedVal = row[seedKey] ?? `${entity}-${i}`;
-      const traitKey = avatarCfg.traitField;
-      const traitVal = traitKey ? row[traitKey] : undefined;
-      row[fieldName] = AvatarGenerator.Generate({
-        seed: String(seedVal),
-        trait: traitVal !== undefined && traitVal !== null ? String(traitVal) : undefined,
-        traits: avatarCfg.traits,
-        defaultTrait: avatarCfg.defaultTrait,
-        style: avatarCfg.style,
-        format: avatarCfg.format,
-        backgroundColor: avatarCfg.backgroundColor,
-        maxLength: avatarCfg.maxLength ?? fieldCfg.maxLength,
-      });
-    } else if (fieldCfg.logo) {
-      const logoCfg = fieldCfg.logo;
-      const nameKey = logoCfg.nameField || 'Name';
-      const seedKey = logoCfg.seedField || 'ID';
-      const nameVal = row[nameKey] ?? `${entity}-${i}`;
-      const seedVal = row[seedKey] ?? row['ID'] ?? `${entity}-${i}`;
-      row[fieldName] = LogoGenerator.Generate({
-        name: String(nameVal),
-        seed: String(seedVal),
-        format: logoCfg.format,
-        shape: logoCfg.shape,
-      });
-    } else if (fieldCfg.values && fieldCfg.values.length > 0) {
+    if (fieldCfg.values && fieldCfg.values.length > 0) {
       row[fieldName] = fieldCfg.values[(i - 1) % fieldCfg.values.length];
     } else if (fieldName === 'Name') {
       row[fieldName] = `${entity} Corp ${i}`;
@@ -224,5 +197,5 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
     row['ID'] = identityService.MintId(domainName, entity, [`${entity}-${i}`]);
   }
 
-  return row;
+  return applyFieldGeneratorsToRow(entityCfg, row, entity);
 }

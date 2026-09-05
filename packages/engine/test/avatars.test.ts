@@ -1,60 +1,101 @@
+import { createHash } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { LogoConfigSchema } from "@memberjunction/loom-contracts";
-import { AvatarGenerator } from "../src/avatars/AvatarGenerator.js";
+import { DomainConfigSchema, LogoConfigSchema, AvatarConfigSchema } from "@memberjunction/loom-contracts";
+import { AvatarGenerator, type DiceBearStyle } from "../src/avatars/AvatarGenerator.js";
 import { LogoGenerator } from "../src/avatars/LogoGenerator.js";
+import { applyFieldGenerators } from "../src/avatars/FieldGeneratorPass.js";
 import { IdentityService } from "../src/identity/index.js";
 import { Validator } from "../src/validation/validator.js";
 
-const moreCheeseOrgsPath = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "fixtures/more-cheese-organizations.json",
-);
+const here = dirname(fileURLToPath(import.meta.url));
+const moreCheeseOrgsPath = join(here, "fixtures/more-cheese-organizations.json");
+const cheesePersonIdsPath = join(here, "fixtures/cheese-person-ids.json");
+
+const TOON_TRAITS = {
+  Female: { rearHairProbability: 100, beardProbability: 0 },
+  Male: { rearHairProbability: 0, beardProbability: 40 },
+};
+
+const MICAH_TRAITS = {
+  Female: { hair: ["pixie", "full"], facialHairProbability: 0 },
+  Male: { hair: ["fonze", "mrT", "dannyPhantom"], facialHairProbability: 50 },
+};
+
+const LORELEI_TRAITS = {
+  Female: { hair: ["variant01", "variant02", "variant03", "variant04"], beardProbability: 0 },
+  Male: { hair: ["variant40", "variant41", "variant42", "variant43"], beardProbability: 50 },
+};
+
+const STYLE_TRAITS: Record<DiceBearStyle, Record<string, Record<string, unknown>>> = {
+  "toon-head": TOON_TRAITS,
+  micah: MICAH_TRAITS,
+  lorelei: LORELEI_TRAITS,
+};
+
+function sampleDomain(fields: Record<string, unknown>) {
+  return DomainConfigSchema.parse({
+    name: "t",
+    namespace: "00000000-0000-4000-8000-000000000001",
+    entities: {
+      Sample: {
+        name: "Sample",
+        entityName: "Sample",
+        targetTable: "Sample",
+        schema: "dbo",
+        pack: "p",
+        businessKey: ["ID"],
+        fields,
+      },
+    },
+    packs: { p: { name: "p" } },
+  });
+}
 
 describe("AvatarGenerator (Loom Deterministic Profile Image Generation)", () => {
   const femaleSeed = "elena.rodriguez.000101@lakemail.example";
   const maleSeed = "marcus.chen.000102@quillpost.example";
 
   describe("Declarative Trait Mapping & Defaults", () => {
-    it("maps custom trait values via declared traits map", () => {
+    it("maps custom trait values via declared collection options", () => {
       const longHair = AvatarGenerator.Generate({
         seed: femaleSeed,
         style: "toon-head",
-        trait: "F",
-        traits: { F: "long-hair", M: "short-hair" },
-        defaultTrait: "neutral",
+        trait: "Female",
+        traits: TOON_TRAITS,
         format: "svg",
       });
       const shortHair = AvatarGenerator.Generate({
         seed: femaleSeed,
         style: "toon-head",
-        trait: "M",
-        traits: { F: "long-hair", M: "short-hair" },
-        defaultTrait: "neutral",
+        trait: "Male",
+        traits: TOON_TRAITS,
         format: "svg",
       });
 
       expect(longHair).not.toBe(shortHair);
     });
 
-    it("falls back to declared defaultTrait when trait is null, undefined, or unmapped", () => {
-      const neutralFromNull = AvatarGenerator.Generate({
+    it("falls back to declared defaultTrait options when trait is null, undefined, or unmapped", () => {
+      const fromNull = AvatarGenerator.Generate({
         seed: femaleSeed,
         style: "toon-head",
         trait: undefined,
-        defaultTrait: "neutral",
+        defaultTrait: "Female",
+        traits: TOON_TRAITS,
         format: "svg",
       });
-      const neutralExplicit = AvatarGenerator.Generate({
+      const fromKey = AvatarGenerator.Generate({
         seed: femaleSeed,
         style: "toon-head",
-        trait: "neutral",
+        trait: "Female",
+        traits: TOON_TRAITS,
         format: "svg",
       });
 
-      expect(neutralFromNull).toBe(neutralExplicit);
+      expect(fromNull).toBe(fromKey);
     });
 
     it("defaults to offline base64 format when no format is specified", () => {
@@ -62,9 +103,25 @@ describe("AvatarGenerator (Loom Deterministic Profile Image Generation)", () => 
       expect(defaultOutput.startsWith("data:image/svg+xml;base64,")).toBe(true);
     });
 
-    it("throws on compact-svg instead of silently mapping", () => {
-      expect(() => AvatarGenerator.Generate({ seed: femaleSeed, style: "compact-svg" })).toThrow(
-        /not an offline DiceBear collection/,
+    it("rejects compact-svg at the schema and at Generate/BuildUrl", () => {
+      expect(() => AvatarConfigSchema.parse({ style: "compact-svg" })).toThrow();
+      expect(() =>
+        AvatarGenerator.Generate({ seed: femaleSeed, style: "compact-svg" as DiceBearStyle }),
+      ).toThrow(/not an offline DiceBear collection/);
+      expect(() =>
+        AvatarGenerator.BuildUrl({ seed: femaleSeed, style: "adventurer" as DiceBearStyle }),
+      ).toThrow(/not an offline DiceBear collection/);
+    });
+
+    it("rejects invalid collection option values against schema", () => {
+      expect(() => AvatarGenerator.ValidateStyleOptions("micah", { hair: ["long"] })).toThrow(
+        /invalid value 'long'/,
+      );
+      expect(() => AvatarGenerator.ValidateStyleOptions("lorelei", { hair: ["short"] })).toThrow(
+        /invalid value 'short'/,
+      );
+      expect(() => AvatarGenerator.ValidateStyleOptions("toon-head", { clothes: ["tuxedo"] })).toThrow(
+        /invalid value 'tuxedo'/,
       );
     });
 
@@ -76,51 +133,146 @@ describe("AvatarGenerator (Loom Deterministic Profile Image Generation)", () => 
   });
 
   describe("URL Mode (DiceBear API with Trait Sets)", () => {
-    it("generates deterministic URL with long-hair traits", () => {
-      const url1 = AvatarGenerator.BuildUrl({ seed: femaleSeed, trait: "long-hair", style: "toon-head" });
-      const url2 = AvatarGenerator.BuildUrl({ seed: femaleSeed, trait: "long-hair", style: "toon-head" });
+    it("generates deterministic URL with Female trait options", () => {
+      const url1 = AvatarGenerator.BuildUrl({
+        seed: femaleSeed,
+        trait: "Female",
+        traits: TOON_TRAITS,
+        style: "toon-head",
+      });
+      const url2 = AvatarGenerator.BuildUrl({
+        seed: femaleSeed,
+        trait: "Female",
+        traits: TOON_TRAITS,
+        style: "toon-head",
+      });
 
       expect(url1).toBe(url2);
       expect(url1).toContain("https://api.dicebear.com/9.x/toon-head/svg");
       expect(url1).toContain("seed=elena.rodriguez.000101%40lakemail.example");
-      expect(url1).toContain("rearHair=");
+      expect(url1).toContain("rearHairProbability=100");
       expect(url1).toContain("beardProbability=0");
     });
 
-    it("generates deterministic URL with short-hair traits", () => {
-      const url = AvatarGenerator.BuildUrl({ seed: maleSeed, trait: "short-hair", style: "toon-head" });
+    it("generates deterministic URL with Male trait options", () => {
+      const url = AvatarGenerator.BuildUrl({
+        seed: maleSeed,
+        trait: "Male",
+        traits: TOON_TRAITS,
+        style: "toon-head",
+      });
 
       expect(url).toContain("https://api.dicebear.com/9.x/toon-head/svg");
-      expect(url).toContain("hair=");
+      expect(url).toContain("rearHairProbability=0");
       expect(url).toContain("beardProbability=40");
     });
   });
 
   describe("DiceBear SVG mode", () => {
     it("generates valid, deterministic SVG vectors", () => {
-      const svg1 = AvatarGenerator.Generate({ seed: femaleSeed, style: "toon-head", trait: "long-hair", format: "svg" });
-      const svg2 = AvatarGenerator.Generate({ seed: femaleSeed, style: "toon-head", trait: "long-hair", format: "svg" });
+      const svg1 = AvatarGenerator.Generate({
+        seed: femaleSeed,
+        style: "toon-head",
+        trait: "Female",
+        traits: TOON_TRAITS,
+        format: "svg",
+      });
+      const svg2 = AvatarGenerator.Generate({
+        seed: femaleSeed,
+        style: "toon-head",
+        trait: "Female",
+        traits: TOON_TRAITS,
+        format: "svg",
+      });
 
       expect(svg1).toBe(svg2);
       expect(svg1.startsWith("<svg")).toBe(true);
       expect(svg1.includes("</svg>")).toBe(true);
     });
 
-    it("produces distinct SVG structures for long-hair vs short-hair traits", () => {
-      const longSvg = AvatarGenerator.Generate({ seed: femaleSeed, style: "toon-head", trait: "long-hair", format: "svg" });
-      const shortSvg = AvatarGenerator.Generate({ seed: femaleSeed, style: "toon-head", trait: "short-hair", format: "svg" });
+    it("produces distinct SVG structures for Female vs Male traits", () => {
+      const longSvg = AvatarGenerator.Generate({
+        seed: femaleSeed,
+        style: "toon-head",
+        trait: "Female",
+        traits: TOON_TRAITS,
+        format: "svg",
+      });
+      const shortSvg = AvatarGenerator.Generate({
+        seed: femaleSeed,
+        style: "toon-head",
+        trait: "Male",
+        traits: TOON_TRAITS,
+        format: "svg",
+      });
 
       expect(longSvg).not.toBe(shortSvg);
     });
 
     it("encodes into a base64 data URI", () => {
-      const femaleUri = AvatarGenerator.Generate({ seed: femaleSeed, trait: "long-hair", format: "base64", style: "toon-head" });
-      const maleUri = AvatarGenerator.Generate({ seed: maleSeed, trait: "short-hair", format: "base64", style: "toon-head" });
+      const femaleUri = AvatarGenerator.Generate({
+        seed: femaleSeed,
+        trait: "Female",
+        traits: TOON_TRAITS,
+        format: "base64",
+        style: "toon-head",
+      });
+      const maleUri = AvatarGenerator.Generate({
+        seed: maleSeed,
+        trait: "Male",
+        traits: TOON_TRAITS,
+        format: "base64",
+        style: "toon-head",
+      });
 
       expect(femaleUri.startsWith("data:image/svg+xml;base64,")).toBe(true);
       expect(maleUri.startsWith("data:image/svg+xml;base64,")).toBe(true);
       expect(femaleUri).not.toBe(maleUri);
       expect(femaleUri.length).toBeGreaterThan(100);
+    });
+
+    it("pins a checksum per style so skipping svgo fails", () => {
+      const pins: Record<DiceBearStyle, string> = {
+        "toon-head": "bce206ed2ae9e672fb352fb4af8a7a4ad073841f",
+        micah: "6af3cc5a19c34e9d04a40b5d4795d62a868b8824",
+        lorelei: "17324e6e1d6f86f9f9a5f1621d1dcf999e1fa90b",
+      };
+      const got: Partial<Record<DiceBearStyle, string>> = {};
+      for (const style of Object.keys(pins) as DiceBearStyle[]) {
+        const svg = AvatarGenerator.Generate({
+          seed: femaleSeed,
+          style,
+          trait: "Female",
+          traits: STYLE_TRAITS[style],
+          format: "svg",
+        });
+        const sha = createHash("sha1").update(svg).digest("hex");
+        expect(svg.length, `${style} empty svg`).toBeGreaterThan(200);
+        got[style] = sha;
+      }
+      expect(got).toEqual(pins);
+    });
+
+    it("renders 3,058 cheese Person.IDs fully distinct for every enum style", { timeout: 120_000 }, () => {
+      const people: { id: string; gender?: string | null }[] = JSON.parse(readFileSync(cheesePersonIdsPath, "utf8"));
+      expect(people.length).toBe(3058);
+      for (const style of ["toon-head", "micah", "lorelei"] as DiceBearStyle[]) {
+        const seedOnly = people.map((p) =>
+          AvatarGenerator.Generate({ seed: p.id, style, format: "svg" }),
+        );
+        expect(new Set(seedOnly).size, `${style} seed-only`).toBe(3058);
+        const mapped = people.map((p) =>
+          AvatarGenerator.Generate({
+            seed: p.id,
+            style,
+            trait: p.gender ?? undefined,
+            traits: STYLE_TRAITS[style],
+            format: "svg",
+          }),
+        );
+        expect(new Set(mapped).size, `${style} mapped`).toBe(3058);
+        expect(mapped.every((s) => s.length > 200), `${style} empty`).toBe(true);
+      }
     });
   });
 });
@@ -195,27 +347,14 @@ describe("IdentityService.GenderFromName", () => {
 });
 
 describe("Generated uniqueness and name-gender gates", () => {
-  it("fails uniqueness when two records share a generated field", () => {
-    const domain = {
-      entities: {
-        Org: {
-          name: "Org",
-          entityName: "Org",
-          targetTable: "Org",
-          schema: "dbo",
-          pack: "p",
-          businessKey: ["ID"],
-          fields: {
-            ID: { name: "ID", type: "uuid" as const, uniqueness: undefined },
-            LogoURL: { name: "LogoURL", type: "string" as const, uniqueness: "generated" as const },
-          },
-          foreignKeys: {},
-        },
-      },
-    } as any;
+  it("fails uniqueness when two records share an avatar/logo field (automatic, no flag)", () => {
+    const domain = sampleDomain({
+      ID: { name: "ID", type: "uuid" },
+      LogoURL: { name: "LogoURL", type: "string", logo: {} },
+    });
     const v = new Validator();
     const fail = v.Validate(domain, {
-      Org: [
+      Sample: [
         { ID: "1", LogoURL: "same" },
         { ID: "2", LogoURL: "same" },
       ],
@@ -223,7 +362,7 @@ describe("Generated uniqueness and name-gender gates", () => {
     const gate = fail.gates.find((g) => g.name.startsWith("Generated uniqueness"));
     expect(gate?.passed).toBe(false);
     const pass = v.Validate(domain, {
-      Org: [
+      Sample: [
         { ID: "1", LogoURL: "a" },
         { ID: "2", LogoURL: "b" },
       ],
@@ -232,32 +371,57 @@ describe("Generated uniqueness and name-gender gates", () => {
   });
 
   it("fails name-gender when Gender disagrees with GenderFromName", () => {
-    const domain = {
-      entities: {
-        Person: {
-          name: "Person",
-          entityName: "Person",
-          targetTable: "Person",
-          schema: "dbo",
-          pack: "p",
-          businessKey: ["ID"],
-          fields: {
-            ID: { name: "ID", type: "uuid" as const },
-            FirstName: { name: "FirstName", type: "string" as const },
-            Gender: { name: "Gender", type: "string" as const },
-          },
-          foreignKeys: {},
-        },
-      },
-    } as any;
+    const domain = sampleDomain({
+      ID: { name: "ID", type: "uuid" },
+      FirstName: { name: "FirstName", type: "string" },
+      Gender: { name: "Gender", type: "string" },
+    });
     const v = new Validator();
     const fail = v.Validate(domain, {
-      Person: [{ ID: "1", FirstName: "Elena", Gender: "Male" }],
+      Sample: [{ ID: "1", FirstName: "Elena", Gender: "Male" }],
     });
-    expect(fail.gates.find((g) => g.name.startsWith("Name-Gender"))?.passed).toBe(false);
+    const g = fail.gates.find((x) => x.name.startsWith("Name-Gender"));
+    expect(g?.passed).toBe(false);
+    expect(g?.populationCount).toBe(1);
+    expect(g?.message).toMatch(/0 unclassified/);
     const pass = v.Validate(domain, {
-      Person: [{ ID: "1", FirstName: "Elena", Gender: "Female" }],
+      Sample: [{ ID: "1", FirstName: "Elena", Gender: "Female" }],
     });
-    expect(pass.gates.find((g) => g.name.startsWith("Name-Gender"))?.passed).toBe(true);
+    expect(pass.gates.find((x) => x.name.startsWith("Name-Gender"))?.passed).toBe(true);
+  });
+
+  it("reports unclassified names separately from mismatches", () => {
+    const domain = sampleDomain({
+      ID: { name: "ID", type: "uuid" },
+      FirstName: { name: "FirstName", type: "string" },
+      Gender: { name: "Gender", type: "string" },
+    });
+    const v = new Validator();
+    const report = v.Validate(domain, {
+      Sample: [{ ID: "1", FirstName: "Xyzzy", Gender: "Male" }],
+    });
+    const g = report.gates.find((x) => x.name.startsWith("Name-Gender"));
+    expect(g?.passed).toBe(true);
+    expect(g?.populationCount).toBe(0);
+    expect(g?.message).toMatch(/1 unclassified/);
+  });
+});
+
+describe("applyFieldGenerators", () => {
+  it("is idempotent", () => {
+    const domain = sampleDomain({
+      ID: { name: "ID", type: "uuid" },
+      Gender: { name: "Gender", type: "string" },
+      PhotoURL: {
+        name: "PhotoURL",
+        type: "string",
+        avatar: { style: "toon-head", format: "svg", seedField: "ID", traitField: "Gender", traits: TOON_TRAITS },
+      },
+    });
+    const data = { Sample: [{ ID: "ccfa1913-af56-545a-b63a-3916ffa4318b", Gender: "Female" }] };
+    const once = applyFieldGenerators(domain, data);
+    const twice = applyFieldGenerators(domain, once);
+    expect(twice).toEqual(once);
+    expect(once.Sample?.[0]?.PhotoURL).toEqual(twice.Sample?.[0]?.PhotoURL);
   });
 });

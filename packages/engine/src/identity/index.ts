@@ -1,4 +1,14 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { v5 as uuidv5 } from 'uuid';
+
+const catalog = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'given-names.json'), 'utf8'),
+) as { female: string[]; male: string[] };
+
+const FEMALE_NAMES = new Set(catalog.female.map((n) => n.toLowerCase()));
+const MALE_NAMES = new Set(catalog.male.map((n) => n.toLowerCase()));
 
 /**
  * Deterministic Identity Service.
@@ -55,30 +65,3 @@ export class IdentityService {
     return 'Unknown';
   }
 }
-
-const FEMALE_NAMES = new Set([
-  'elena', 'maria', 'priya', 'sophia', 'emma', 'olivia', 'ava', 'mia', 'amelia',
-  'charlotte', 'harper', 'evelyn', 'abigail', 'emily', 'elizabeth', 'sofia',
-  'madison', 'avery', 'ella', 'scarlett', 'grace', 'chloe', 'camila', 'penelope',
-  'layla', 'riley', 'zoey', 'nora', 'lily', 'eleanor', 'hannah', 'lillian',
-  'addison', 'aubrey', 'ellie', 'stella', 'natalie', 'zoe', 'leah', 'hazel',
-  'violet', 'aurora', 'savannah', 'audrey', 'brooklyn', 'bella', 'claire',
-  'skylar', 'lucy', 'paisley', 'everly', 'anna', 'caroline', 'nova', 'genesis',
-  'aaliyah', 'kennedy', 'kinsley', 'allison', 'maya', 'sarah', 'madelyn', 'adeline',
-  'alexa', 'ariana', 'elena', 'gabriella', 'naomi', 'alice', 'sadie', 'hailey',
-  'eva', 'emilia', 'autumn', 'quinn', 'nevaeh', 'piper', 'ruby', 'serenity',
-  'willow', 'everleigh', 'clover', 'isla',
-]);
-
-const MALE_NAMES = new Set([
-  'marcus', 'james', 'liam', 'noah', 'oliver', 'elijah', 'william', 'henry',
-  'lucas', 'benjamin', 'theodore', 'jack', 'levi', 'alexander', 'jackson',
-  'mateo', 'daniel', 'michael', 'mason', 'sebastian', 'ethan', 'logan', 'owen',
-  'samuel', 'jacob', 'asher', 'aiden', 'john', 'joseph', 'wyatt', 'david',
-  'leo', 'luke', 'julian', 'hudson', 'grayson', 'matthew', 'ezra', 'gabriel',
-  'carter', 'isaac', 'jayden', 'luca', 'anthony', 'dylan', 'lincoln', 'thomas',
-  'maverick', 'elias', 'josiah', 'charles', 'caleb', 'christopher', 'ezekiel',
-  'miles', 'jaxon', 'isaiah', 'andrew', 'joshua', 'nathan', 'nolan', 'adrian',
-  'cameron', 'santiago', 'eli', 'aaron', 'ryan', 'angel', 'cooper', 'waylon',
-  'roman', 'easton', 'miles', 'robert', 'jameson', 'ian', 'kai', 'landon',
-]);
