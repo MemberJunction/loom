@@ -347,10 +347,10 @@ describe("IdentityService.GenderFromName", () => {
 });
 
 describe("Generated uniqueness and name-gender gates", () => {
-  it("fails uniqueness when two records share an avatar/logo field (automatic, no flag)", () => {
+  it("fails uniqueness when two records share a field marked uniqueness: generated", () => {
     const domain = sampleDomain({
       ID: { name: "ID", type: "uuid" },
-      LogoURL: { name: "LogoURL", type: "string", logo: {} },
+      LogoURL: { name: "LogoURL", type: "string", logo: {}, uniqueness: "generated" },
     });
     const v = new Validator();
     const fail = v.Validate(domain, {
