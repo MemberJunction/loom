@@ -18,7 +18,9 @@ export const AvatarConfigSchema = z.object({
   traitField: z.string().optional(),
   seedField: z.string().default('ID'),
   /** trait value (e.g. Gender) → DiceBear collection options. Validated against collection.schema. */
-  traits: z.record(z.record(z.unknown())).optional(),
+  traits: z
+    .record(z.record(z.union([z.string(), z.number(), z.boolean(), z.array(z.string())])))
+    .optional(),
   defaultTrait: z.string().optional(),
   backgroundColor: z.string().optional(),
   maxLength: z.number().int().positive().optional(),

@@ -4,9 +4,9 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DomainConfigSchema, LogoConfigSchema, AvatarConfigSchema } from "@memberjunction/loom-contracts";
-import { AvatarGenerator, type DiceBearStyle } from "../src/avatars/AvatarGenerator.js";
+import { AvatarGenerator, type DiceBearStyle, type StyleOptionsMap } from "../src/avatars/AvatarGenerator.js";
 import { LogoGenerator } from "../src/avatars/LogoGenerator.js";
-import { applyFieldGenerators } from "../src/avatars/FieldGeneratorPass.js";
+import { applyFieldGenerators, validateDomainAvatarConfigs } from "../src/avatars/FieldGeneratorPass.js";
 import { IdentityService } from "../src/identity/index.js";
 import { Validator } from "../src/validation/validator.js";
 
@@ -29,7 +29,7 @@ const LORELEI_TRAITS = {
   Male: { hair: ["variant40", "variant41", "variant42", "variant43"], beardProbability: 50 },
 };
 
-const STYLE_TRAITS: Record<DiceBearStyle, Record<string, Record<string, unknown>>> = {
+const STYLE_TRAITS: Record<DiceBearStyle, StyleOptionsMap> = {
   "toon-head": TOON_TRAITS,
   micah: MICAH_TRAITS,
   lorelei: LORELEI_TRAITS,
@@ -123,6 +123,28 @@ describe("AvatarGenerator (Loom Deterministic Profile Image Generation)", () => 
       expect(() => AvatarGenerator.ValidateStyleOptions("toon-head", { clothes: ["tuxedo"] })).toThrow(
         /invalid value 'tuxedo'/,
       );
+    });
+
+    it("rejects option values of the wrong type against schema", () => {
+      expect(() => AvatarGenerator.ValidateStyleOptions("micah", { hair: "long" })).toThrow(
+        /micah\.hair must be array, got string/,
+      );
+      expect(() => AvatarGenerator.ValidateStyleOptions("toon-head", { hair: 5 })).toThrow(
+        /toon-head\.hair must be array, got number/,
+      );
+      expect(() => AvatarGenerator.ValidateStyleOptions("toon-head", { beardProbability: "40" })).toThrow(
+        /beardProbability must be integer, got string/,
+      );
+      expect(() => AvatarGenerator.ValidateStyleOptions("toon-head", { beardProbability: 40.5 })).toThrow(
+        /beardProbability must be integer, got number/,
+      );
+      expect(() => AvatarGenerator.ValidateStyleOptions("toon-head", { beardProbability: 40 })).not.toThrow();
+    });
+
+    it("throws when defaultTrait names no traits key instead of rendering seed-only", () => {
+      expect(() =>
+        AvatarGenerator.Generate({ seed: femaleSeed, style: "toon-head", traits: TOON_TRAITS, defaultTrait: "Neutral" }),
+      ).toThrow(/defaultTrait 'Neutral' is not a key of traits/);
     });
 
     it("throws when maxLength is exceeded", () => {
@@ -253,27 +275,30 @@ describe("AvatarGenerator (Loom Deterministic Profile Image Generation)", () => 
       expect(got).toEqual(pins);
     });
 
-    it("renders 3,058 cheese Person.IDs fully distinct for every enum style", { timeout: 120_000 }, () => {
-      const people: { id: string; gender?: string | null }[] = JSON.parse(readFileSync(cheesePersonIdsPath, "utf8"));
-      expect(people.length).toBe(3058);
-      for (const style of ["toon-head", "micah", "lorelei"] as DiceBearStyle[]) {
-        const seedOnly = people.map((p) =>
-          AvatarGenerator.Generate({ seed: p.id, style, format: "svg" }),
-        );
-        expect(new Set(seedOnly).size, `${style} seed-only`).toBe(3058);
-        const mapped = people.map((p) =>
-          AvatarGenerator.Generate({
-            seed: p.id,
-            style,
-            trait: p.gender ?? undefined,
-            traits: STYLE_TRAITS[style],
-            format: "svg",
-          }),
-        );
-        expect(new Set(mapped).size, `${style} mapped`).toBe(3058);
-        expect(mapped.every((s) => s.length > 200), `${style} empty`).toBe(true);
-      }
-    });
+    // One test per style: ~6,000 renders each. The CI runner took 116 s for all three in one
+    // test against a 120 s budget; per-style tests with their own budget cannot flake that way.
+    describe.each(["toon-head", "micah", "lorelei"] as DiceBearStyle[])(
+      "renders 3,058 cheese Person.IDs fully distinct (%s)",
+      (style) => {
+        it("seed-only and Gender-mapped", { timeout: 300_000 }, () => {
+          const people: { id: string; gender?: string | null }[] = JSON.parse(readFileSync(cheesePersonIdsPath, "utf8"));
+          expect(people.length).toBe(3058);
+          const seedOnly = people.map((p) => AvatarGenerator.Generate({ seed: p.id, style, format: "svg" }));
+          expect(new Set(seedOnly).size, `${style} seed-only`).toBe(3058);
+          const mapped = people.map((p) =>
+            AvatarGenerator.Generate({
+              seed: p.id,
+              style,
+              trait: p.gender ?? undefined,
+              traits: STYLE_TRAITS[style],
+              format: "svg",
+            }),
+          );
+          expect(new Set(mapped).size, `${style} mapped`).toBe(3058);
+          expect(mapped.every((s) => s.length > 200), `${style} empty`).toBe(true);
+        });
+      },
+    );
   });
 });
 
@@ -390,6 +415,27 @@ describe("Generated uniqueness and name-gender gates", () => {
     expect(pass.gates.find((x) => x.name.startsWith("Name-Gender"))?.passed).toBe(true);
   });
 
+  it("does not score non-binary or undisclosed genders against the binary inference", () => {
+    const domain = sampleDomain({
+      ID: { name: "ID", type: "uuid" },
+      FirstName: { name: "FirstName", type: "string" },
+      Gender: { name: "Gender", type: "string" },
+    });
+    const v = new Validator();
+    const report = v.Validate(domain, {
+      Sample: [
+        { ID: "1", FirstName: "Elena", Gender: "Non-binary" },
+        { ID: "2", FirstName: "Marcus", Gender: "Prefer not to say" },
+        { ID: "3", FirstName: "Priya", Gender: "Self-described" },
+        { ID: "4", FirstName: "Marcus", Gender: "Male" },
+      ],
+    });
+    const g = report.gates.find((x) => x.name.startsWith("Name-Gender"));
+    expect(g?.passed).toBe(true);
+    expect(g?.populationCount).toBe(1);
+    expect(g?.message).toMatch(/3 non-binary\/undisclosed not applicable/);
+  });
+
   it("reports unclassified names separately from mismatches", () => {
     const domain = sampleDomain({
       ID: { name: "ID", type: "uuid" },
@@ -404,6 +450,47 @@ describe("Generated uniqueness and name-gender gates", () => {
     expect(g?.passed).toBe(true);
     expect(g?.populationCount).toBe(0);
     expect(g?.message).toMatch(/1 unclassified/);
+  });
+});
+
+describe("validateDomainAvatarConfigs", () => {
+  const avatarDomain = (avatar: Record<string, unknown>) =>
+    sampleDomain({
+      ID: { name: "ID", type: "uuid" },
+      Gender: { name: "Gender", type: "string" },
+      PhotoURL: { name: "PhotoURL", type: "string", avatar },
+    });
+
+  it("accepts the cheese-shaped configuration", () => {
+    expect(() =>
+      validateDomainAvatarConfigs(
+        avatarDomain({ style: "toon-head", traitField: "Gender", traits: TOON_TRAITS, defaultTrait: "Female" }),
+      ),
+    ).not.toThrow();
+  });
+
+  it("rejects a defaultTrait that is not a traits key", () => {
+    expect(() => validateDomainAvatarConfigs(avatarDomain({ traits: TOON_TRAITS, defaultTrait: "Neutral" }))).toThrow(
+      /Sample\.PhotoURL: avatar\.defaultTrait 'Neutral' is not a key of avatar\.traits \(Female, Male\)/,
+    );
+  });
+
+  it("rejects a traitField with no traits to map it through", () => {
+    expect(() => validateDomainAvatarConfigs(avatarDomain({ traitField: "Gender" }))).toThrow(
+      /avatar\.traitField 'Gender' is set but avatar\.traits declares no mapping/,
+    );
+    expect(() => validateDomainAvatarConfigs(avatarDomain({ traitField: "Gender", traits: {} }))).toThrow(
+      /declares no mapping/,
+    );
+  });
+
+  it("rejects trait options the collection schema refuses, by value and by type", () => {
+    expect(() =>
+      validateDomainAvatarConfigs(avatarDomain({ style: "micah", traits: { Female: { hair: ["long"] } } })),
+    ).toThrow(/invalid value 'long'/);
+    expect(() =>
+      validateDomainAvatarConfigs(avatarDomain({ style: "micah", traits: { Female: { hair: "pixie" } } })),
+    ).toThrow(/micah\.hair must be array, got string/);
   });
 });
 
