@@ -1,0 +1,11 @@
+DiceBear avatar collections bundled by @memberjunction/loom-engine
+(loom #12 WP2).
+
+- ToonHead by Johan Melin, CC BY 4.0
+  https://www.johanmelin.com
+  https://www.figma.com/community/file/1589627891082866389
+- Micah by DiceBear / CC0 (documented alternate)
+- Lorelei by DiceBear / CC0 (documented fallback)
+
+Remixes are generated at runtime via @dicebear/core and the matching
+@dicebear/<style> collection. This NOTICE must ship with the engine package.

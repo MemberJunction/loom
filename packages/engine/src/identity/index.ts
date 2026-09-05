@@ -42,4 +42,43 @@ export class IdentityService {
     const identifier = `${entity}:${keyStr}`;
     return uuidv5(identifier, namespaceUuid);
   }
+
+  /**
+   * Catalog-backed given-name → Gender. Unknown when the name is not in the
+   * catalog (loom #12 WP2). Same mapping the Name-Gender Consistency gate uses.
+   */
+  public static GenderFromName(firstName: string): 'Female' | 'Male' | 'Unknown' {
+    const key = firstName.trim().toLowerCase();
+    if (!key) return 'Unknown';
+    if (FEMALE_NAMES.has(key)) return 'Female';
+    if (MALE_NAMES.has(key)) return 'Male';
+    return 'Unknown';
+  }
 }
+
+const FEMALE_NAMES = new Set([
+  'elena', 'maria', 'priya', 'sophia', 'emma', 'olivia', 'ava', 'mia', 'amelia',
+  'charlotte', 'harper', 'evelyn', 'abigail', 'emily', 'elizabeth', 'sofia',
+  'madison', 'avery', 'ella', 'scarlett', 'grace', 'chloe', 'camila', 'penelope',
+  'layla', 'riley', 'zoey', 'nora', 'lily', 'eleanor', 'hannah', 'lillian',
+  'addison', 'aubrey', 'ellie', 'stella', 'natalie', 'zoe', 'leah', 'hazel',
+  'violet', 'aurora', 'savannah', 'audrey', 'brooklyn', 'bella', 'claire',
+  'skylar', 'lucy', 'paisley', 'everly', 'anna', 'caroline', 'nova', 'genesis',
+  'aaliyah', 'kennedy', 'kinsley', 'allison', 'maya', 'sarah', 'madelyn', 'adeline',
+  'alexa', 'ariana', 'elena', 'gabriella', 'naomi', 'alice', 'sadie', 'hailey',
+  'eva', 'emilia', 'autumn', 'quinn', 'nevaeh', 'piper', 'ruby', 'serenity',
+  'willow', 'everleigh', 'clover', 'isla',
+]);
+
+const MALE_NAMES = new Set([
+  'marcus', 'james', 'liam', 'noah', 'oliver', 'elijah', 'william', 'henry',
+  'lucas', 'benjamin', 'theodore', 'jack', 'levi', 'alexander', 'jackson',
+  'mateo', 'daniel', 'michael', 'mason', 'sebastian', 'ethan', 'logan', 'owen',
+  'samuel', 'jacob', 'asher', 'aiden', 'john', 'joseph', 'wyatt', 'david',
+  'leo', 'luke', 'julian', 'hudson', 'grayson', 'matthew', 'ezra', 'gabriel',
+  'carter', 'isaac', 'jayden', 'luca', 'anthony', 'dylan', 'lincoln', 'thomas',
+  'maverick', 'elias', 'josiah', 'charles', 'caleb', 'christopher', 'ezekiel',
+  'miles', 'jaxon', 'isaiah', 'andrew', 'joshua', 'nathan', 'nolan', 'adrian',
+  'cameron', 'santiago', 'eli', 'aaron', 'ryan', 'angel', 'cooper', 'waylon',
+  'roman', 'easton', 'miles', 'robert', 'jameson', 'ian', 'kai', 'landon',
+]);

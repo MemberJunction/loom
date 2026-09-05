@@ -129,6 +129,7 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
         style: avatarCfg.style,
         format: avatarCfg.format,
         backgroundColor: avatarCfg.backgroundColor,
+        maxLength: avatarCfg.maxLength ?? fieldCfg.maxLength,
       });
     } else if (fieldCfg.logo) {
       const logoCfg = fieldCfg.logo;
