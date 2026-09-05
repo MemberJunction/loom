@@ -370,19 +370,28 @@ export class Validator {
       let mismatches = 0;
       let classified = 0;
       let unclassified = 0;
+      let notApplicable = 0;
       for (const row of records) {
-        const gender = String(row.Gender ?? '').trim();
-        if (!gender || gender.toLowerCase() === 'unknown') continue;
+        const gender = String(row.Gender ?? '').trim().toLowerCase();
+        if (!gender || gender === 'unknown') continue;
+        if (gender !== 'female' && gender !== 'male') {
+          // GenderFromName only ever answers Female or Male. A first name says nothing
+          // about Non-binary, Prefer not to say or Self-described, so those rows are
+          // outside the gate's population rather than guaranteed mismatches.
+          notApplicable++;
+          continue;
+        }
         const inferred = IdentityService.GenderFromName(String(row.FirstName ?? ''));
         if (inferred === 'Unknown') {
           unclassified++;
           continue;
         }
         classified++;
-        if (inferred.toLowerCase() !== gender.toLowerCase()) {
+        if (inferred.toLowerCase() !== gender) {
           mismatches++;
         }
       }
+      const coverage = `${unclassified} unclassified, ${notApplicable} non-binary/undisclosed not applicable`;
       gates.push({
         name: `Name-Gender consistency: ${entityName}`,
         category: 'identity',
@@ -390,8 +399,8 @@ export class Validator {
         populationCount: classified,
         message:
           mismatches === 0
-            ? `All ${classified} classified ${entityName} record(s) match GenderFromName (${unclassified} unclassified)`
-            : `${mismatches} of ${classified} classified ${entityName} record(s) disagree with GenderFromName (${unclassified} unclassified)`,
+            ? `All ${classified} classified ${entityName} record(s) match GenderFromName (${coverage})`
+            : `${mismatches} of ${classified} classified ${entityName} record(s) disagree with GenderFromName (${coverage})`,
         expected: 0,
         actual: mismatches,
       });

@@ -23,7 +23,7 @@ export function applyFieldGeneratorsToRow(
       next[fieldName] = AvatarGenerator.Generate({
         seed: String(seedVal),
         trait: traitRaw !== undefined && traitRaw !== null ? String(traitRaw) : undefined,
-        traits: cfg.traits as Record<string, Record<string, unknown>> | undefined,
+        traits: cfg.traits,
         defaultTrait: cfg.defaultTrait,
         style: cfg.style,
         format: cfg.format,
@@ -60,18 +60,29 @@ export function applyFieldGenerators(
   return out;
 }
 
+/**
+ * Fail at `loom build` / `loom decorate` load time, not per record: an unknown style, a
+ * trait option the collection schema rejects, a `traitField` with nothing to map it to, or a
+ * `defaultTrait` that names no key would otherwise degrade silently to seed-only avatars.
+ */
 export function validateDomainAvatarConfigs(domain: DomainConfig): void {
   for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
     for (const [fieldName, fieldCfg] of Object.entries(entityCfg.fields)) {
       if (!fieldCfg.avatar) continue;
-      const style = fieldCfg.avatar.style ?? 'toon-head';
+      const where = `${entityName}.${fieldName}`;
+      const { style, traits, traitField, defaultTrait } = fieldCfg.avatar;
       if (!AvatarGenerator.IsStyle(style)) {
-        throw new Error(`${entityName}.${fieldName}: avatar.style '${style}' is not toon-head, micah, or lorelei`);
+        throw new Error(`${where}: avatar.style '${style}' is not toon-head, micah, or lorelei`);
       }
-      const traits = fieldCfg.avatar.traits ?? {};
-      for (const [traitKey, opts] of Object.entries(traits)) {
-        AvatarGenerator.ValidateStyleOptions(style, opts as Record<string, unknown>);
-        void traitKey;
+      const traitKeys = Object.keys(traits ?? {});
+      if (traitField && traitKeys.length === 0) {
+        throw new Error(`${where}: avatar.traitField '${traitField}' is set but avatar.traits declares no mapping, so the trait would be ignored`);
+      }
+      if (defaultTrait !== undefined && !traitKeys.includes(defaultTrait)) {
+        throw new Error(`${where}: avatar.defaultTrait '${defaultTrait}' is not a key of avatar.traits (${traitKeys.join(', ') || 'none'})`);
+      }
+      for (const opts of Object.values(traits ?? {})) {
+        AvatarGenerator.ValidateStyleOptions(style, opts);
       }
     }
   }

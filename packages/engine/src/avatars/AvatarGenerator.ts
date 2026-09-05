@@ -13,7 +13,10 @@ import { optimize } from 'svgo';
 
 export type DiceBearStyle = 'toon-head' | 'micah' | 'lorelei';
 
-export type StyleOptionsMap = Record<string, Record<string, unknown>>;
+/** The value shapes DiceBear collection schemas declare: enum arrays, colour arrays, integer probabilities. */
+export type StyleOptionValue = string | number | boolean | string[];
+export type StyleOptions = Record<string, StyleOptionValue>;
+export type StyleOptionsMap = Record<string, StyleOptions>;
 
 export interface AvatarOptions {
   seed: string;
@@ -31,6 +34,14 @@ const DICEBEAR_STYLES: Record<DiceBearStyle, Style<object>> = {
   micah: micah as Style<object>,
   lorelei: lorelei as Style<object>,
 };
+
+interface StyleOptionSchema {
+  type?: string;
+  items?: { type?: string; enum?: string[] };
+  enum?: string[];
+  minimum?: number;
+  maximum?: number;
+}
 
 const CORE_OPTION_KEYS = new Set([
   'seed',
@@ -57,7 +68,7 @@ export class AvatarGenerator {
     return DICEBEAR_STYLES[style];
   }
 
-  public static ResolveStyleOptions(options: AvatarOptions): Record<string, unknown> {
+  public static ResolveStyleOptions(options: AvatarOptions): StyleOptions {
     const traits = options.traits;
     if (!traits) return {};
     const raw = (options.trait ?? '').trim();
@@ -69,13 +80,17 @@ export class AvatarGenerator {
       }
     }
     const fallback = (options.defaultTrait ?? '').trim();
-    if (fallback && traits[fallback]) return traits[fallback]!;
-    return {};
+    if (!fallback) return {};
+    const fallbackOptions = traits[fallback];
+    if (!fallbackOptions) {
+      throw new Error(`AvatarGenerator: defaultTrait '${fallback}' is not a key of traits (${Object.keys(traits).join(', ')})`);
+    }
+    return fallbackOptions;
   }
 
-  public static ValidateStyleOptions(style: DiceBearStyle, styleOptions: Record<string, unknown>): void {
+  public static ValidateStyleOptions(style: DiceBearStyle, styleOptions: StyleOptions): void {
     const schema = DICEBEAR_STYLES[style].schema as
-      | { properties?: Record<string, { type?: string; items?: { enum?: string[] }; enum?: string[]; minimum?: number; maximum?: number }> }
+      | { properties?: Record<string, StyleOptionSchema> }
       | undefined;
     const props = schema?.properties ?? {};
     for (const [key, value] of Object.entries(styleOptions)) {
@@ -84,6 +99,7 @@ export class AvatarGenerator {
       if (!prop) {
         throw new Error(`AvatarGenerator: unknown option '${key}' for style '${style}'`);
       }
+      this.validateStyleOptionType(style, key, value, prop);
       if (Array.isArray(value)) {
         const allowed = prop.items?.enum;
         if (allowed) {
@@ -107,6 +123,40 @@ export class AvatarGenerator {
           throw new Error(`AvatarGenerator: ${style}.${key}=${value} above maximum ${prop.maximum}`);
         }
       }
+    }
+  }
+
+  /**
+   * The schema's `type` is authoritative. A string where the collection wants an array
+   * (`hair: 'long'`) or a string where it wants an integer (`beardProbability: '40'`) is
+   * accepted by DiceBear without complaint and silently renders something else, which is
+   * exactly the misconfiguration this validator exists to refuse.
+   */
+  private static validateStyleOptionType(
+    style: DiceBearStyle,
+    key: string,
+    value: StyleOptionValue,
+    prop: StyleOptionSchema,
+  ): void {
+    const expected = prop.type;
+    if (!expected) return;
+    const actual = Array.isArray(value) ? 'array' : typeof value;
+    let ok: boolean;
+    switch (expected) {
+      case 'array':
+        ok = Array.isArray(value) && value.every((v) => typeof v === 'string');
+        break;
+      case 'integer':
+        ok = typeof value === 'number' && Number.isInteger(value);
+        break;
+      case 'number':
+        ok = typeof value === 'number';
+        break;
+      default:
+        ok = actual === expected;
+    }
+    if (!ok) {
+      throw new Error(`AvatarGenerator: ${style}.${key} must be ${expected}, got ${actual} (${JSON.stringify(value)})`);
     }
   }
 
