@@ -11,6 +11,23 @@ export const FieldTypeSchema = z.enum([
 ]);
 export type FieldType = z.infer<typeof FieldTypeSchema>;
 
+export const AvatarConfigSchema = z.object({
+  style: z.enum(['compact-svg', 'adventurer', 'lorelei', 'avataaars', 'bottts', 'fun-emoji']).default('compact-svg'),
+  format: z.enum(['base64', 'svg', 'url']).default('base64'),
+  traitField: z.string().optional(),
+  seedField: z.string().default('ID'),
+  traits: z.record(z.string()).optional(),
+  defaultTrait: z.string().default('neutral'),
+  backgroundColor: z.string().optional(),
+});
+export const LogoConfigSchema = z.object({
+  format: z.enum(['base64', 'svg']).default('base64'),
+  nameField: z.string().default('Name'),
+  seedField: z.string().default('ID'),
+  shape: z.enum(['auto', 'squircle', 'circle', 'hexagon']).default('auto'),
+});
+export type LogoConfig = z.infer<typeof LogoConfigSchema>;
+
 export const FieldConfigSchema = z.object({
   name: z.string().min(1),
   type: FieldTypeSchema,
@@ -21,6 +38,9 @@ export const FieldConfigSchema = z.object({
   mjFieldType: z.string().optional(),
   valueListType: z.string().optional(),
   values: z.array(z.union([z.string(), z.number(), z.boolean()])).optional(),
+  generator: z.string().optional(),
+  avatar: AvatarConfigSchema.optional(),
+  logo: LogoConfigSchema.optional(),
 });
 export type FieldConfig = z.infer<typeof FieldConfigSchema>;
 

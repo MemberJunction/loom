@@ -13,3 +13,5 @@ export * from './heroes/HeroInjector.js';
 export * from './motifs/MotifSampler.js';
 export * from './ladders/StateLadderEngine.js';
 export * from './simulation/RetrospectiveUnroller.js';
+export * from './avatars/AvatarGenerator.js';
+export * from './avatars/LogoGenerator.js';
