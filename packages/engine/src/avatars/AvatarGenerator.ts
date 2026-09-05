@@ -87,10 +87,10 @@ export class AvatarGenerator {
       if (Array.isArray(value)) {
         const allowed = prop.items?.enum;
         if (allowed) {
-          for (const item of value) {
-            if (!allowed.includes(String(item))) {
+          for (const entry of value) {
+            if (!allowed.includes(String(entry))) {
               throw new Error(
-                `AvatarGenerator: invalid value '${item}' for '${style}.${key}' (allowed: ${allowed.join(', ')})`,
+                `AvatarGenerator: invalid value '${entry}' for '${style}.${key}' (allowed: ${allowed.join(', ')})`,
               );
             }
           }
