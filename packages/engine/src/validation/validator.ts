@@ -309,7 +309,7 @@ export class Validator {
     for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
       const records = data[entityName] ?? [];
       for (const [fieldName, fieldCfg] of Object.entries(entityCfg.fields)) {
-        if (fieldCfg.uniqueness !== 'generated' && !fieldCfg.avatar && !fieldCfg.logo) continue;
+        if (fieldCfg.uniqueness !== 'generated') continue;
         const values = records.map((r) => r[fieldName]).filter((v) => v !== undefined && v !== null && v !== '');
         const unique = new Set(values.map((v) => String(v)));
         const passed = unique.size === records.length && values.length === records.length;
