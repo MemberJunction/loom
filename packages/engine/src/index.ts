@@ -15,3 +15,4 @@ export * from './ladders/StateLadderEngine.js';
 export * from './simulation/RetrospectiveUnroller.js';
 export * from './avatars/AvatarGenerator.js';
 export * from './avatars/LogoGenerator.js';
+export * from './avatars/FieldGeneratorPass.js';

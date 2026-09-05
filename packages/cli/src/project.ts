@@ -20,6 +20,7 @@ import {
   type LaddersManifest,
   type ErasManifest,
 } from '@memberjunction/loom-contracts';
+import { validateDomainAvatarConfigs } from '@memberjunction/loom-engine';
 
 export interface LoadedProject {
   projectDir: string;
@@ -112,6 +113,7 @@ export async function loadProject(projectPath: string): Promise<LoadedProject> {
     throw new Error(`Invalid JSON syntax in domain.json at '${domainPath}': ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`);
   }
   const domain = DomainConfigSchema.parse(parsedDomainJson);
+  validateDomainAvatarConfigs(domain);
 
   // 3. Load ruleset modules and Plan 02 manifests
   const rulesetModules: Record<string, RulesetModule> = {};

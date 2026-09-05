@@ -1,10 +1,11 @@
 import type { DomainConfig, FactorContract, HeroConfig, EraConfig } from '@memberjunction/loom-contracts';
 import { compileFeature, compileRawFeature, type RelationalContext } from '../features/compiler.js';
 import { HeroInjector } from '../heroes/HeroInjector.js';
+import { IdentityService } from '../identity/index.js';
 
 export interface GateResult {
   name: string;
-  category: 'referential' | 'factor' | 'schema' | 'hero' | 'era';
+  category: 'referential' | 'factor' | 'schema' | 'hero' | 'era' | 'generated' | 'identity';
   passed: boolean;
   message: string;
   populationCount: number; // Invariant 7: exact number of entities/records examined
@@ -161,6 +162,15 @@ export class Validator {
     // 7. Relational rules gates (M2)
     this.checkRelationalRules(domain, data, gates, actualCatalogs);
 
+    // 8. Generated-field uniqueness (loom #12 WP2)
+    this.checkGeneratedFieldUniqueness(domain, data, gates);
+
+    // 9. Avatar/logo maxLength
+    this.checkGeneratedFieldMaxLength(domain, data, gates);
+
+    // 10. Name–Gender consistency
+    this.checkNameGenderConsistency(domain, data, gates);
+
     const passedCount = gates.filter((g) => g.passed).length;
     const failedCount = gates.length - passedCount;
     const totalPopulationExamined = gates.reduce((sum, g) => sum + g.populationCount, 0);
@@ -287,6 +297,103 @@ export class Validator {
         message,
         expected: 0,
         actual: duplicateIdCount + missingIdCount,
+      });
+    }
+  }
+
+  private checkGeneratedFieldUniqueness(
+    domain: DomainConfig,
+    data: Record<string, readonly Record<string, unknown>[]>,
+    gates: GateResult[],
+  ): void {
+    for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
+      const records = data[entityName] ?? [];
+      for (const [fieldName, fieldCfg] of Object.entries(entityCfg.fields)) {
+        if (fieldCfg.uniqueness !== 'generated') continue;
+        const values = records.map((r) => r[fieldName]).filter((v) => v !== undefined && v !== null && v !== '');
+        const unique = new Set(values.map((v) => String(v)));
+        const passed = unique.size === records.length && values.length === records.length;
+        gates.push({
+          name: `Generated uniqueness: ${entityName}.${fieldName}`,
+          category: 'generated',
+          passed,
+          populationCount: records.length,
+          message: passed
+            ? `All ${records.length} ${fieldName} values are distinct`
+            : `${unique.size} distinct ${fieldName} values across ${records.length} records`,
+          expected: records.length,
+          actual: unique.size,
+        });
+      }
+    }
+  }
+
+  private checkGeneratedFieldMaxLength(
+    domain: DomainConfig,
+    data: Record<string, readonly Record<string, unknown>[]>,
+    gates: GateResult[],
+  ): void {
+    for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
+      const records = data[entityName] ?? [];
+      for (const [fieldName, fieldCfg] of Object.entries(entityCfg.fields)) {
+        const max = fieldCfg.maxLength ?? fieldCfg.avatar?.maxLength;
+        if (!max) continue;
+        let over = 0;
+        for (const row of records) {
+          const v = row[fieldName];
+          if (typeof v === 'string' && v.length > max) over++;
+        }
+        gates.push({
+          name: `Generated maxLength: ${entityName}.${fieldName}`,
+          category: 'generated',
+          passed: over === 0,
+          populationCount: records.length,
+          message:
+            over === 0
+              ? `All ${records.length} ${fieldName} values are ≤ ${max} chars`
+              : `${over} ${fieldName} value(s) exceed maxLength ${max}`,
+          expected: 0,
+          actual: over,
+        });
+      }
+    }
+  }
+
+  private checkNameGenderConsistency(
+    domain: DomainConfig,
+    data: Record<string, readonly Record<string, unknown>[]>,
+    gates: GateResult[],
+  ): void {
+    for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
+      if (!entityCfg.fields.FirstName || !entityCfg.fields.Gender) continue;
+      const records = data[entityName] ?? [];
+      let mismatches = 0;
+      let classified = 0;
+      let unclassified = 0;
+      for (const row of records) {
+        const gender = String(row.Gender ?? '').trim();
+        if (!gender || gender.toLowerCase() === 'unknown') continue;
+        const inferred = IdentityService.GenderFromName(String(row.FirstName ?? ''));
+        if (inferred === 'Unknown') {
+          unclassified++;
+          continue;
+        }
+        classified++;
+        if (inferred.toLowerCase() !== gender.toLowerCase()) {
+          mismatches++;
+        }
+      }
+      gates.push({
+        name: `Name-Gender consistency: ${entityName}`,
+        category: 'identity',
+        passed: mismatches === 0,
+        populationCount: classified,
+        message:
+          mismatches === 0
+            ? `All ${classified} classified ${entityName} record(s) match GenderFromName (${unclassified} unclassified)`
+            : `${mismatches} of ${classified} classified ${entityName} record(s) disagree with GenderFromName (${unclassified} unclassified)`,
+        expected: 0,
+        actual: mismatches,
       });
     }
   }

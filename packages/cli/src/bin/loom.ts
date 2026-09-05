@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import { executeBuild } from '../commands/build.js';
 import { executeAccumulate } from '../commands/accumulate.js';
 import { executeValidate } from '../commands/validate.js';
+import { executeDecorate } from '../commands/decorate.js';
 
 const program = new Command();
 
@@ -60,6 +61,21 @@ program
       await executeValidate(opts);
     } catch (err) {
       console.error('Validate Error:', err instanceof Error ? err.message : err);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('decorate')
+  .description('Apply declared avatar/logo generators onto an existing generated/ tree')
+  .option('-p, --project <path>', 'Path to project directory containing domain.json')
+  .option('-c, --config <path>', 'Path to project config file or directory')
+  .option('-d, --dir <path>', 'Path to generated/ or metadata directory')
+  .action(async (opts) => {
+    try {
+      await executeDecorate(opts);
+    } catch (err) {
+      console.error('Decorate Error:', err instanceof Error ? err.message : err);
       process.exit(1);
     }
   });

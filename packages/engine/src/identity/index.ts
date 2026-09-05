@@ -1,4 +1,14 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { v5 as uuidv5 } from 'uuid';
+
+const catalog = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'given-names.json'), 'utf8'),
+) as { female: string[]; male: string[] };
+
+const FEMALE_NAMES = new Set(catalog.female.map((n) => n.toLowerCase()));
+const MALE_NAMES = new Set(catalog.male.map((n) => n.toLowerCase()));
 
 /**
  * Deterministic Identity Service.
@@ -41,5 +51,17 @@ export class IdentityService {
     const keyStr = Array.isArray(businessKey) ? businessKey.join('|') : String(businessKey);
     const identifier = `${entity}:${keyStr}`;
     return uuidv5(identifier, namespaceUuid);
+  }
+
+  /**
+   * Catalog-backed given-name → Gender. Unknown when the name is not in the
+   * catalog (loom #12 WP2). Same mapping the Name-Gender Consistency gate uses.
+   */
+  public static GenderFromName(firstName: string): 'Female' | 'Male' | 'Unknown' {
+    const key = firstName.trim().toLowerCase();
+    if (!key) return 'Unknown';
+    if (FEMALE_NAMES.has(key)) return 'Female';
+    if (MALE_NAMES.has(key)) return 'Male';
+    return 'Unknown';
   }
 }

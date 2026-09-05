@@ -7,7 +7,8 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "NOTICE"
   ],
   "exports": {
     ".": {
@@ -16,13 +17,18 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp src/identity/given-names.json dist/identity/given-names.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@dicebear/core": "^9.4.2",
+    "@dicebear/lorelei": "^9.4.2",
+    "@dicebear/micah": "^9.4.2",
+    "@dicebear/toon-head": "^9.4.2",
     "@memberjunction/loom-contracts": "workspace:*",
+    "svgo": "^4.0.0",
     "uuid": "^11.0.0",
     "zod": "^3.25.76"
   },

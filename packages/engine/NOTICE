@@ -1,0 +1,20 @@
+DiceBear avatar collections bundled by @memberjunction/loom-engine
+(loom #12 WP2). Design-licence lines copied from each package LICENSE.
+
+# ToonHead (@dicebear/toon-head)
+Source: ToonHead (https://www.figma.com/community/file/1589627891082866389)
+Designer: Johan Melin (https://www.johanmelin.com)
+License: CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)
+
+# Micah (@dicebear/micah)
+Source: Avatar Illustration System (https://www.figma.com/community/file/829741575478342595)
+Designer: Micah Lanier (https://dribbble.com/micahlanier)
+License: CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)
+
+# Lorelei (@dicebear/lorelei)
+Source: Lorelei (https://www.figma.com/community/file/1198749693280469639)
+Designer: Lisa Wischofsky (https://www.instagram.com/lischi_art/)
+License: CC0 1.0 (https://creativecommons.org/publicdomain/zero/1.0/)
+
+Code in those packages is MIT (Florian Körner). Remixes are generated at
+runtime via @dicebear/core. This NOTICE must ship with the engine package.

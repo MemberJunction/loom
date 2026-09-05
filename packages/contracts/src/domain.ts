@@ -11,14 +11,17 @@ export const FieldTypeSchema = z.enum([
 ]);
 export type FieldType = z.infer<typeof FieldTypeSchema>;
 
+export const AvatarStyleSchema = z.enum(['toon-head', 'micah', 'lorelei']);
 export const AvatarConfigSchema = z.object({
-  style: z.enum(['compact-svg', 'adventurer', 'lorelei', 'avataaars', 'bottts', 'fun-emoji']).default('compact-svg'),
+  style: AvatarStyleSchema.default('toon-head'),
   format: z.enum(['base64', 'svg', 'url']).default('base64'),
   traitField: z.string().optional(),
   seedField: z.string().default('ID'),
-  traits: z.record(z.string()).optional(),
-  defaultTrait: z.string().default('neutral'),
+  /** trait value (e.g. Gender) → DiceBear collection options. Validated against collection.schema. */
+  traits: z.record(z.record(z.unknown())).optional(),
+  defaultTrait: z.string().optional(),
   backgroundColor: z.string().optional(),
+  maxLength: z.number().int().positive().optional(),
 });
 export const LogoConfigSchema = z.object({
   format: z.enum(['base64', 'svg']).default('base64'),
@@ -41,6 +44,8 @@ export const FieldConfigSchema = z.object({
   generator: z.string().optional(),
   avatar: AvatarConfigSchema.optional(),
   logo: LogoConfigSchema.optional(),
+  uniqueness: z.enum(['generated']).optional(),
+  maxLength: z.number().int().positive().optional(),
 });
 export type FieldConfig = z.infer<typeof FieldConfigSchema>;
 
