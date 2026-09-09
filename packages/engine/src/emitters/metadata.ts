@@ -341,11 +341,13 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
       // 3. Compose embeds
       if (entityCfg.composition?.embeds) {
         for (const [embedField, embedCfg] of Object.entries(entityCfg.composition.embeds)) {
+          const childCfg = options.domain.entities[embedCfg.entity];
+          if (childCfg?.syncRoot) continue; // reference-only: the FK in fields already says it
+
           const embedFkVal = r[embedField];
           if (embedFkVal !== undefined && embedFkVal !== null && embedFkVal !== '') {
             const childRow = childRecordsByPk.get(embedCfg.entity)?.get(String(embedFkVal).toLowerCase());
             if (childRow) {
-              const childCfg = options.domain.entities[embedCfg.entity];
               const childPkFields = childCfg
                 ? Object.entries(childCfg.fields).filter(([_, f]) => f.isPrimaryKey).map(([n]) => n)
                 : ['ID'];
