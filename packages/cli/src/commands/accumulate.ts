@@ -8,6 +8,7 @@ import {
   createRng,
   emitMetadata,
   readEntityMetadata,
+  extractComposedRecords,
   FactorEngine,
   StateLadderEngine,
   nestedEvent,
@@ -161,6 +162,12 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       }
       priorRecords[entityName] = unwrapped;
     }
+  }
+
+  // Decompose any composed child records (extension, collections, embeds) into priorRecords
+  const decomposedPrior = extractComposedRecords(loaded.domain, priorRecords);
+  for (const [e, rows] of Object.entries(decomposedPrior)) {
+    priorRecords[e] = rows;
   }
 
   // 3. Continuity check

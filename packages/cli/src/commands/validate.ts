@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { loadProject } from '../project.js';
-import { Validator, readEntityMetadata, type ValidationReport, type GateResult } from '@memberjunction/loom-engine';
+import { Validator, readEntityMetadata, extractComposedRecords, type ValidationReport, type GateResult } from '@memberjunction/loom-engine';
 
 export interface ValidateCommandOptions {
   project?: string;
@@ -51,7 +51,30 @@ export async function executeValidate(options: ValidateCommandOptions): Promise<
     });
   }
 
+  // Identify composed children that do not have their own standalone output directories
+  const composedChildren = new Set<string>();
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
+    if (entityCfg.composition?.isA) {
+      composedChildren.add(entityName);
+    }
+    if (entityCfg.composition?.collections) {
+      for (const col of Object.values(entityCfg.composition.collections)) {
+        composedChildren.add(col.entity);
+      }
+    }
+    if (entityCfg.composition?.embeds) {
+      for (const emb of Object.values(entityCfg.composition.embeds)) {
+        composedChildren.add(emb.entity);
+      }
+    }
+  }
+
+  for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
+    if (composedChildren.has(entityName)) {
+      records[entityName] = [];
+      continue;
+    }
+
     const dirName = entityCfg.outputDirectory ?? entityName;
     const entityDir = path.join(dataDir, dirName);
     try {
@@ -74,6 +97,23 @@ export async function executeValidate(options: ValidateCommandOptions): Promise<
         populationCount: 0,
       });
     }
+  }
+
+  // Extract composed records into child entity lists for validation and factor checks
+  const decomposed = extractComposedRecords(loaded.domain, records);
+  for (const [e, rows] of Object.entries(decomposed)) {
+    records[e] = rows;
+  }
+
+  for (const childName of composedChildren) {
+    const count = records[childName]?.length ?? 0;
+    syncGates.push({
+      name: `MetadataSync: ${childName} (Composed)`,
+      category: 'schema',
+      passed: true,
+      message: `Composed entity '${childName}' loaded from parent records (${count} records)`,
+      populationCount: count,
+    });
   }
 
   const totalLoaded = Object.values(records).reduce((sum, r) => sum + r.length, 0);
