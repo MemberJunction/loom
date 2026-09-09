@@ -171,6 +171,9 @@ export class Validator {
     // 10. Name–Gender consistency
     this.checkNameGenderConsistency(domain, data, gates);
 
+    // 11. Composition invariants (isA, collections, embeds)
+    this.checkCompositionInvariants(domain, data, gates);
+
     const passedCount = gates.filter((g) => g.passed).length;
     const failedCount = gates.length - passedCount;
     const totalPopulationExamined = gates.reduce((sum, g) => sum + g.populationCount, 0);
@@ -1468,6 +1471,118 @@ export class Validator {
           expected: 0,
           actual: disagreeCount,
         });
+      }
+    }
+  }
+
+  private checkCompositionInvariants(
+    domain: DomainConfig,
+    data: Record<string, readonly Record<string, unknown>[]>,
+    gates: GateResult[]
+  ): void {
+    // 1. IsA invariants: child PK = parent PK; child exists iff `when`
+    for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
+      if (entityCfg.composition?.isA) {
+        const parentName = entityCfg.composition.isA.parentEntity;
+        const parentRecords = data[parentName] ?? [];
+        const childRecords = data[entityName] ?? [];
+
+        const parentMap = new Map<string, Record<string, unknown>>();
+        for (const pr of parentRecords) {
+          const id = pr['ID'] ?? pr['id'];
+          if (id !== undefined && id !== null) {
+            parentMap.set(String(id).toLowerCase(), pr as Record<string, unknown>);
+          }
+        }
+
+        let missingParentCount = 0;
+        for (const cr of childRecords) {
+          const cid = cr['ID'] ?? cr['id'];
+          if (!cid || !parentMap.has(String(cid).toLowerCase())) {
+            missingParentCount++;
+          }
+        }
+
+        const passed = missingParentCount === 0;
+        gates.push({
+          name: `Composition: IsA Invariants (${entityName} -> ${parentName})`,
+          category: 'referential',
+          passed,
+          message: passed
+            ? `All ${childRecords.length} ${entityName} IsA child records share matching primary keys with ${parentName}`
+            : `${missingParentCount} ${entityName} records have no matching parent in ${parentName}`,
+          populationCount: childRecords.length,
+        });
+      }
+    }
+
+    // 2. Collection invariants: foreign key points to parent, sequence monotonicity if present
+    for (const [parentName, parentCfg] of Object.entries(domain.entities)) {
+      if (parentCfg.composition?.collections) {
+        const parentRecords = data[parentName] ?? [];
+        const parentIds = new Set(
+          parentRecords.map((r) => String(r['ID'] ?? r['id']).toLowerCase()).filter(Boolean)
+        );
+
+        for (const [colName, colCfg] of Object.entries(parentCfg.composition.collections)) {
+          const childRecords = data[colCfg.entity] ?? [];
+          let invalidFkCount = 0;
+
+          for (const cr of childRecords) {
+            const fkVal = cr[colCfg.foreignKey];
+            if (!fkVal || !parentIds.has(String(fkVal).toLowerCase())) {
+              invalidFkCount++;
+            }
+          }
+
+          const passed = invalidFkCount === 0;
+          gates.push({
+            name: `Composition: Collection Invariants (${parentName}.${colName} -> ${colCfg.entity})`,
+            category: 'referential',
+            passed,
+            message: passed
+              ? `All ${childRecords.length} collection items in ${colCfg.entity} point to valid ${parentName} parent records via ${colCfg.foreignKey}`
+              : `${invalidFkCount} items in collection ${colCfg.entity} do not reference a valid ${parentName}`,
+            populationCount: childRecords.length,
+          });
+        }
+      }
+    }
+
+    // 3. Embed invariants: required embed record present
+    for (const [parentName, parentCfg] of Object.entries(domain.entities)) {
+      if (parentCfg.composition?.embeds) {
+        const parentRecords = data[parentName] ?? [];
+        for (const [embedField, embedCfg] of Object.entries(parentCfg.composition.embeds)) {
+          const childRecords = data[embedCfg.entity] ?? [];
+          const childMap = new Set(
+            childRecords.map((r) => String(r['ID'] ?? r['id']).toLowerCase()).filter(Boolean)
+          );
+
+          let missingEmbedCount = 0;
+          let checkedCount = 0;
+
+          for (const pr of parentRecords) {
+            const fkVal = pr[embedField];
+            if (fkVal !== undefined && fkVal !== null && fkVal !== '') {
+              checkedCount++;
+              if (!childMap.has(String(fkVal).toLowerCase())) {
+                missingEmbedCount++;
+              }
+            }
+          }
+
+          const passed = missingEmbedCount === 0;
+          gates.push({
+            name: `Composition: Embed Invariants (${parentName}.${embedField} -> ${embedCfg.entity})`,
+            category: 'referential',
+            passed,
+            message: passed
+              ? `All ${checkedCount} embedded references in ${parentName}.${embedField} resolve to valid ${embedCfg.entity} records`
+              : `${missingEmbedCount} embedded references in ${parentName}.${embedField} missing in ${embedCfg.entity}`,
+            populationCount: checkedCount,
+          });
+        }
       }
     }
   }

@@ -61,6 +61,32 @@ export const ForeignKeyConfigSchema = z.object({
 });
 export type ForeignKeyConfig = z.infer<typeof ForeignKeyConfigSchema>;
 
+export const IsAConfigSchema = z.object({
+  parentEntity: z.string().min(1),
+  when: z.string().optional(),
+});
+export type IsAConfig = z.infer<typeof IsAConfigSchema>;
+
+export const CollectionConfigSchema = z.object({
+  entity: z.string().min(1),
+  foreignKey: z.string().min(1),
+  mode: z.enum(['upsert', 'authoritative']).optional().default('upsert'),
+});
+export type CollectionConfig = z.infer<typeof CollectionConfigSchema>;
+
+export const EmbedConfigSchema = z.object({
+  entity: z.string().min(1),
+  foreignKey: z.string().min(1),
+});
+export type EmbedConfig = z.infer<typeof EmbedConfigSchema>;
+
+export const CompositionConfigSchema = z.object({
+  isA: IsAConfigSchema.optional(),
+  collections: z.record(z.string(), CollectionConfigSchema).optional().default({}),
+  embeds: z.record(z.string(), EmbedConfigSchema).optional().default({}),
+});
+export type CompositionConfig = z.infer<typeof CompositionConfigSchema>;
+
 export const EntityConfigSchema = z.object({
   name: z.string().min(1),
   entityName: z.string().min(1),
@@ -70,7 +96,9 @@ export const EntityConfigSchema = z.object({
   businessKey: z.array(z.string()).min(1),
   fields: z.record(z.string(), FieldConfigSchema),
   foreignKeys: z.record(z.string(), ForeignKeyConfigSchema).default({}),
+  composition: CompositionConfigSchema.optional(),
   isImmutable: z.boolean().default(false),
+  syncRoot: z.boolean().optional().default(false),
   outputDirectory: z.string().optional(),
   outputFileName: z.string().optional(),
 }).transform((entity) => {
@@ -295,6 +323,89 @@ export function createDomainConfigFromMJEntities(
       );
     }
 
+    // 1. isA composition
+    let isA: IsAConfig | undefined;
+    const parentId = (entity as { ParentID?: string | null }).ParentID;
+    if (parentId) {
+      const parent = entities.find((e) => e.ID === parentId);
+      if (parent) {
+        let when: string | undefined;
+        const selectorRaw = (parent as { SubtypeSelector?: string | null }).SubtypeSelector;
+        if (selectorRaw) {
+          try {
+            const selectorObj: Record<string, unknown> = typeof selectorRaw === 'string'
+              ? (JSON.parse(selectorRaw) as Record<string, unknown>)
+              : (selectorRaw as Record<string, unknown>);
+            if (selectorObj && typeof selectorObj === 'object') {
+              if (typeof selectorObj['Path'] === 'string') {
+                when = selectorObj['Path'];
+              } else if (
+                selectorObj['Map'] &&
+                typeof selectorObj['Map'] === 'object' &&
+                typeof (selectorObj['Map'] as Record<string, unknown>)['Field'] === 'string'
+              ) {
+                when = (selectorObj['Map'] as Record<string, unknown>)['Field'] as string;
+              }
+            }
+          } catch (err) {
+            console.warn(`createDomainConfigFromMJEntities: failed to parse SubtypeSelector for entity '${entity.Name}': ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+
+        if (!when) {
+          console.warn(`createDomainConfigFromMJEntities: subtype rule for ${entity.Name} is runtime-only; cannot validate`);
+        }
+
+        isA = {
+          parentEntity: parent.Name,
+          when,
+        };
+      }
+    }
+
+    // 2. collections composition
+    const collections: Record<string, CollectionConfig> = {};
+    const relatedEntities = (entity as { RelatedEntities?: readonly { RelatedRecordCollection?: string | null; RelatedEntity?: string; RelatedEntityJoinField?: string; DisplayName?: string }[] }).RelatedEntities ?? [];
+    for (const rel of relatedEntities) {
+      if (rel.RelatedRecordCollection && rel.RelatedEntity && rel.RelatedEntityJoinField) {
+        try {
+          const parsed = typeof rel.RelatedRecordCollection === 'string'
+            ? (JSON.parse(rel.RelatedRecordCollection) as Record<string, unknown>)
+            : (rel.RelatedRecordCollection as Record<string, unknown>);
+          const colName = (parsed && typeof parsed['Name'] === 'string') ? (parsed['Name'] as string) : (rel.DisplayName || rel.RelatedEntity);
+          const colMode = (parsed && parsed['Mode'] === 'authoritative') ? 'authoritative' : 'upsert';
+          collections[colName] = {
+            entity: rel.RelatedEntity,
+            foreignKey: rel.RelatedEntityJoinField,
+            mode: colMode,
+          };
+        } catch (err) {
+          console.warn(`createDomainConfigFromMJEntities: failed to parse RelatedRecordCollection for relationship on entity '${entity.Name}': ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+
+    // 3. embeds composition
+    const embeds: Record<string, EmbedConfig> = {};
+    for (const field of entity.Fields ?? []) {
+      const fieldEmbed = field as { EmbeddedRecord?: string | null; RelatedEntity?: string; RelatedEntityFieldName?: string };
+      if (fieldEmbed.EmbeddedRecord && field.RelatedEntity) {
+        embeds[field.Name] = {
+          entity: field.RelatedEntity,
+          foreignKey: field.RelatedEntityFieldName ?? 'ID',
+        };
+      }
+    }
+
+    const composition: CompositionConfig | undefined =
+      isA || Object.keys(collections).length > 0 || Object.keys(embeds).length > 0
+        ? {
+            isA,
+            collections,
+            embeds,
+          }
+        : undefined;
+
     entityConfigs[entity.Name] = {
       name: entity.Name,
       entityName: entity.Name,
@@ -304,7 +415,9 @@ export function createDomainConfigFromMJEntities(
       businessKey,
       fields,
       foreignKeys,
+      composition,
       isImmutable: false,
+      syncRoot: false,
     };
   }
 
@@ -316,6 +429,62 @@ export function createDomainConfigFromMJEntities(
     packs,
     relationalRules: [],
   };
+}
+
+/**
+ * Resolves an entity config in domain.json by case-insensitive name or entityName match.
+ */
+export function findDomainEntityByName(
+  domain: DomainConfig,
+  entityName: string
+): EntityConfig | undefined {
+  const lower = entityName.toLowerCase();
+  for (const [key, cfg] of Object.entries(domain.entities)) {
+    if (
+      key.toLowerCase() === lower ||
+      cfg.entityName.toLowerCase() === lower ||
+      cfg.name.toLowerCase() === lower
+    ) {
+      return cfg;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Asserts that if domain.json specifies isA, the underlying MJ metadata has ParentID configured.
+ * Also checks the converse: if MJ metadata specifies ParentID for an entity present in domain.json,
+ * warns if domain.json declares no composition.isA so Gate 11 cannot validate this subtype.
+ */
+export function validateDomainAgainstMJMetadata(
+  domain: DomainConfig,
+  entities: readonly EntityInfo[]
+): void {
+  const entityMap = new Map<string, EntityInfo>();
+  for (const e of entities) {
+    entityMap.set(e.Name.toLowerCase(), e);
+  }
+
+  for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
+    if (entityCfg.composition?.isA) {
+      const mjEntity = entityMap.get(entityCfg.entityName.toLowerCase()) ?? entityMap.get(entityName.toLowerCase());
+      if (mjEntity && !mjEntity.ParentID) {
+        throw new Error(
+          `Domain entity '${entityName}' declares isA parent '${entityCfg.composition.isA.parentEntity}', but MJ metadata has no ParentID for this entity`
+        );
+      }
+    }
+  }
+
+  for (const mjEntity of entities) {
+    if (!mjEntity.ParentID) continue;
+    const cfg = findDomainEntityByName(domain, mjEntity.Name);
+    if (cfg && !cfg.composition?.isA) {
+      console.warn(
+        `validateDomainAgainstMJMetadata: MJ metadata declares ParentID for '${mjEntity.Name}' but domain.json declares no composition.isA — Gate 11 cannot validate this subtype.`
+      );
+    }
+  }
 }
 
 function mapMJTypeToFieldType(mjType: string): FieldType {

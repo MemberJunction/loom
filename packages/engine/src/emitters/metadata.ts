@@ -1,6 +1,6 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import type { DomainConfig } from '@memberjunction/loom-contracts';
+import type { DomainConfig, EntityConfig } from '@memberjunction/loom-contracts';
 
 export interface MetadataEmitterOptions {
   outputDir: string;
@@ -12,6 +12,9 @@ export interface MetadataEmitterOptions {
 export interface SyncMetadataRecord {
   primaryKey: Record<string, unknown>;
   fields: Record<string, unknown>;
+  collections?: Record<string, unknown[]>;
+  embeds?: Record<string, Record<string, unknown>>;
+  extension?: { entity?: string; fields: Record<string, unknown> };
 }
 
 /**
@@ -87,6 +90,7 @@ export function computeTopologicalOrder(domain: DomainConfig): string[] {
  * Emits generated records into the standard MemberJunction /metadata/** directory structure
  * with root .mj-sync.json (directoryOrder in topological sequence, autoCreateMissingRecords)
  * and per-entity single-level directories with .mj-sync.json and { primaryKey, fields } wrappers.
+ * Supports composition axes: isA extensions, collections, and embeds are composed into parent records.
  */
 export async function emitMetadata(options: MetadataEmitterOptions): Promise<string[]> {
   const writtenFiles: string[] = [];
@@ -94,10 +98,46 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
 
   await fs.mkdir(options.outputDir, { recursive: true });
 
+  // 0. Identify composed child entities that are emitted within a parent record
+  const composedChildEntities = new Set<string>();
+  const isAChildrenByParent = new Map<string, Array<{ childEntityName: string; childCfg: EntityConfig }>>();
+
+  for (const [entityName, entityCfg] of Object.entries(options.domain.entities)) {
+    if (entityCfg.composition?.isA) {
+      if (!entityCfg.syncRoot) {
+        composedChildEntities.add(entityName);
+      }
+      const parentName = entityCfg.composition.isA.parentEntity;
+      let list = isAChildrenByParent.get(parentName);
+      if (!list) {
+        list = [];
+        isAChildrenByParent.set(parentName, list);
+      }
+      list.push({ childEntityName: entityName, childCfg: entityCfg });
+    }
+    if (entityCfg.composition?.collections) {
+      for (const col of Object.values(entityCfg.composition.collections)) {
+        const childCfg = options.domain.entities[col.entity];
+        if (!childCfg?.syncRoot) {
+          composedChildEntities.add(col.entity);
+        }
+      }
+    }
+    if (entityCfg.composition?.embeds) {
+      for (const emb of Object.values(entityCfg.composition.embeds)) {
+        const childCfg = options.domain.entities[emb.entity];
+        if (!childCfg?.syncRoot) {
+          composedChildEntities.add(emb.entity);
+        }
+      }
+    }
+  }
+
   // 1. Emit root .mj-sync.json for discovery by MetadataSync (findEntityDirectories)
   const topologicalEntityOrder = computeTopologicalOrder(options.domain);
   const directoryOrder: string[] = [];
   for (const entityKey of topologicalEntityOrder) {
+    if (composedChildEntities.has(entityKey)) continue;
     const dir = options.domain.entities[entityKey]?.outputDirectory ?? entityKey;
     if (!directoryOrder.includes(dir)) {
       directoryOrder.push(dir);
@@ -113,31 +153,83 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
   await fs.writeFile(rootSyncConfigPath, JSON.stringify(rootSyncConfig, null, 2) + '\n', 'utf8');
   writtenFiles.push(rootSyncConfigPath);
 
+  // Pre-index child records for fast composition lookups
+  const childRecordsByPk = new Map<string, Map<string, Record<string, unknown>>>();
+  const childRecordsByFk = new Map<string, Map<string, Array<Record<string, unknown>>>>();
+
+  for (const [eName, rows] of Object.entries(options.data)) {
+    const pkMap = new Map<string, Record<string, unknown>>();
+    for (const r of rows) {
+      const id = r['ID'] ?? r['id'];
+      if (id !== undefined && id !== null) {
+        pkMap.set(String(id).toLowerCase(), r as Record<string, unknown>);
+      }
+    }
+    childRecordsByPk.set(eName, pkMap);
+  }
+
+  for (const parentCfg of Object.values(options.domain.entities)) {
+    if (parentCfg.composition?.collections) {
+      for (const col of Object.values(parentCfg.composition.collections)) {
+        const cacheKey = `${col.entity}:${col.foreignKey}`;
+        if (!childRecordsByFk.has(cacheKey)) {
+          const fkMap = new Map<string, Array<Record<string, unknown>>>();
+          const rows = options.data[col.entity] ?? [];
+          for (const r of rows) {
+            const fkVal = r[col.foreignKey];
+            if (fkVal !== undefined && fkVal !== null) {
+              const k = String(fkVal).toLowerCase();
+              let list = fkMap.get(k);
+              if (!list) {
+                list = [];
+                fkMap.set(k, list);
+              }
+              list.push(r as Record<string, unknown>);
+            }
+          }
+          childRecordsByFk.set(cacheKey, fkMap);
+        }
+      }
+    }
+  }
+
   // 2. Emit entity directories directly under outputDir (single level for MetadataSync)
+  const consumedChildRows = new Map<string, Set<string>>();
+
   for (const [entityName, records] of Object.entries(options.data)) {
     const entityCfg = options.domain.entities[entityName];
     if (!entityCfg) continue;
+    if (composedChildEntities.has(entityName)) continue; // Omit composed child directories
 
     const dirName = entityCfg.outputDirectory ?? entityName;
     const entityDir = path.join(options.outputDir, dirName);
 
     await fs.mkdir(entityDir, { recursive: true });
 
-    // Emit per-entity .mj-sync.json specifying the target MemberJunction entityName
+    // Emit per-entity .mj-sync.json specifying target entityName and optional collections modes
     const syncConfigPath = path.join(entityDir, '.mj-sync.json');
-    const syncConfig = {
+    const syncConfig: Record<string, unknown> = {
       entity: entityCfg.entityName,
     };
+    if (entityCfg.composition?.collections && Object.keys(entityCfg.composition.collections).length > 0) {
+      const collectionsModeMap: Record<string, { mode: 'upsert' | 'authoritative' }> = {};
+      for (const [colName, colCfg] of Object.entries(entityCfg.composition.collections)) {
+        collectionsModeMap[colName] = {
+          mode: colCfg.mode ?? 'upsert',
+        };
+      }
+      syncConfig['collections'] = collectionsModeMap;
+    }
     await fs.writeFile(syncConfigPath, JSON.stringify(syncConfig, null, 2) + '\n', 'utf8');
     writtenFiles.push(syncConfigPath);
 
-    // 2. Identify primary key field(s)
+    // Identify primary key field(s)
     const pkFields = Object.entries(entityCfg.fields)
       .filter(([_, f]) => f.isPrimaryKey)
       .map(([name]) => name);
     const pkField = pkFields[0] ?? 'ID';
 
-    // 3. Wrap records into { primaryKey, fields } (never commit sync blocks)
+    // Wrap records into { primaryKey, fields, extension, collections, embeds }
     const wrappedRecords: SyncMetadataRecord[] = records.map((r) => {
       const primaryKey: Record<string, unknown> = {};
       const fields: Record<string, unknown> = {};
@@ -155,7 +247,137 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
         primaryKey['ID'] = r['ID'] ?? r['id'];
       }
 
-      return { primaryKey, fields };
+      const recId = String(primaryKey['ID'] ?? primaryKey['id'] ?? primaryKey[pkField] ?? '').toLowerCase();
+      const wrapped: SyncMetadataRecord = { primaryKey, fields };
+
+      // 1. Compose IsA extension
+      const isAChildren = isAChildrenByParent.get(entityName);
+      if (isAChildren && recId) {
+        const matchingIsA: Array<{ childEntityName: string; childCfg: EntityConfig; childRow: Record<string, unknown> }> = [];
+        for (const { childEntityName, childCfg } of isAChildren) {
+          const childRow = childRecordsByPk.get(childEntityName)?.get(recId);
+          if (childRow) {
+            matchingIsA.push({ childEntityName, childCfg, childRow });
+          }
+        }
+        if (matchingIsA.length > 1) {
+          throw new Error(
+            `Multiple IsA children found for ${entityName} ID '${recId}': ${matchingIsA.map(m => m.childEntityName).join(', ')}. Disjoint subtypes must not have multiple matches.`
+          );
+        }
+        const firstMatch = matchingIsA[0];
+        if (matchingIsA.length === 1 && firstMatch) {
+          const { childEntityName, childCfg, childRow } = firstMatch;
+          let consumed = consumedChildRows.get(childEntityName);
+          if (!consumed) {
+            consumed = new Set<string>();
+            consumedChildRows.set(childEntityName, consumed);
+          }
+          consumed.add(recId);
+
+          const childPkFields = Object.entries(childCfg.fields)
+            .filter(([_, f]) => f && typeof f === 'object' && 'isPrimaryKey' in f && Boolean(f.isPrimaryKey))
+            .map(([n]) => n);
+          const childLeafFields: Record<string, unknown> = {};
+          for (const [ck, cv] of Object.entries(childRow)) {
+            if (ck === 'sync' || ck === 'ID' || ck === 'id' || childPkFields.includes(ck)) continue;
+            childLeafFields[ck] = cv;
+          }
+          wrapped.extension = {
+            entity: childCfg.entityName,
+            fields: childLeafFields,
+          };
+        }
+      }
+
+      // 2. Compose collections
+      if (entityCfg.composition?.collections && recId) {
+        for (const [colName, colCfg] of Object.entries(entityCfg.composition.collections)) {
+          const cacheKey = `${colCfg.entity}:${colCfg.foreignKey}`;
+          const matchingChildren = childRecordsByFk.get(cacheKey)?.get(recId) ?? [];
+          const childCfg = options.domain.entities[colCfg.entity];
+          const childPkFields = childCfg
+            ? Object.entries(childCfg.fields).filter(([_, f]) => f.isPrimaryKey).map(([n]) => n)
+            : ['ID'];
+          const childPkField = childPkFields[0] ?? 'ID';
+
+          const childElements: Array<{ primaryKey: Record<string, unknown>; fields: Record<string, unknown> }> = [];
+          for (const child of matchingChildren) {
+            const childPkVal = child[childPkField] ?? child['ID'] ?? child['id'];
+            if (childPkVal !== undefined && childPkVal !== null) {
+              let consumed = consumedChildRows.get(colCfg.entity);
+              if (!consumed) {
+                consumed = new Set<string>();
+                consumedChildRows.set(colCfg.entity, consumed);
+              }
+              consumed.add(String(childPkVal).toLowerCase());
+            }
+
+            const childFields: Record<string, unknown> = {};
+            for (const [ck, cv] of Object.entries(child)) {
+              if (ck === 'sync' || ck === childPkField || childPkFields.includes(ck) || ck === colCfg.foreignKey) continue;
+              childFields[ck] = cv;
+            }
+            childElements.push({
+              primaryKey: { [childPkField]: childPkVal },
+              fields: childFields,
+            });
+          }
+
+          const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+          childElements.sort((a, b) => {
+            const aKey = String(a.primaryKey[childPkField] ?? '');
+            const bKey = String(b.primaryKey[childPkField] ?? '');
+            return cmp(aKey, bKey);
+          });
+
+          if (childElements.length > 0) {
+            if (!wrapped.collections) wrapped.collections = {};
+            wrapped.collections[colName] = childElements;
+          }
+        }
+      }
+
+      // 3. Compose embeds
+      if (entityCfg.composition?.embeds) {
+        for (const [embedField, embedCfg] of Object.entries(entityCfg.composition.embeds)) {
+          const childCfg = options.domain.entities[embedCfg.entity];
+          if (childCfg?.syncRoot) continue; // reference-only: the FK in fields already says it
+
+          const embedFkVal = r[embedField];
+          if (embedFkVal !== undefined && embedFkVal !== null && embedFkVal !== '') {
+            const childRow = childRecordsByPk.get(embedCfg.entity)?.get(String(embedFkVal).toLowerCase());
+            if (childRow) {
+              const childPkFields = childCfg
+                ? Object.entries(childCfg.fields).filter(([_, f]) => f.isPrimaryKey).map(([n]) => n)
+                : ['ID'];
+              const childPkField = childPkFields[0] ?? 'ID';
+              const childPkVal = childRow[childPkField] ?? childRow['ID'] ?? childRow['id'];
+              if (childPkVal !== undefined && childPkVal !== null) {
+                let consumed = consumedChildRows.get(embedCfg.entity);
+                if (!consumed) {
+                  consumed = new Set<string>();
+                  consumedChildRows.set(embedCfg.entity, consumed);
+                }
+                consumed.add(String(childPkVal).toLowerCase());
+              }
+
+              const childFields: Record<string, unknown> = {};
+              for (const [ck, cv] of Object.entries(childRow)) {
+                if (ck === 'sync' || ck === childPkField || childPkFields.includes(ck)) continue;
+                childFields[ck] = cv;
+              }
+              if (!wrapped.embeds) wrapped.embeds = {};
+              wrapped.embeds[embedField] = {
+                primaryKey: { [childPkField]: childPkVal },
+                fields: childFields,
+              };
+            }
+          }
+        }
+      }
+
+      return wrapped;
     });
 
     // Filename determination: outputFileName override or dot-prefixed outputDirectory, else entityName
@@ -186,12 +408,23 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
     }
   }
 
+  // Verify all composed child rows were consumed (for entities that exist only as composed children)
+  for (const e of composedChildEntities) {
+    if (options.domain.entities[e]?.syncRoot) continue;
+    const total = (options.data[e] ?? []).length;
+    const used = consumedChildRows.get(e)?.size ?? 0;
+    if (used !== total) {
+      throw new Error(`Composition dropped ${total - used}/${total} ${e} rows (no matching parent).`);
+    }
+  }
+
   return writtenFiles;
 }
 
 /**
  * Reads and unwraps records from an entity metadata directory.
  * Throws if .mj-sync.json is missing or records do not conform to { primaryKey, fields }.
+ * Preserves composition keys (extension, collections, embeds) without dropping them.
  */
 export async function readEntityMetadata(
   entityDir: string,
@@ -263,6 +496,18 @@ export async function readEntityMetadata(
         ...(wrappedRecord.fields as Record<string, unknown>),
       };
       delete row.sync;
+
+      const recObj = wrappedRecord as Record<string, unknown>;
+      if (recObj['extension'] !== undefined) {
+        row['extension'] = recObj['extension'];
+      }
+      if (recObj['collections'] !== undefined) {
+        row['collections'] = recObj['collections'];
+      }
+      if (recObj['embeds'] !== undefined) {
+        row['embeds'] = recObj['embeds'];
+      }
+
       unwrappedRecords.push(row);
     }
   }
@@ -271,4 +516,148 @@ export async function readEntityMetadata(
     entityName: syncConfig.entity,
     records: unwrappedRecords,
   };
+}
+
+/**
+ * Decomposes composed records (extension, collections, embeds) from parent records
+ * back into flat entity records for all entities in the domain.
+ * Ensures simulation continuity and activeEntityIds tracking never lose composed children.
+ */
+export function extractComposedRecords(
+  domain: DomainConfig,
+  recordsByEntity: Record<string, readonly Record<string, unknown>[]>
+): Record<string, Record<string, unknown>[]> {
+  const result: Record<string, Record<string, unknown>[]> = {};
+
+  // Initialize result with shallow copies of provided records
+  for (const [e, rows] of Object.entries(recordsByEntity)) {
+    result[e] = rows.map((r) => ({ ...r }));
+  }
+
+  // Ensure all domain entities have an entry
+  for (const e of Object.keys(domain.entities)) {
+    if (!result[e]) {
+      result[e] = [];
+    }
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+
+    // 1. Extract isA extensions
+    for (const [childEntityName, childCfg] of Object.entries(domain.entities)) {
+      if (childCfg.composition?.isA) {
+        const parentName = childCfg.composition.isA.parentEntity;
+        const parentRows = result[parentName] ?? [];
+        const childRows: Record<string, unknown>[] = [];
+        const existingIds = new Set(result[childEntityName]?.map((r) => String(r['ID'] ?? r['id'])) ?? []);
+
+        for (const pRow of parentRows) {
+          const ext = pRow['extension'] as { fields?: Record<string, unknown> } | undefined;
+          if (ext?.fields) {
+            const pId = pRow['ID'] ?? pRow['id'];
+            if (pId !== undefined && pId !== null && !existingIds.has(String(pId))) {
+              const childRow: Record<string, unknown> = {
+                ID: pId,
+                ...ext.fields,
+              };
+              childRows.push(childRow);
+              existingIds.add(String(pId));
+              changed = true;
+            }
+          }
+        }
+        if (childRows.length > 0) {
+          result[childEntityName] = [...(result[childEntityName] ?? []), ...childRows];
+        }
+      }
+    }
+
+    // 2. Extract collections
+    for (const [parentEntityName, parentCfg] of Object.entries(domain.entities)) {
+      if (parentCfg.composition?.collections) {
+        const parentRows = result[parentEntityName] ?? [];
+        for (const [colName, colCfg] of Object.entries(parentCfg.composition.collections)) {
+          const childEntityName = colCfg.entity;
+          const childRows: Record<string, unknown>[] = [];
+          const existingIds = new Set(result[childEntityName]?.map((r) => String(r['ID'] ?? r['id'])) ?? []);
+
+          for (const pRow of parentRows) {
+            const pId = pRow['ID'] ?? pRow['id'];
+            const cols = pRow['collections'] as Record<string, Array<{ primaryKey?: Record<string, unknown>; fields?: Record<string, unknown>; collections?: Record<string, unknown>; embeds?: Record<string, unknown>; extension?: Record<string, unknown> }>> | undefined;
+            const colList = cols?.[colName] ?? [];
+            for (const entry of colList) {
+              const childId = entry.primaryKey?.['ID'] ?? entry.primaryKey?.['id'] ?? entry.fields?.['ID'];
+              if (childId !== undefined && childId !== null && !existingIds.has(String(childId))) {
+                const childRow: Record<string, unknown> = {
+                  ...entry.primaryKey,
+                  ...entry.fields,
+                  [colCfg.foreignKey]: pId,
+                };
+                if (entry.collections) {
+                  childRow['collections'] = entry.collections;
+                }
+                if (entry.embeds) {
+                  childRow['embeds'] = entry.embeds;
+                }
+                if (entry.extension) {
+                  childRow['extension'] = entry.extension;
+                }
+                childRows.push(childRow);
+                existingIds.add(String(childId));
+                changed = true;
+              }
+            }
+          }
+          if (childRows.length > 0) {
+            result[childEntityName] = [...(result[childEntityName] ?? []), ...childRows];
+          }
+        }
+      }
+    }
+
+    // 3. Extract embeds
+    for (const [parentEntityName, parentCfg] of Object.entries(domain.entities)) {
+      if (parentCfg.composition?.embeds) {
+        const parentRows = result[parentEntityName] ?? [];
+        for (const [embedField, embedCfg] of Object.entries(parentCfg.composition.embeds)) {
+          const childEntityName = embedCfg.entity;
+          const childRows: Record<string, unknown>[] = [];
+          const existingIds = new Set(result[childEntityName]?.map((r) => String(r['ID'] ?? r['id'])) ?? []);
+
+          for (const pRow of parentRows) {
+            const embeds = pRow['embeds'] as Record<string, { primaryKey?: Record<string, unknown>; fields?: Record<string, unknown>; collections?: Record<string, unknown>; embeds?: Record<string, unknown>; extension?: Record<string, unknown> }> | undefined;
+            const embeddedEntry = embeds?.[embedField];
+            if (embeddedEntry) {
+              const childId = embeddedEntry.primaryKey?.['ID'] ?? embeddedEntry.primaryKey?.['id'] ?? embeddedEntry.fields?.['ID'];
+              if (childId !== undefined && childId !== null && !existingIds.has(String(childId))) {
+                const childRow: Record<string, unknown> = {
+                  ...embeddedEntry.primaryKey,
+                  ...embeddedEntry.fields,
+                };
+                if (embeddedEntry.collections) {
+                  childRow['collections'] = embeddedEntry.collections;
+                }
+                if (embeddedEntry.embeds) {
+                  childRow['embeds'] = embeddedEntry.embeds;
+                }
+                if (embeddedEntry.extension) {
+                  childRow['extension'] = embeddedEntry.extension;
+                }
+                childRows.push(childRow);
+                existingIds.add(String(childId));
+                changed = true;
+              }
+            }
+          }
+          if (childRows.length > 0) {
+            result[childEntityName] = [...(result[childEntityName] ?? []), ...childRows];
+          }
+        }
+      }
+    }
+  }
+
+  return result;
 }
