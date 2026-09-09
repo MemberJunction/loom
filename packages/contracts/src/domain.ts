@@ -346,8 +346,8 @@ export function createDomainConfigFromMJEntities(
                 when = (selectorObj['Map'] as Record<string, unknown>)['Field'] as string;
               }
             }
-          } catch {
-            // Ignore parse errors, when remains undefined
+          } catch (err) {
+            console.warn(`createDomainConfigFromMJEntities: failed to parse SubtypeSelector for entity '${entity.Name}': ${err instanceof Error ? err.message : String(err)}`);
           }
         }
 
@@ -378,8 +378,8 @@ export function createDomainConfigFromMJEntities(
             foreignKey: rel.RelatedEntityJoinField,
             mode: colMode,
           };
-        } catch {
-          // Ignore JSON parse error
+        } catch (err) {
+          console.warn(`createDomainConfigFromMJEntities: failed to parse RelatedRecordCollection for relationship on entity '${entity.Name}': ${err instanceof Error ? err.message : String(err)}`);
         }
       }
     }

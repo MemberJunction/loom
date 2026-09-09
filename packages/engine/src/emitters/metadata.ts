@@ -186,6 +186,8 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
   }
 
   // 2. Emit entity directories directly under outputDir (single level for MetadataSync)
+  const consumedChildRows = new Map<string, Set<string>>();
+
   for (const [entityName, records] of Object.entries(options.data)) {
     const entityCfg = options.domain.entities[entityName];
     if (!entityCfg) continue;
@@ -243,22 +245,40 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
       // 1. Compose IsA extension
       const isAChildren = isAChildrenByParent.get(entityName);
       if (isAChildren && recId) {
+        const matchingIsA: Array<{ childEntityName: string; childCfg: EntityConfig; childRow: Record<string, unknown> }> = [];
         for (const { childEntityName, childCfg } of isAChildren) {
           const childRow = childRecordsByPk.get(childEntityName)?.get(recId);
           if (childRow) {
-            const childPkFields = Object.entries(childCfg.fields)
-              .filter(([_, f]) => f.isPrimaryKey)
-              .map(([n]) => n);
-            const childLeafFields: Record<string, unknown> = {};
-            for (const [ck, cv] of Object.entries(childRow)) {
-              if (ck === 'sync' || ck === 'ID' || ck === 'id' || childPkFields.includes(ck)) continue;
-              childLeafFields[ck] = cv;
-            }
-            wrapped.extension = {
-              entity: childCfg.entityName,
-              fields: childLeafFields,
-            };
+            matchingIsA.push({ childEntityName, childCfg, childRow });
           }
+        }
+        if (matchingIsA.length > 1) {
+          throw new Error(
+            `Multiple IsA children found for ${entityName} ID '${recId}': ${matchingIsA.map(m => m.childEntityName).join(', ')}. Disjoint subtypes must not have multiple matches.`
+          );
+        }
+        const firstMatch = matchingIsA[0];
+        if (matchingIsA.length === 1 && firstMatch) {
+          const { childEntityName, childCfg, childRow } = firstMatch;
+          let consumed = consumedChildRows.get(childEntityName);
+          if (!consumed) {
+            consumed = new Set<string>();
+            consumedChildRows.set(childEntityName, consumed);
+          }
+          consumed.add(recId);
+
+          const childPkFields = Object.entries(childCfg.fields)
+            .filter(([_, f]) => f && typeof f === 'object' && 'isPrimaryKey' in f && Boolean(f.isPrimaryKey))
+            .map(([n]) => n);
+          const childLeafFields: Record<string, unknown> = {};
+          for (const [ck, cv] of Object.entries(childRow)) {
+            if (ck === 'sync' || ck === 'ID' || ck === 'id' || childPkFields.includes(ck)) continue;
+            childLeafFields[ck] = cv;
+          }
+          wrapped.extension = {
+            entity: childCfg.entityName,
+            fields: childLeafFields,
+          };
         }
       }
 
@@ -276,9 +296,18 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
           const childElements: Array<{ primaryKey: Record<string, unknown>; fields: Record<string, unknown> }> = [];
           for (const child of matchingChildren) {
             const childPkVal = child[childPkField] ?? child['ID'] ?? child['id'];
+            if (childPkVal !== undefined && childPkVal !== null) {
+              let consumed = consumedChildRows.get(colCfg.entity);
+              if (!consumed) {
+                consumed = new Set<string>();
+                consumedChildRows.set(colCfg.entity, consumed);
+              }
+              consumed.add(String(childPkVal).toLowerCase());
+            }
+
             const childFields: Record<string, unknown> = {};
             for (const [ck, cv] of Object.entries(child)) {
-              if (ck === 'sync' || ck === childPkField || childPkFields.includes(ck)) continue;
+              if (ck === 'sync' || ck === childPkField || childPkFields.includes(ck) || ck === colCfg.foreignKey) continue;
               childFields[ck] = cv;
             }
             childElements.push({
@@ -286,6 +315,12 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
               fields: childFields,
             });
           }
+
+          childElements.sort((a, b) => {
+            const aKey = String(a.primaryKey[childPkField] ?? '');
+            const bKey = String(b.primaryKey[childPkField] ?? '');
+            return aKey.localeCompare(bKey);
+          });
 
           if (childElements.length > 0) {
             if (!wrapped.collections) wrapped.collections = {};
@@ -307,6 +342,15 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
                 : ['ID'];
               const childPkField = childPkFields[0] ?? 'ID';
               const childPkVal = childRow[childPkField] ?? childRow['ID'] ?? childRow['id'];
+              if (childPkVal !== undefined && childPkVal !== null) {
+                let consumed = consumedChildRows.get(embedCfg.entity);
+                if (!consumed) {
+                  consumed = new Set<string>();
+                  consumedChildRows.set(embedCfg.entity, consumed);
+                }
+                consumed.add(String(childPkVal).toLowerCase());
+              }
+
               const childFields: Record<string, unknown> = {};
               for (const [ck, cv] of Object.entries(childRow)) {
                 if (ck === 'sync' || ck === childPkField || childPkFields.includes(ck)) continue;
@@ -350,6 +394,15 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
       const filePath = path.join(entityDir, fileName);
       await fs.writeFile(filePath, JSON.stringify(wrappedRecords, null, 2) + '\n', 'utf8');
       writtenFiles.push(filePath);
+    }
+  }
+
+  // Verify all composed child rows were consumed
+  for (const e of composedChildEntities) {
+    const total = (options.data[e] ?? []).length;
+    const used = consumedChildRows.get(e)?.size ?? 0;
+    if (used !== total) {
+      throw new Error(`Composition dropped ${total - used}/${total} ${e} rows (no matching parent).`);
     }
   }
 
