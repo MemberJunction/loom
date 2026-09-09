@@ -104,7 +104,9 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
 
   for (const [entityName, entityCfg] of Object.entries(options.domain.entities)) {
     if (entityCfg.composition?.isA) {
-      composedChildEntities.add(entityName);
+      if (!entityCfg.syncRoot) {
+        composedChildEntities.add(entityName);
+      }
       const parentName = entityCfg.composition.isA.parentEntity;
       let list = isAChildrenByParent.get(parentName);
       if (!list) {
@@ -115,12 +117,18 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
     }
     if (entityCfg.composition?.collections) {
       for (const col of Object.values(entityCfg.composition.collections)) {
-        composedChildEntities.add(col.entity);
+        const childCfg = options.domain.entities[col.entity];
+        if (!childCfg?.syncRoot) {
+          composedChildEntities.add(col.entity);
+        }
       }
     }
     if (entityCfg.composition?.embeds) {
       for (const emb of Object.values(entityCfg.composition.embeds)) {
-        composedChildEntities.add(emb.entity);
+        const childCfg = options.domain.entities[emb.entity];
+        if (!childCfg?.syncRoot) {
+          composedChildEntities.add(emb.entity);
+        }
       }
     }
   }
@@ -316,10 +324,11 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
             });
           }
 
+          const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
           childElements.sort((a, b) => {
             const aKey = String(a.primaryKey[childPkField] ?? '');
             const bKey = String(b.primaryKey[childPkField] ?? '');
-            return aKey.localeCompare(bKey);
+            return cmp(aKey, bKey);
           });
 
           if (childElements.length > 0) {
@@ -397,8 +406,9 @@ export async function emitMetadata(options: MetadataEmitterOptions): Promise<str
     }
   }
 
-  // Verify all composed child rows were consumed
+  // Verify all composed child rows were consumed (for entities that exist only as composed children)
   for (const e of composedChildEntities) {
+    if (options.domain.entities[e]?.syncRoot) continue;
     const total = (options.data[e] ?? []).length;
     const used = consumedChildRows.get(e)?.size ?? 0;
     if (used !== total) {

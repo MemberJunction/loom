@@ -98,6 +98,7 @@ export const EntityConfigSchema = z.object({
   foreignKeys: z.record(z.string(), ForeignKeyConfigSchema).default({}),
   composition: CompositionConfigSchema.optional(),
   isImmutable: z.boolean().default(false),
+  syncRoot: z.boolean().optional().default(false),
   outputDirectory: z.string().optional(),
   outputFileName: z.string().optional(),
 }).transform((entity) => {
@@ -416,6 +417,7 @@ export function createDomainConfigFromMJEntities(
       foreignKeys,
       composition,
       isImmutable: false,
+      syncRoot: false,
     };
   }
 
