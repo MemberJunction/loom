@@ -14,7 +14,7 @@ import {
   extractComposedRecords,
   Validator,
 } from '../src/index.js';
-import type { EntityInfo } from '@memberjunction/core';
+import { EntityInfo } from '@memberjunction/core';
 
 describe('Loom Composition Axes (§7)', () => {
   const sampleDomain: DomainConfig = {
@@ -291,6 +291,44 @@ describe('Loom Composition Axes (§7)', () => {
       expect(() => {
         validateDomainAgainstMJMetadata(invalidDomain, mjEntities);
       }).toThrowError(/Domain entity 'OrphanChild' declares isA parent 'ParentEntity', but MJ metadata has no ParentID/);
+    });
+
+    it('warns when MJ metadata declares ParentID for an entity present in domain.json but domain.json has no composition.isA', () => {
+      const domainWithoutIsA: DomainConfig = {
+        name: 'missing-isa-domain',
+        namespace: '00000000-0000-0000-0000-000000000005',
+        packs: {},
+        entities: {
+          SubtypeChild: {
+            name: 'SubtypeChild',
+            entityName: 'Subtype Child',
+            targetTable: 'SubtypeChild',
+            schema: 'dbo',
+            pack: 'common',
+            businessKey: ['ID'],
+            fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true } },
+            foreignKeys: {},
+            isImmutable: false,
+          },
+        },
+      };
+
+      const mockChild = new EntityInfo();
+      mockChild.ID = 'subtype-uuid';
+      mockChild.Name = 'Subtype Child';
+      mockChild.ParentID = 'parent-uuid';
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        validateDomainAgainstMJMetadata(domainWithoutIsA, [mockChild]);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining(
+            "MJ metadata declares ParentID for 'Subtype Child' but domain.json declares no composition.isA — Gate 11 cannot validate this subtype."
+          )
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
   });
 

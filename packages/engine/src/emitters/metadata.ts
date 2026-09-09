@@ -541,88 +541,120 @@ export function extractComposedRecords(
     }
   }
 
-  // 1. Extract isA extensions
-  for (const [childEntityName, childCfg] of Object.entries(domain.entities)) {
-    if (childCfg.composition?.isA) {
-      const parentName = childCfg.composition.isA.parentEntity;
-      const parentRows = result[parentName] ?? [];
-      const childRows: Record<string, unknown>[] = [];
-      const existingIds = new Set(result[childEntityName]?.map((r) => String(r['ID'] ?? r['id'])) ?? []);
+  let changed = true;
+  while (changed) {
+    changed = false;
 
-      for (const pRow of parentRows) {
-        const ext = pRow['extension'] as { fields?: Record<string, unknown> } | undefined;
-        if (ext?.fields) {
-          const pId = pRow['ID'] ?? pRow['id'];
-          if (pId !== undefined && pId !== null && !existingIds.has(String(pId))) {
-            const childRow: Record<string, unknown> = {
-              ID: pId,
-              ...ext.fields,
-            };
-            childRows.push(childRow);
-            existingIds.add(String(pId));
-          }
-        }
-      }
-      result[childEntityName] = [...(result[childEntityName] ?? []), ...childRows];
-    }
-  }
-
-  // 2. Extract collections
-  for (const [parentEntityName, parentCfg] of Object.entries(domain.entities)) {
-    if (parentCfg.composition?.collections) {
-      const parentRows = result[parentEntityName] ?? [];
-      for (const [colName, colCfg] of Object.entries(parentCfg.composition.collections)) {
-        const childEntityName = colCfg.entity;
+    // 1. Extract isA extensions
+    for (const [childEntityName, childCfg] of Object.entries(domain.entities)) {
+      if (childCfg.composition?.isA) {
+        const parentName = childCfg.composition.isA.parentEntity;
+        const parentRows = result[parentName] ?? [];
         const childRows: Record<string, unknown>[] = [];
         const existingIds = new Set(result[childEntityName]?.map((r) => String(r['ID'] ?? r['id'])) ?? []);
 
         for (const pRow of parentRows) {
-          const pId = pRow['ID'] ?? pRow['id'];
-          const cols = pRow['collections'] as Record<string, Array<{ primaryKey: Record<string, unknown>; fields: Record<string, unknown> }>> | undefined;
-          const colList = cols?.[colName] ?? [];
-          for (const entry of colList) {
-            const childId = entry.primaryKey?.['ID'] ?? entry.primaryKey?.['id'] ?? entry.fields?.['ID'];
-            if (childId !== undefined && childId !== null && !existingIds.has(String(childId))) {
+          const ext = pRow['extension'] as { fields?: Record<string, unknown> } | undefined;
+          if (ext?.fields) {
+            const pId = pRow['ID'] ?? pRow['id'];
+            if (pId !== undefined && pId !== null && !existingIds.has(String(pId))) {
               const childRow: Record<string, unknown> = {
-                ...entry.primaryKey,
-                ...entry.fields,
-                [colCfg.foreignKey]: pId,
+                ID: pId,
+                ...ext.fields,
               };
               childRows.push(childRow);
-              existingIds.add(String(childId));
+              existingIds.add(String(pId));
+              changed = true;
             }
           }
         }
-        result[childEntityName] = [...(result[childEntityName] ?? []), ...childRows];
+        if (childRows.length > 0) {
+          result[childEntityName] = [...(result[childEntityName] ?? []), ...childRows];
+        }
       }
     }
-  }
 
-  // 3. Extract embeds
-  for (const [parentEntityName, parentCfg] of Object.entries(domain.entities)) {
-    if (parentCfg.composition?.embeds) {
-      const parentRows = result[parentEntityName] ?? [];
-      for (const [embedField, embedCfg] of Object.entries(parentCfg.composition.embeds)) {
-        const childEntityName = embedCfg.entity;
-        const childRows: Record<string, unknown>[] = [];
-        const existingIds = new Set(result[childEntityName]?.map((r) => String(r['ID'] ?? r['id'])) ?? []);
+    // 2. Extract collections
+    for (const [parentEntityName, parentCfg] of Object.entries(domain.entities)) {
+      if (parentCfg.composition?.collections) {
+        const parentRows = result[parentEntityName] ?? [];
+        for (const [colName, colCfg] of Object.entries(parentCfg.composition.collections)) {
+          const childEntityName = colCfg.entity;
+          const childRows: Record<string, unknown>[] = [];
+          const existingIds = new Set(result[childEntityName]?.map((r) => String(r['ID'] ?? r['id'])) ?? []);
 
-        for (const pRow of parentRows) {
-          const embeds = pRow['embeds'] as Record<string, { primaryKey: Record<string, unknown>; fields: Record<string, unknown> }> | undefined;
-          const embeddedEntry = embeds?.[embedField];
-          if (embeddedEntry) {
-            const childId = embeddedEntry.primaryKey?.['ID'] ?? embeddedEntry.primaryKey?.['id'] ?? embeddedEntry.fields?.['ID'];
-            if (childId !== undefined && childId !== null && !existingIds.has(String(childId))) {
-              const childRow: Record<string, unknown> = {
-                ...embeddedEntry.primaryKey,
-                ...embeddedEntry.fields,
-              };
-              childRows.push(childRow);
-              existingIds.add(String(childId));
+          for (const pRow of parentRows) {
+            const pId = pRow['ID'] ?? pRow['id'];
+            const cols = pRow['collections'] as Record<string, Array<{ primaryKey?: Record<string, unknown>; fields?: Record<string, unknown>; collections?: Record<string, unknown>; embeds?: Record<string, unknown>; extension?: Record<string, unknown> }>> | undefined;
+            const colList = cols?.[colName] ?? [];
+            for (const entry of colList) {
+              const childId = entry.primaryKey?.['ID'] ?? entry.primaryKey?.['id'] ?? entry.fields?.['ID'];
+              if (childId !== undefined && childId !== null && !existingIds.has(String(childId))) {
+                const childRow: Record<string, unknown> = {
+                  ...entry.primaryKey,
+                  ...entry.fields,
+                  [colCfg.foreignKey]: pId,
+                };
+                if (entry.collections) {
+                  childRow['collections'] = entry.collections;
+                }
+                if (entry.embeds) {
+                  childRow['embeds'] = entry.embeds;
+                }
+                if (entry.extension) {
+                  childRow['extension'] = entry.extension;
+                }
+                childRows.push(childRow);
+                existingIds.add(String(childId));
+                changed = true;
+              }
             }
           }
+          if (childRows.length > 0) {
+            result[childEntityName] = [...(result[childEntityName] ?? []), ...childRows];
+          }
         }
-        result[childEntityName] = [...(result[childEntityName] ?? []), ...childRows];
+      }
+    }
+
+    // 3. Extract embeds
+    for (const [parentEntityName, parentCfg] of Object.entries(domain.entities)) {
+      if (parentCfg.composition?.embeds) {
+        const parentRows = result[parentEntityName] ?? [];
+        for (const [embedField, embedCfg] of Object.entries(parentCfg.composition.embeds)) {
+          const childEntityName = embedCfg.entity;
+          const childRows: Record<string, unknown>[] = [];
+          const existingIds = new Set(result[childEntityName]?.map((r) => String(r['ID'] ?? r['id'])) ?? []);
+
+          for (const pRow of parentRows) {
+            const embeds = pRow['embeds'] as Record<string, { primaryKey?: Record<string, unknown>; fields?: Record<string, unknown>; collections?: Record<string, unknown>; embeds?: Record<string, unknown>; extension?: Record<string, unknown> }> | undefined;
+            const embeddedEntry = embeds?.[embedField];
+            if (embeddedEntry) {
+              const childId = embeddedEntry.primaryKey?.['ID'] ?? embeddedEntry.primaryKey?.['id'] ?? embeddedEntry.fields?.['ID'];
+              if (childId !== undefined && childId !== null && !existingIds.has(String(childId))) {
+                const childRow: Record<string, unknown> = {
+                  ...embeddedEntry.primaryKey,
+                  ...embeddedEntry.fields,
+                };
+                if (embeddedEntry.collections) {
+                  childRow['collections'] = embeddedEntry.collections;
+                }
+                if (embeddedEntry.embeds) {
+                  childRow['embeds'] = embeddedEntry.embeds;
+                }
+                if (embeddedEntry.extension) {
+                  childRow['extension'] = embeddedEntry.extension;
+                }
+                childRows.push(childRow);
+                existingIds.add(String(childId));
+                changed = true;
+              }
+            }
+          }
+          if (childRows.length > 0) {
+            result[childEntityName] = [...(result[childEntityName] ?? []), ...childRows];
+          }
+        }
       }
     }
   }

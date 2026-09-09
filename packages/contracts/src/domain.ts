@@ -432,8 +432,29 @@ export function createDomainConfigFromMJEntities(
 }
 
 /**
+ * Resolves an entity config in domain.json by case-insensitive name or entityName match.
+ */
+export function findDomainEntityByName(
+  domain: DomainConfig,
+  entityName: string
+): EntityConfig | undefined {
+  const lower = entityName.toLowerCase();
+  for (const [key, cfg] of Object.entries(domain.entities)) {
+    if (
+      key.toLowerCase() === lower ||
+      cfg.entityName.toLowerCase() === lower ||
+      cfg.name.toLowerCase() === lower
+    ) {
+      return cfg;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Asserts that if domain.json specifies isA, the underlying MJ metadata has ParentID configured.
- * Fails at load, not emit.
+ * Also checks the converse: if MJ metadata specifies ParentID for an entity present in domain.json,
+ * warns if domain.json declares no composition.isA so Gate 11 cannot validate this subtype.
  */
 export function validateDomainAgainstMJMetadata(
   domain: DomainConfig,
@@ -452,6 +473,16 @@ export function validateDomainAgainstMJMetadata(
           `Domain entity '${entityName}' declares isA parent '${entityCfg.composition.isA.parentEntity}', but MJ metadata has no ParentID for this entity`
         );
       }
+    }
+  }
+
+  for (const mjEntity of entities) {
+    if (!mjEntity.ParentID) continue;
+    const cfg = findDomainEntityByName(domain, mjEntity.Name);
+    if (cfg && !cfg.composition?.isA) {
+      console.warn(
+        `validateDomainAgainstMJMetadata: MJ metadata declares ParentID for '${mjEntity.Name}' but domain.json declares no composition.isA — Gate 11 cannot validate this subtype.`
+      );
     }
   }
 }
