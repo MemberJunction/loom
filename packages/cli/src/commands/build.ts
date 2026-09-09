@@ -241,9 +241,14 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
   for (const [entityName, entityCfg] of Object.entries(loaded.domain.entities)) {
     const node: SimulationNode = {
       id: `node-${entityName.toLowerCase()}`,
-      consumes: Object.values(entityCfg.foreignKeys)
-        .map((fk) => fk.targetEntity)
-        .filter((target) => target in loaded.domain.entities),
+      consumes: [
+        ...Object.values(entityCfg.foreignKeys)
+          .map((fk) => fk.targetEntity)
+          .filter((target) => target in loaded.domain.entities),
+        ...(entityCfg.composition?.isA?.parentEntity && entityCfg.composition.isA.parentEntity in loaded.domain.entities
+          ? [entityCfg.composition.isA.parentEntity]
+          : []),
+      ],
       produces: [entityName],
       description: `Generates ${entityName} records with causal factor calibration`,
       execute: async (ctx) => {
@@ -507,6 +512,25 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
           bgRecordsByEntity.set(outcomeRule.ballotEntity, ballots);
 
           backgroundRecords.push(...decisions);
+        } else if (entityCfg.composition?.isA) {
+          const parentEntityName = entityCfg.composition.isA.parentEntity;
+          const parentRows = parentPool[parentEntityName] ?? [];
+          const count = Math.min(targetCount, parentRows.length);
+          for (let i = 0; i < count; i++) {
+            const parentRow = parentRows[i];
+            if (!parentRow) continue;
+            const parentId = parentRow['ID'] ?? parentRow['id'];
+            const row = generateEntityRecord({
+              domain: loaded.domain,
+              entity: entityName,
+              i: i + 1,
+              parentPool,
+              rng: entityRng,
+              identityService,
+            });
+            row['ID'] = parentId;
+            backgroundRecords.push(row);
+          }
         } else {
           for (let i = 1; i <= targetCount; i++) {
             const row = generateEntityRecord({
