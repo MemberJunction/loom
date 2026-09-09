@@ -452,6 +452,95 @@ describe('Loom Composition Axes (§7)', () => {
       // Cleanup
       await fs.rm(tmpDir, { recursive: true, force: true });
     });
+
+    it('recursively emits and reconstitutes multi-level nested collections', async () => {
+      const nestedDomain: DomainConfig = {
+        ...sampleDomain,
+        entities: {
+          ...sampleDomain.entities,
+          CommitteeMotion: {
+            name: 'CommitteeMotion',
+            entityName: 'Committees: Motions',
+            targetTable: 'Motion',
+            schema: 'sample',
+            pack: 'sample',
+            outputDirectory: 'committee-motions',
+            fields: {
+              ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+              MeetingID: { name: 'MeetingID', type: 'uuid' },
+              Name: { name: 'Name', type: 'string' },
+            },
+            foreignKeys: {
+              MeetingID: { targetEntity: 'CommitteeMeeting', targetField: 'ID' },
+            },
+            composition: {
+              collections: {
+                Votes: { entity: 'CommitteeVote', foreignKey: 'MotionID', mode: 'upsert' },
+              },
+            },
+          },
+          CommitteeVote: {
+            name: 'CommitteeVote',
+            entityName: 'Committees: Votes',
+            targetTable: 'Vote',
+            schema: 'sample',
+            pack: 'sample',
+            outputDirectory: 'committee-votes',
+            fields: {
+              ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+              MotionID: { name: 'MotionID', type: 'uuid' },
+              VoteValue: { name: 'VoteValue', type: 'string' },
+            },
+            foreignKeys: {
+              MotionID: { targetEntity: 'CommitteeMotion', targetField: 'ID' },
+            },
+          },
+          CommitteeMeeting: {
+            ...sampleDomain.entities.CommitteeMeeting,
+            composition: {
+              collections: {
+                Motions: { entity: 'CommitteeMotion', foreignKey: 'MeetingID', mode: 'upsert' },
+              },
+            },
+          },
+        },
+      };
+
+      const tmpDir = path.join(os.tmpdir(), `loom-test-nested-${Date.now()}`);
+      const meetingId = 'meet-nested-1';
+      const motionId = 'motion-nested-1';
+      const voteId = 'vote-nested-1';
+
+      const data: Record<string, readonly Record<string, unknown>[]> = {
+        CommitteeMeeting: [{ ID: meetingId, Title: 'Board Meeting', LocationAddressID: null }],
+        CommitteeMotion: [{ ID: motionId, MeetingID: meetingId, Name: 'Approve Budget' }],
+        CommitteeVote: [{ ID: voteId, MotionID: motionId, VoteValue: 'Yes' }],
+      };
+
+      await emitMetadata({
+        outputDir: tmpDir,
+        domain: nestedDomain,
+        data,
+      });
+
+      const { records: meetings } = await readEntityMetadata(path.join(tmpDir, 'CommitteeMeeting'), 'Committee Meetings');
+      expect(meetings).toHaveLength(1);
+      const m = meetings[0]!;
+      const motions = m.collections?.Motions as Array<{ primaryKey: Record<string, unknown>; fields: Record<string, unknown>; collections?: Record<string, unknown[]> }>;
+      expect(motions).toHaveLength(1);
+      expect(motions[0]!.primaryKey.ID).toBe(motionId);
+      expect(motions[0]!.fields.Name).toBe('Approve Budget');
+      expect(motions[0]!.fields.MeetingID).toBeUndefined();
+
+      const votes = motions[0]!.collections?.Votes as Array<{ primaryKey: Record<string, unknown>; fields: Record<string, unknown> }>;
+      expect(votes).toHaveLength(1);
+      expect(votes[0]!.primaryKey.ID).toBe(voteId);
+      expect(votes[0]!.fields.VoteValue).toBe('Yes');
+      expect(votes[0]!.fields.MotionID).toBeUndefined();
+
+      // Cleanup
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    });
   });
 
   describe('4. Validator Composition Invariants Gates', () => {
