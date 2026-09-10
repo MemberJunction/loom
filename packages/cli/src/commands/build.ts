@@ -235,7 +235,9 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
   const allRecords: Record<string, Record<string, unknown>[]> = {};
   if (loaded.catalogs) {
     for (const [catEnt, catRows] of Object.entries(loaded.catalogs)) {
-      allRecords[catEnt] = [...catRows] as Record<string, unknown>[];
+      if (Array.isArray(catRows)) {
+        allRecords[catEnt] = [...catRows] as Record<string, unknown>[];
+      }
     }
   }
 
@@ -280,7 +282,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         }
         if (loaded.catalogs) {
           for (const [catEnt, catRows] of Object.entries(loaded.catalogs)) {
-            if (!parentPool[catEnt]) {
+            if (Array.isArray(catRows) && !parentPool[catEnt]) {
               parentPool[catEnt] = [...catRows] as Record<string, unknown>[];
             }
           }

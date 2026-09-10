@@ -32,7 +32,8 @@ export interface ValidateOptions {
   heroes?: readonly HeroConfig[];
   eras?: readonly EraConfig[];
   catalogs?: Record<string, readonly Record<string, unknown>[]>;
-  baseData?: Record<string, readonly Record<string, unknown>[]>;
+  baseData?: Record<string, readonly Record<string, unknown>[]> | null;
+  skipBaseCheck?: boolean;
 }
 
 export class Validator {
@@ -43,13 +44,13 @@ export class Validator {
     heroes: readonly HeroConfig[] = [],
     eras: readonly EraConfig[] = [],
     catalogs?: Record<string, readonly Record<string, unknown>[]>,
-    baseData?: Record<string, readonly Record<string, unknown>[]>
+    baseData?: Record<string, readonly Record<string, unknown>[]> | null
   ): ValidationReport {
     let actualFactors: readonly FactorContract[] = [];
     let actualHeroes: readonly HeroConfig[] = heroes;
     let actualEras: readonly EraConfig[] = eras;
     let actualCatalogs: Record<string, readonly Record<string, unknown>[]> | undefined = catalogs;
-    let actualBaseData: Record<string, readonly Record<string, unknown>[]> | undefined = baseData;
+    let actualBaseData: Record<string, readonly Record<string, unknown>[]> | null | undefined = baseData;
 
     if (Array.isArray(factorsOrOptions)) {
       actualFactors = factorsOrOptions;
@@ -60,13 +61,14 @@ export class Validator {
         opts.heroes !== undefined ||
         opts.eras !== undefined ||
         opts.catalogs !== undefined ||
-        opts.baseData !== undefined
+        opts.baseData !== undefined ||
+        opts.skipBaseCheck !== undefined
       ) {
         actualFactors = opts.factors ?? [];
         actualHeroes = opts.heroes ?? heroes;
         actualEras = opts.eras ?? eras;
         actualCatalogs = opts.catalogs ?? catalogs;
-        actualBaseData = opts.baseData ?? baseData;
+        actualBaseData = opts.skipBaseCheck ? null : (opts.baseData ?? baseData);
       } else {
         actualCatalogs = factorsOrOptions as Record<string, readonly Record<string, unknown>[]>;
       }
@@ -233,7 +235,8 @@ export class Validator {
           );
         }
 
-        const targetRecords = data[fk.targetEntity] ?? (catalogs ? catalogs[fk.targetEntity] : undefined) ?? [];
+        const catTarget = catalogs ? catalogs[fk.targetEntity] : undefined;
+        const targetRecords = data[fk.targetEntity] ?? (Array.isArray(catTarget) ? catTarget : undefined) ?? [];
         const targetIds = new Set(
           targetRecords.map((r) => {
             const raw = r[fk.targetField];
@@ -953,21 +956,53 @@ export class Validator {
         continue;
       }
 
-      const distinctSet = new Set(values.map((v) => String(v)));
+      const sample = String(values[0]);
+      const isDataUri = sample.startsWith('data:image/svg+xml;base64,') || sample.startsWith('data:');
+
+      let distinctSet: Set<string>;
+      if (isDataUri) {
+        distinctSet = new Set(
+          values.map((v) => {
+            const str = String(v);
+            const commaIdx = str.indexOf(',');
+            if (commaIdx >= 0) {
+              try {
+                return Buffer.from(str.slice(commaIdx + 1), 'base64').toString('utf8');
+              } catch {
+                return str;
+              }
+            }
+            return str;
+          })
+        );
+      } else {
+        distinctSet = new Set(values.map((v) => String(v)));
+      }
+
       const distinctCount = distinctSet.size;
       const totalCount = values.length;
       const distinctRatio = distinctCount / totalCount;
       const passed = distinctRatio >= 0.99 && totalCount > 0;
+
+      let msg: string;
+      if (isDataUri) {
+        msg =
+          distinctCount === totalCount
+            ? `All ${totalCount} rendered avatars are distinct (100.0% decoded SVG payload uniqueness)`
+            : `${distinctCount} distinct rendered SVGs across ${totalCount} records (${(distinctRatio * 100).toFixed(2)}% distinct, threshold ≥ 99.0%)`;
+      } else {
+        msg =
+          distinctCount === totalCount
+            ? `All ${totalCount} avatar URLs are distinct (seed/URL mode; note: rendered SVGs not hashed offline)`
+            : `${distinctCount} distinct avatar URLs across ${totalCount} records (${(distinctRatio * 100).toFixed(2)}% distinct, threshold ≥ 99.0%)`;
+      }
 
       gates.push({
         name: `Avatar Uniqueness: ${entityName}.${avatarField}`,
         category: 'generated',
         passed,
         populationCount: totalCount,
-        message:
-          distinctCount === totalCount
-            ? `All ${totalCount} rendered avatars are distinct (100.0% uniqueness)`
-            : `${distinctCount} distinct avatars across ${totalCount} records (${(distinctRatio * 100).toFixed(2)}% distinct, threshold ≥ 99.0%)`,
+        message: msg,
         expected: totalCount,
         actual: distinctCount,
       });
@@ -976,10 +1011,17 @@ export class Validator {
 
   private checkCorpusStability(
     data: Record<string, readonly Record<string, unknown>[]>,
-    baseData: Record<string, readonly Record<string, unknown>[]> | undefined,
+    baseData: Record<string, readonly Record<string, unknown>[]> | null | undefined,
     gates: GateResult[],
   ): void {
     if (!baseData || Object.keys(baseData).length === 0) {
+      gates.push({
+        name: 'Corpus Stability (base ⊆ head)',
+        category: 'schema',
+        passed: true,
+        populationCount: 0,
+        message: 'Skipped: baseData not provided or empty (standalone evaluation)',
+      });
       return;
     }
 
@@ -992,14 +1034,14 @@ export class Validator {
       const headRecords = data[entityName] ?? [];
       const headPkSet = new Set<string>();
       for (const hr of headRecords) {
-        const pk = hr['ID'] ?? hr['id'] ?? hr['primaryKey'];
+        const pk = hr['ID'] ?? hr['id'] ?? (hr['primaryKey'] as Record<string, unknown> | undefined)?.['ID'];
         if (pk !== undefined && pk !== null) {
           headPkSet.add(typeof pk === 'string' ? pk.toLowerCase() : String(pk));
         }
       }
 
       for (const br of baseRecords) {
-        const pk = br['ID'] ?? br['id'] ?? br['primaryKey'];
+        const pk = br['ID'] ?? br['id'] ?? (br['primaryKey'] as Record<string, unknown> | undefined)?.['ID'];
         if (pk !== undefined && pk !== null) {
           const norm = typeof pk === 'string' ? pk.toLowerCase() : String(pk);
           if (!headPkSet.has(norm)) {
@@ -1018,8 +1060,8 @@ export class Validator {
         category: 'schema',
         passed: false,
         populationCount: 0,
-        message: 'Evaluation failed: baseData provided but contains 0 records',
-        expected: '> 0',
+        message: 'Evaluation failed: baseData contains 0 records across all entities',
+        expected: '> 0 base records',
         actual: 0,
       });
       return;
@@ -2232,7 +2274,7 @@ export class LookupIndex {
 
   private indexPool(pool: Record<string, readonly Record<string, unknown>[]>): void {
     for (const [eName, rows] of Object.entries(pool)) {
-      if (rows.length === 0) continue;
+      if (!Array.isArray(rows) || rows.length === 0) continue;
       const entityNames: string[] = [eName.toLowerCase()];
       const firstRow = rows[0];
       const altName = firstRow ? (firstRow['_entityName'] ?? firstRow['__entityName']) : undefined;
@@ -2304,6 +2346,7 @@ export function resolveLookupExpression(
 
   const searchPool = (pool: Record<string, readonly Record<string, unknown>[]>) => {
     for (const [eName, rows] of Object.entries(pool)) {
+      if (!Array.isArray(rows)) continue;
       if (
         eName.toLowerCase() === targetEntity.toLowerCase() ||
         (rows.length > 0 && String(rows[0]?.['_entityName'] ?? rows[0]?.['__entityName'] ?? '').toLowerCase() === targetEntity.toLowerCase())

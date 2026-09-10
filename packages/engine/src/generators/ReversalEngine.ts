@@ -53,6 +53,33 @@ export interface UnrollReversalsResult {
   coherentCount: number;
 }
 
+function getField(row: Record<string, unknown>, key: string): unknown {
+  const fields = row['fields'] as Record<string, unknown> | undefined;
+  if (fields && fields[key] !== undefined) return fields[key];
+  const pk = row['primaryKey'] as Record<string, unknown> | undefined;
+  if (pk && pk[key] !== undefined) return pk[key];
+  return row[key];
+}
+
+function setField(row: Record<string, unknown>, key: string, val: unknown): void {
+  const fields = row['fields'] as Record<string, unknown> | undefined;
+  if (fields) {
+    fields[key] = val;
+  } else {
+    row[key] = val;
+  }
+}
+
+function getId(row: Record<string, unknown>): string {
+  const pk = row['primaryKey'] as Record<string, unknown> | undefined;
+  if (pk && pk['ID']) return String(pk['ID']);
+  if (pk && pk['id']) return String(pk['id']);
+  const fields = row['fields'] as Record<string, unknown> | undefined;
+  if (fields && fields['ID']) return String(fields['ID']);
+  if (fields && fields['id']) return String(fields['id']);
+  return String(row['ID'] ?? row['id'] ?? '');
+}
+
 /**
  * ReversalEngine: enforces MemberJunction accounting invariants for order cancellations
  * and line reversals (ReversalBehavior.ts).
@@ -74,7 +101,7 @@ export class ReversalEngine {
     // Group lines by OrderHeaderID
     const linesByOrderId = new Map<string, Record<string, unknown>[]>();
     for (const line of separateLines) {
-      const oid = String(line['OrderHeaderID'] ?? line['orderHeaderId'] ?? '').toLowerCase();
+      const oid = String(getField(line, 'OrderHeaderID') ?? getField(line, 'orderHeaderId') ?? '').toLowerCase();
       if (oid) {
         let list = linesByOrderId.get(oid);
         if (!list) {
@@ -87,7 +114,7 @@ export class ReversalEngine {
 
     // Helper to get lines of an order (composed in collections.Lines or from separate lines)
     const getOrderLines = (order: Record<string, unknown>): Record<string, unknown>[] => {
-      const id = String(order['ID'] ?? order['id'] ?? '').toLowerCase();
+      const id = getId(order).toLowerCase();
       const collections = order['collections'] as { Lines?: Record<string, unknown>[] } | undefined;
       if (collections?.Lines && Array.isArray(collections.Lines) && collections.Lines.length > 0) {
         return collections.Lines;
@@ -98,7 +125,7 @@ export class ReversalEngine {
     // Index all orders by ID
     const orderById = new Map<string, Record<string, unknown>>();
     for (const o of orders) {
-      const id = String(o['ID'] ?? o['id'] ?? '').toLowerCase();
+      const id = getId(o).toLowerCase();
       if (id) orderById.set(id, o);
     }
 
@@ -107,11 +134,11 @@ export class ReversalEngine {
     const cancellations: Record<string, unknown>[] = [];
 
     for (const o of orders) {
-      const type = String(o['OrderType'] ?? '');
-      const status = String(o['Status'] ?? o['OrderStatus'] ?? '');
-      const revId = o['ReversesOrderHeaderID'];
+      const type = String(getField(o, 'OrderType') ?? '');
+      const status = String(getField(o, 'Status') ?? getField(o, 'OrderStatus') ?? '');
+      const revId = getField(o, 'ReversesOrderHeaderID');
 
-      if (type === 'Cancellation' || type === 'Return' || revId !== undefined && revId !== null && revId !== '') {
+      if (type === 'Cancellation' || type === 'Return' || (revId !== undefined && revId !== null && revId !== '')) {
         cancellations.push(o);
       } else if (type === 'Sale' && status === 'Confirmed') {
         confirmedSales.push(o);
@@ -124,9 +151,9 @@ export class ReversalEngine {
     let coherentCount = 0;
 
     for (const cancellation of cancellations) {
-      const cancelId = String(cancellation['ID'] ?? cancellation['id'] ?? '');
-      const rawTargetId = cancellation['ReversesOrderHeaderID']
-        ? String(cancellation['ReversesOrderHeaderID']).toLowerCase()
+      const cancelId = getId(cancellation);
+      const rawTargetId = getField(cancellation, 'ReversesOrderHeaderID')
+        ? String(getField(cancellation, 'ReversesOrderHeaderID')).toLowerCase()
         : null;
 
       let originalOrder: Record<string, unknown> | undefined;
@@ -134,8 +161,8 @@ export class ReversalEngine {
       // 1. Check if existing ReversesOrderHeaderID points to a valid confirmed sale
       if (rawTargetId && orderById.has(rawTargetId)) {
         const target = orderById.get(rawTargetId)!;
-        const targetType = String(target['OrderType'] ?? '');
-        const targetStatus = String(target['Status'] ?? target['OrderStatus'] ?? '');
+        const targetType = String(getField(target, 'OrderType') ?? '');
+        const targetStatus = String(getField(target, 'Status') ?? getField(target, 'OrderStatus') ?? '');
         if (targetType === 'Sale' && targetStatus === 'Confirmed' && !claimedSales.has(rawTargetId)) {
           originalOrder = target;
         }
@@ -143,12 +170,12 @@ export class ReversalEngine {
 
       // 2. If no valid target yet, find the best confirmed sale for this customer
       const cancelCustomer = String(
-        cancellation['BillToPersonID'] ?? cancellation['CustomerID'] ?? cancellation['BillToOrganizationID'] ?? ''
+        getField(cancellation, 'BillToPersonID') ?? getField(cancellation, 'CustomerID') ?? getField(cancellation, 'BillToOrganizationID') ?? ''
       );
       if (!originalOrder && cancelCustomer) {
         const customerSales = confirmedSales.filter((s) => {
-          const sId = String(s['ID'] ?? s['id'] ?? '').toLowerCase();
-          const sCust = String(s['BillToPersonID'] ?? s['CustomerID'] ?? s['BillToOrganizationID'] ?? '');
+          const sId = getId(s).toLowerCase();
+          const sCust = String(getField(s, 'BillToPersonID') ?? getField(s, 'CustomerID') ?? getField(s, 'BillToOrganizationID') ?? '');
           return (
             sCust === cancelCustomer &&
             !claimedSales.has(sId) &&
@@ -157,8 +184,7 @@ export class ReversalEngine {
         });
 
         if (customerSales.length > 0) {
-          // Sort by OrderDate ascending
-          customerSales.sort((a, b) => String(a['OrderDate'] ?? '').localeCompare(String(b['OrderDate'] ?? '')));
+          customerSales.sort((a, b) => String(getField(a, 'OrderDate') ?? '').localeCompare(String(getField(b, 'OrderDate') ?? '')));
           originalOrder = customerSales[0];
         }
       }
@@ -166,19 +192,20 @@ export class ReversalEngine {
       // 3. Fallback: pair with any unclaimed confirmed sale and align customer
       if (!originalOrder) {
         const available = confirmedSales.filter((s) => {
-          const sId = String(s['ID'] ?? s['id'] ?? '').toLowerCase();
+          const sId = getId(s).toLowerCase();
           return !claimedSales.has(sId) && sId !== cancelId.toLowerCase();
         });
         if (available.length > 0) {
-          originalOrder = available[0];
+          const orig = available[0]!;
+          originalOrder = orig;
           // Align customer to match original order
-          if (originalOrder!['BillToPersonID']) cancellation['BillToPersonID'] = originalOrder!['BillToPersonID'];
-          if (originalOrder!['CustomerID']) cancellation['CustomerID'] = originalOrder!['CustomerID'];
-          if (originalOrder!['ShipToPersonID']) {
-            cancellation['ShipToPersonID'] = originalOrder!['ShipToPersonID'];
+          if (getField(orig, 'BillToPersonID')) setField(cancellation, 'BillToPersonID', getField(orig, 'BillToPersonID'));
+          if (getField(orig, 'CustomerID')) setField(cancellation, 'CustomerID', getField(orig, 'CustomerID'));
+          if (getField(orig, 'ShipToPersonID')) {
+            setField(cancellation, 'ShipToPersonID', getField(orig, 'ShipToPersonID'));
           }
-          if (originalOrder!['CompanyID']) {
-            cancellation['CompanyID'] = originalOrder!['CompanyID'];
+          if (getField(orig, 'CompanyID')) {
+            setField(cancellation, 'CompanyID', getField(orig, 'CompanyID'));
           }
         }
       }
@@ -187,31 +214,31 @@ export class ReversalEngine {
         continue;
       }
 
-      const originalId = String(originalOrder['ID'] ?? originalOrder['id'] ?? '').toLowerCase();
+      const originalId = getId(originalOrder).toLowerCase();
       claimedSales.add(originalId);
 
       // Link headers
-      cancellation['OrderType'] = 'Cancellation';
-      cancellation['Status'] = 'Confirmed';
-      if (cancellation['OrderStatus'] !== undefined) {
-        cancellation['OrderStatus'] = 'Confirmed';
+      setField(cancellation, 'OrderType', 'Cancellation');
+      setField(cancellation, 'Status', 'Confirmed');
+      if (getField(cancellation, 'OrderStatus') !== undefined) {
+        setField(cancellation, 'OrderStatus', 'Confirmed');
       }
-      cancellation['ReversesOrderHeaderID'] = originalOrder['ID'] ?? originalOrder['id'];
-      originalOrder['ReversedByOrderHeaderID'] = cancellation['ID'] ?? cancellation['id'];
+      setField(cancellation, 'ReversesOrderHeaderID', getId(originalOrder));
+      setField(originalOrder, 'ReversedByOrderHeaderID', getId(cancellation));
 
       // Ensure customer matches
-      if (originalOrder['BillToPersonID']) cancellation['BillToPersonID'] = originalOrder['BillToPersonID'];
-      if (originalOrder['CustomerID']) cancellation['CustomerID'] = originalOrder['CustomerID'];
-      if (originalOrder['ShipToPersonID']) {
-        cancellation['ShipToPersonID'] = originalOrder['ShipToPersonID'];
+      if (getField(originalOrder, 'BillToPersonID')) setField(cancellation, 'BillToPersonID', getField(originalOrder, 'BillToPersonID'));
+      if (getField(originalOrder, 'CustomerID')) setField(cancellation, 'CustomerID', getField(originalOrder, 'CustomerID'));
+      if (getField(originalOrder, 'ShipToPersonID')) {
+        setField(cancellation, 'ShipToPersonID', getField(originalOrder, 'ShipToPersonID'));
       }
-      if (originalOrder['CompanyID']) {
-        cancellation['CompanyID'] = originalOrder['CompanyID'];
+      if (getField(originalOrder, 'CompanyID')) {
+        setField(cancellation, 'CompanyID', getField(originalOrder, 'CompanyID'));
       }
 
       // Ensure date coherence: Cancellation OrderDate >= Original OrderDate
-      const origDateStr = String(originalOrder['OrderDate'] ?? '2019-01-01');
-      let cancelDateStr = String(cancellation['OrderDate'] ?? '');
+      const origDateStr = String(getField(originalOrder, 'OrderDate') ?? '2019-01-01');
+      let cancelDateStr = String(getField(cancellation, 'OrderDate') ?? '');
       if (!cancelDateStr || cancelDateStr < origDateStr) {
         const origDate = new Date(origDateStr);
         origDate.setDate(origDate.getDate() + 7);
@@ -219,15 +246,15 @@ export class ReversalEngine {
         const m = String(origDate.getMonth() + 1).padStart(2, '0');
         const d = String(origDate.getDate()).padStart(2, '0');
         cancelDateStr = `${y}-${m}-${d}`;
-        cancellation['OrderDate'] = cancelDateStr;
-        cancellation['DueDate'] = cancelDateStr;
+        setField(cancellation, 'OrderDate', cancelDateStr);
+        setField(cancellation, 'DueDate', cancelDateStr);
       }
 
       // Set Reversal reason
-      if (!cancellation['ReversalReason']) {
-        cancellation['ReversalReason'] = 'Course seat withdrawal within accredited refund window';
+      if (!getField(cancellation, 'ReversalReason')) {
+        setField(cancellation, 'ReversalReason', 'Customer withdrawal within refund policy window');
       }
-      cancellation['FulfillmentStatus'] = 'Returned';
+      setField(cancellation, 'FulfillmentStatus', 'Returned');
 
       // Mirror lines from original order
       const origLines = getOrderLines(originalOrder);
@@ -238,11 +265,15 @@ export class ReversalEngine {
 
       for (let idx = 0; idx < origLines.length; idx++) {
         const ol = origLines[idx]!;
-        const olId = String(ol['ID'] ?? ol['id'] ?? '');
-        const qty = typeof ol['Quantity'] === 'number' ? ol['Quantity'] : 1;
-        const unitPrice = typeof ol['UnitPrice'] === 'number' ? ol['UnitPrice'] : 0;
-        const origNet = typeof ol['LineTotalNet'] === 'number' ? ol['LineTotalNet'] : qty * unitPrice;
-        const origGross = typeof ol['LineTotalGross'] === 'number' ? ol['LineTotalGross'] : origNet;
+        const olId = getId(ol);
+        const rawQty = getField(ol, 'Quantity');
+        const qty = typeof rawQty === 'number' ? rawQty : 1;
+        const rawPrice = getField(ol, 'UnitPrice');
+        const unitPrice = typeof rawPrice === 'number' ? rawPrice : 0;
+        const rawNet = getField(ol, 'LineTotalNet');
+        const origNet = typeof rawNet === 'number' ? rawNet : qty * unitPrice;
+        const rawGross = getField(ol, 'LineTotalGross');
+        const origGross = typeof rawGross === 'number' ? rawGross : origNet;
 
         const negQty = -1 * Math.abs(qty);
         const negNet = -1 * Math.abs(origNet);
@@ -251,39 +282,66 @@ export class ReversalEngine {
 
         // Existing cancellation line to reuse ID or generate one
         const existingLine = cancelLines[idx];
-        const lineId = existingLine
-          ? String(existingLine['ID'] ?? existingLine['id'] ?? '')
-          : `${cancelId}-LINE-${idx + 1}`;
+        const lineId = existingLine ? getId(existingLine) : `${cancelId}-LINE-${idx + 1}`;
 
-        const mirroredLine: Record<string, unknown> = {
-          ...(existingLine ?? {}),
-          ID: lineId,
-          OrderHeaderID: cancellation['ID'] ?? cancellation['id'],
-          ProductID: ol['ProductID'],
-          CompanyID: ol['CompanyID'] ?? cancellation['CompanyID'],
-          LineNumber: idx + 1,
-          Quantity: negQty,
-          UnitPrice: unitPrice,
-          DiscountPct: ol['DiscountPct'] ?? 0,
-          DiscountAmount: ol['DiscountAmount'] ?? 0,
-          ChargeAmount: 0,
-          LineTax: 0,
-          IsRollupParent: false,
-          IsQuantityOverridden: false,
-          FulfillmentStatus: 'Returned',
-          Description: ol['Description'] ? `Refund: ${ol['Description']}` : 'Refund',
-          LineTotalNet: negNet,
-          LineTotalGross: negGross,
-          ReversesOrderLineID: olId,
-        };
+        let mirroredLine: Record<string, unknown>;
+        if (existingLine && existingLine['fields']) {
+          const exFields = (existingLine['fields'] as Record<string, unknown>) ?? {};
+          mirroredLine = {
+            ...existingLine,
+            primaryKey: existingLine['primaryKey'] ?? { ID: lineId },
+            fields: {
+              ...exFields,
+              OrderHeaderID: getId(cancellation),
+              ProductID: getField(ol, 'ProductID'),
+              CompanyID: getField(ol, 'CompanyID') ?? getField(cancellation, 'CompanyID'),
+              LineNumber: idx + 1,
+              Quantity: negQty,
+              UnitPrice: unitPrice,
+              DiscountPct: getField(ol, 'DiscountPct') ?? 0,
+              DiscountAmount: getField(ol, 'DiscountAmount') ?? 0,
+              ChargeAmount: 0,
+              LineTax: 0,
+              IsRollupParent: false,
+              IsQuantityOverridden: false,
+              FulfillmentStatus: 'Returned',
+              Description: 'Refund',
+              LineTotalNet: negNet,
+              LineTotalGross: negGross,
+              ReversesOrderLineID: olId,
+            },
+          };
+        } else {
+          mirroredLine = {
+            ...(existingLine ?? {}),
+            ID: lineId,
+            OrderHeaderID: getId(cancellation),
+            ProductID: getField(ol, 'ProductID'),
+            CompanyID: getField(ol, 'CompanyID') ?? getField(cancellation, 'CompanyID'),
+            LineNumber: idx + 1,
+            Quantity: negQty,
+            UnitPrice: unitPrice,
+            DiscountPct: getField(ol, 'DiscountPct') ?? 0,
+            DiscountAmount: getField(ol, 'DiscountAmount') ?? 0,
+            ChargeAmount: 0,
+            LineTax: 0,
+            IsRollupParent: false,
+            IsQuantityOverridden: false,
+            FulfillmentStatus: 'Returned',
+            Description: 'Refund',
+            LineTotalNet: negNet,
+            LineTotalGross: negGross,
+            ReversesOrderLineID: olId,
+          };
+        }
 
         mirroredLines.push(mirroredLine);
       }
 
       // Financial rollup on Cancellation Order
-      cancellation['TotalGross'] = totalNegativeGross;
-      cancellation['AmountPaid'] = totalNegativeGross; // fully refunded
-      cancellation['Balance'] = 0;
+      setField(cancellation, 'TotalGross', totalNegativeGross);
+      setField(cancellation, 'AmountPaid', totalNegativeGross); // fully refunded
+      setField(cancellation, 'Balance', 0);
 
       // Update lines on cancellation order
       const cancelCollections = cancellation['collections'] as { Lines?: Record<string, unknown>[] } | undefined;

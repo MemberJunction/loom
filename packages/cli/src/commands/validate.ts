@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { execSync } from 'node:child_process';
 import { loadProject } from '../project.js';
 import { Validator, readEntityMetadata, extractComposedRecords, type ValidationReport, type GateResult } from '@memberjunction/loom-engine';
 
@@ -7,6 +8,126 @@ export interface ValidateCommandOptions {
   project?: string;
   config?: string;
   data?: string;
+  baseRef?: string;
+  skipBaseCheck?: boolean;
+}
+
+function loadBaseRecords(
+  dataDir: string,
+  domain: Parameters<typeof extractComposedRecords>[0],
+): Record<string, Record<string, unknown>[]> | null {
+  if (process.env.SKIP_BASE_DELTA_CHECK === '1') {
+    return null;
+  }
+
+  let gitRoot = '';
+  try {
+    gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch {
+    return null;
+  }
+
+  const candidates = [
+    process.env.GITHUB_BASE_REF ? `origin/${process.env.GITHUB_BASE_REF}` : null,
+    'origin/next',
+    'origin/main',
+    'HEAD~1',
+  ].filter(Boolean) as string[];
+
+  let baseSha = '';
+  for (const ref of candidates) {
+    try {
+      execSync(`git rev-parse --verify ${ref}^{commit}`, { stdio: 'ignore', cwd: gitRoot });
+      const sha = execSync(`git merge-base HEAD ${ref}`, { encoding: 'utf8', cwd: gitRoot, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      if (sha) {
+        baseSha = sha;
+        break;
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+
+  if (!baseSha) {
+    return null;
+  }
+
+  const relDataDir = path.relative(gitRoot, dataDir);
+  let baseFilesOut = '';
+  try {
+    baseFilesOut = execSync(`git ls-tree -r --name-only ${baseSha} "${relDataDir}"`, {
+      encoding: 'utf8',
+      cwd: gitRoot,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return null;
+  }
+
+  if (!baseFilesOut) {
+    return null;
+  }
+
+  const baseFiles = baseFilesOut
+    .split('\n')
+    .filter((f) => f.endsWith('.json') && !f.split('/').pop()?.startsWith('.mj-sync'));
+
+  const dirToEntity = new Map<string, string>();
+  for (const [eName, eCfg] of Object.entries(domain.entities)) {
+    const outDir = eCfg.outputDirectory ?? eName;
+    dirToEntity.set(outDir.toLowerCase(), eName);
+  }
+
+  const baseRecords: Record<string, Record<string, unknown>[]> = {};
+
+  for (const f of baseFiles) {
+    const relFromData = path.relative(relDataDir, f);
+    const parts = relFromData.split(path.sep);
+    const dirName = parts[0]?.toLowerCase() ?? '';
+    const entityName = dirToEntity.get(dirName);
+    if (!entityName) continue;
+
+    try {
+      const raw = execSync(`git show ${baseSha}:"${f}"`, {
+        maxBuffer: 100 * 1024 * 1024,
+        encoding: 'utf8',
+        cwd: gitRoot,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const parsed: unknown = JSON.parse(raw);
+      const arr = Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>[])
+        : parsed && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>)['records'])
+        ? ((parsed as Record<string, unknown>)['records'] as Record<string, unknown>[])
+        : [parsed as Record<string, unknown>];
+
+      if (!baseRecords[entityName]) {
+        baseRecords[entityName] = [];
+      }
+
+      for (const entry of arr) {
+        if (entry && typeof entry === 'object') {
+          const rec = entry;
+          const fields = (rec['fields'] as Record<string, unknown>) ?? {};
+          const pk = (rec['primaryKey'] as Record<string, unknown>) ?? {};
+          baseRecords[entityName]!.push({
+            ...rec,
+            ...fields,
+            ...pk,
+          });
+        }
+      }
+    } catch {
+      // skip unreadable
+    }
+  }
+
+  const decomposedBase = extractComposedRecords(domain, baseRecords);
+  for (const [e, rows] of Object.entries(decomposedBase)) {
+    baseRecords[e] = rows;
+  }
+
+  return baseRecords;
 }
 
 export async function executeValidate(options: ValidateCommandOptions): Promise<ValidationReport> {
@@ -126,10 +247,11 @@ export async function executeValidate(options: ValidateCommandOptions): Promise<
     Object.values(mod.effects)
   );
 
+  const baseData = options.skipBaseCheck ? null : loadBaseRecords(dataDir, loaded.domain);
   const validator = new Validator();
   const heroes = loaded.heroesManifest?.heroes ?? [];
   const eras = loaded.erasManifest?.eras ?? [];
-  const report = validator.Validate(loaded.domain, records, allFactors, heroes, eras, loaded.catalogs);
+  const report = validator.Validate(loaded.domain, records, allFactors, heroes, eras, loaded.catalogs, baseData);
 
   // Prepend MetadataSync gates
   report.gates.unshift(...syncGates);

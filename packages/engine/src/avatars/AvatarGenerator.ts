@@ -19,6 +19,11 @@ export type StyleOptions = Record<string, StyleOptionValue>;
 export type StyleOptionsMap = Record<string, StyleOptions>;
 
 /**
+ * Pinned DiceBear package and CDN version for deterministic avatar rendering.
+ */
+export const DEFAULT_DICEBEAR_VERSION = '9.4.2';
+
+/**
  * Calibrated 7-step natural skin tone spectrum (warm peach to rich warm cocoa).
  * Narrowed to avoid overly dark, muddy tones (such as default #5c3829) while preserving natural diversity.
  */
@@ -249,7 +254,7 @@ export class AvatarGenerator {
       if (Array.isArray(value)) params.set(key, value.map(String).join(','));
       else if (value !== undefined && value !== null) params.set(key, String(value));
     }
-    const version = options.version ?? '9.x';
+    const version = options.version ?? DEFAULT_DICEBEAR_VERSION;
     return `https://api.dicebear.com/${version}/${style}/svg?${params.toString()}`;
   }
 

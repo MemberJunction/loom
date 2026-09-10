@@ -176,7 +176,7 @@ describe("AvatarGenerator (Loom Deterministic Profile Image Generation)", () => 
       });
 
       expect(url1).toBe(url2);
-      expect(url1).toContain("https://api.dicebear.com/9.x/toon-head/svg");
+      expect(url1).toContain("https://api.dicebear.com/9.4.2/toon-head/svg");
       expect(url1).toContain("seed=elena.rodriguez.000101%40lakemail.example");
       expect(url1).toContain("rearHairProbability=100");
       expect(url1).toContain("beardProbability=0");
@@ -190,7 +190,7 @@ describe("AvatarGenerator (Loom Deterministic Profile Image Generation)", () => 
         style: "toon-head",
       });
 
-      expect(url).toContain("https://api.dicebear.com/9.x/toon-head/svg");
+      expect(url).toContain("https://api.dicebear.com/9.4.2/toon-head/svg");
       expect(url).toContain("rearHairProbability=0");
       expect(url).toContain("beardProbability=40");
     });
