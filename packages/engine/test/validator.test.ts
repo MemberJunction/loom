@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Validator } from '../src/validation/validator.js';
-import type { DomainConfig, FactorContract, EraConfig } from '@memberjunction/loom-contracts';
+import type { DomainConfig, FactorContract, EraConfig, HeroConfig } from '@memberjunction/loom-contracts';
 
 describe('Validator', () => {
   const domain: DomainConfig = {
@@ -521,6 +521,205 @@ describe('Validator', () => {
     expect(unresolvableGate?.passed).toBe(false);
     expect(unresolvableGate?.category).toBe('era');
     expect(unresolvableGate?.message).toContain("no cycle field could be resolved on 'StaticCatalog' or its foreign keys");
+  });
+
+  it('fails era volume gate when baseline record count is 0 for non-zero multiplier (D.6a)', () => {
+    const eraDomain: DomainConfig = {
+      name: 'era-zero-baseline',
+      namespace: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+      packs: { common: { name: 'common', dependsOn: [] } },
+      entities: {
+        Registration: {
+          name: 'Registration',
+          targetTable: 'reg',
+          schema: 'dbo',
+          pack: 'common',
+          businessKey: ['ID'],
+          fields: {
+            ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+            RegisteredOn: { name: 'RegisteredOn', type: 'date' },
+          },
+          foreignKeys: {},
+          isImmutable: false,
+        },
+      },
+    };
+
+    const era: EraConfig = {
+      eraKey: 'era-2020',
+      scope: 'all',
+      cycles: [2020],
+      factorAdjustments: [],
+      volumeMultipliers: [{ entity: 'Registration', multiplier: 0.5 }],
+    };
+
+    // Records have invalid/unresolvable dates so year is undefined (attributed to no cycle)
+    const records = [
+      { ID: 'r-1', RegisteredOn: 'not-a-date' },
+    ];
+
+    const report = validator.Validate(eraDomain, { Registration: records }, [], [], [era]);
+    const eraGate = report.gates.find((g) => g.name.includes('Realized Era Volume: era-2020 [Registration in 2020]'));
+    expect(eraGate).toBeDefined();
+    expect(eraGate?.passed).toBe(false);
+    expect(eraGate?.message).toContain('0 baseline records found across non-era cycles');
+  });
+
+  it('fails hero outcome pin when child entity has no resolvable cycle field and pin specifies cycle (D.7)', () => {
+    const heroDomain: DomainConfig = {
+      name: 'hero-test',
+      namespace: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+      packs: { common: { name: 'common', dependsOn: [] } },
+      entities: {
+        Person: {
+          name: 'Person',
+          targetTable: 'p',
+          schema: 'dbo',
+          pack: 'common',
+          businessKey: ['ID'],
+          fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true } },
+          foreignKeys: {},
+          isImmutable: false,
+        },
+        Action: {
+          name: 'Action',
+          targetTable: 'a',
+          schema: 'dbo',
+          pack: 'common',
+          businessKey: ['ID'],
+          fields: {
+            ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+            PersonID: { name: 'PersonID', type: 'uuid' },
+            Completed: { name: 'Completed', type: 'boolean' },
+          },
+          foreignKeys: {
+            FK_Action_Person: {
+              fieldName: 'PersonID',
+              targetEntity: 'Person',
+              targetField: 'ID',
+              cardinality: 'many-to-one',
+            },
+          },
+          isImmutable: false,
+        },
+      },
+    };
+
+    const factor: FactorContract = {
+      id: 'factor-action-completed',
+      category: 'behavioral',
+      scope: 'individual',
+      effect: 'Action',
+      outcome: { from: 'self', where: { Completed: true } },
+      arrows: {},
+    };
+
+    const hero: HeroConfig = {
+      heroKey: 'hero-action',
+      entity: 'Person',
+      businessKeys: { ID: 'p-1' },
+      fixedFields: {},
+      birthCycle: 2019,
+      latentDials: {},
+      ladderEntries: [],
+      eras: [],
+      pins: [
+        { kind: 'outcome', factor: 'factor-action-completed', cycle: 2020, value: true },
+      ],
+    };
+
+    const data = {
+      Person: [{ ID: 'p-1' }],
+      Action: [{ ID: 'a-1', PersonID: 'p-1', Completed: true }],
+    };
+
+    const report = validator.Validate(heroDomain, data, [factor], [hero]);
+    const heroGate = report.gates.find((g) => g.name.includes('hero-action'));
+    expect(heroGate).toBeDefined();
+    expect(heroGate?.passed).toBe(false);
+    expect(heroGate?.message).toContain("no cycle field could be resolved on child entity 'Action'");
+  });
+
+  it('correctly matches child record by resolved cycle field for hero outcome pin with cycle (D.7)', () => {
+    const heroDomain: DomainConfig = {
+      name: 'hero-test',
+      namespace: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+      packs: { common: { name: 'common', dependsOn: [] } },
+      entities: {
+        Person: {
+          name: 'Person',
+          targetTable: 'p',
+          schema: 'dbo',
+          pack: 'common',
+          businessKey: ['ID'],
+          fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true } },
+          foreignKeys: {},
+          isImmutable: false,
+        },
+        Registration: {
+          name: 'Registration',
+          targetTable: 'reg',
+          schema: 'dbo',
+          pack: 'common',
+          businessKey: ['ID'],
+          fields: {
+            ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+            PersonID: { name: 'PersonID', type: 'uuid' },
+            RegisteredOn: { name: 'RegisteredOn', type: 'date' },
+            Attended: { name: 'Attended', type: 'boolean' },
+          },
+          foreignKeys: {
+            FK_Reg_Person: {
+              fieldName: 'PersonID',
+              targetEntity: 'Person',
+              targetField: 'ID',
+              cardinality: 'many-to-one',
+            },
+          },
+          isImmutable: false,
+        },
+      },
+    };
+
+    const factor: FactorContract = {
+      id: 'factor-attendance',
+      category: 'behavioral',
+      scope: 'individual',
+      effect: 'Registration',
+      outcome: { from: 'self', where: { Attended: true } },
+      arrows: {},
+    };
+
+    // Hero asserts they attended in 2020
+    const hero: HeroConfig = {
+      heroKey: 'hero-attendee',
+      entity: 'Person',
+      businessKeys: { ID: 'p-1' },
+      fixedFields: {},
+      birthCycle: 2019,
+      latentDials: {},
+      ladderEntries: [],
+      eras: [],
+      pins: [
+        { kind: 'outcome', factor: 'factor-attendance', cycle: 2020, value: true },
+      ],
+    };
+
+    // First child is 2019 Attended: false (would cause false failure if matched children[0]);
+    // Second child is 2020 Attended: true
+    const data = {
+      Person: [{ ID: 'p-1' }],
+      Registration: [
+        { ID: 'r-2019', PersonID: 'p-1', RegisteredOn: '2019-06-15', Attended: false },
+        { ID: 'r-2020', PersonID: 'p-1', RegisteredOn: '2020-06-15', Attended: true },
+      ],
+    };
+
+    const report = validator.Validate(heroDomain, data, [factor], [hero]);
+    const heroGate = report.gates.find((g) => g.name.includes('hero-attendee'));
+    expect(heroGate).toBeDefined();
+    expect(heroGate?.passed).toBe(true);
+    expect(heroGate?.message).toContain('All 1 pin(s) satisfied');
   });
 });
 

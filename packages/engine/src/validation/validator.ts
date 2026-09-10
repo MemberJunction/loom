@@ -167,7 +167,7 @@ export class Validator {
     const lookupIndex = new LookupIndex(data, actualCatalogs);
 
     // 0. Hero pins validation (Gate 0)
-    this.checkHeroPins(data, actualHeroes, actualFactors, relationalCtx, gates);
+    this.checkHeroPins(domain, data, actualHeroes, actualFactors, relationalCtx, gates);
 
     // 1. Referential integrity gates
     this.checkReferentialClosure(domain, data, actualCatalogs, gates, lookupIndex);
@@ -1203,7 +1203,29 @@ export class Validator {
     }
   }
 
+  /**
+   * Helper to resolve cycle field: explicit entity config or naming/type heuristic (D.6)
+   */
+  public static ResolveCycleField(entityCfg: DomainConfig['entities'][string]): string | undefined {
+    const explicit = entityCfg.cycleField;
+    if (explicit && entityCfg.fields[explicit]) {
+      return explicit;
+    }
+    return Object.keys(entityCfg.fields).find(
+      (f) =>
+        f !== 'DateOfBirth' &&
+        f !== 'BirthDate' &&
+        (f === 'Cycle' ||
+          f === 'Year' ||
+          f.endsWith('Date') ||
+          f.endsWith('At') ||
+          f.endsWith('On') ||
+          entityCfg.fields[f]?.type === 'date')
+    );
+  }
+
   private checkHeroPins(
+    domain: DomainConfig,
     data: Record<string, readonly Record<string, unknown>[]>,
     heroes: readonly HeroConfig[],
     factors: readonly FactorContract[],
@@ -1249,11 +1271,25 @@ export class Validator {
             let targetRecord: Record<string, unknown> = heroRecord;
             if (factor.effect !== hero.entity) {
               const children = ctx.getChildren(hero.entity, String(heroRecord['ID'] ?? heroRecord['id']), factor.effect, '');
-              const cycleField = Object.keys(children[0] ?? {}).find(f => f.toLowerCase().includes('year') || f.toLowerCase().includes('cycle') || f.toLowerCase().includes('date'));
-              targetRecord = children.find(c => {
-                if (!pin.cycle || !cycleField) return true;
-                return String(c[cycleField]).includes(String(pin.cycle));
-              }) ?? children[0] ?? heroRecord;
+              const childCfg = domain.entities[factor.effect];
+              const cycleField = childCfg ? Validator.ResolveCycleField(childCfg) : undefined;
+              if (pin.cycle !== undefined && !cycleField) {
+                failedPins.push(
+                  `Outcome for factor '${pin.factor}' specifies pin.cycle=${pin.cycle}, but no cycle field could be resolved on child entity '${factor.effect}'`
+                );
+                continue;
+              }
+              const matchingChild = children.find((c) => {
+                if (!pin.cycle) return true;
+                return String(c[cycleField!]).includes(String(pin.cycle));
+              });
+              if (pin.cycle !== undefined && !matchingChild) {
+                failedPins.push(
+                  `Outcome for factor '${pin.factor}': no child record on '${factor.effect}' found for hero '${hero.heroKey}' matching cycle ${pin.cycle}`
+                );
+                continue;
+              }
+              targetRecord = matchingChild ?? children[0] ?? heroRecord;
             }
             const evalFn = compileRawFeature(factor.outcome);
             const actual = evalFn(targetRecord, ctx);
@@ -1288,29 +1324,12 @@ export class Validator {
   ): void {
     if (!eras || eras.length === 0) return;
 
-    // Helper to resolve cycle field: explicit entity config or naming/type heuristic (D.6)
-    const resolveCycleField = (entityCfg: DomainConfig['entities'][string]): string | undefined => {
-      const explicit = entityCfg.cycleField;
-      if (explicit && entityCfg.fields[explicit]) {
-        return explicit;
-      }
-      return Object.keys(entityCfg.fields).find(
-        (f) =>
-          f === 'Cycle' ||
-          f === 'Year' ||
-          f.endsWith('Date') ||
-          f.endsWith('At') ||
-          f.endsWith('On') ||
-          entityCfg.fields[f]?.type === 'date'
-      );
-    };
-
     // Derive cycles present in dataset across all entities (R13-3)
     const allDatasetCycles = new Set<number>();
     for (const [eName, eRecords] of Object.entries(data)) {
       const cfg = domain.entities[eName];
       if (!cfg) continue;
-      const cField = resolveCycleField(cfg);
+      const cField = Validator.ResolveCycleField(cfg);
       if (cField) {
         for (const r of eRecords) {
           const raw = r[cField];
@@ -1365,7 +1384,7 @@ export class Validator {
         return rowYearCache.get(r);
       }
       let year: number | undefined;
-      const cycleField = resolveCycleField(entityCfg);
+      const cycleField = Validator.ResolveCycleField(entityCfg);
       if (cycleField) {
         const raw = r[cycleField];
         if (raw !== undefined && raw !== null && raw !== '') {
@@ -1391,7 +1410,7 @@ export class Validator {
             if (parentRow) {
               const parentTargetCfg = domain.entities[fk.targetEntity];
               if (parentTargetCfg) {
-                const parentCycleField = resolveCycleField(parentTargetCfg);
+                const parentCycleField = Validator.ResolveCycleField(parentTargetCfg);
                 if (parentCycleField && parentRow[parentCycleField]) {
                   const raw = parentRow[parentCycleField];
                   let y: number | undefined;
@@ -1488,10 +1507,10 @@ export class Validator {
 
         // Verify cycle field can be resolved directly or via foreign keys (D.6 durable architecture)
         const hasResolvableCycleField = (): boolean => {
-          if (resolveCycleField(entityCfg)) return true;
+          if (Validator.ResolveCycleField(entityCfg)) return true;
           for (const fk of Object.values(entityCfg.foreignKeys ?? {})) {
             const parentCfg = domain.entities[fk.targetEntity];
-            if (parentCfg && resolveCycleField(parentCfg)) return true;
+            if (parentCfg && Validator.ResolveCycleField(parentCfg)) return true;
           }
           return false;
         };
@@ -1517,36 +1536,45 @@ export class Validator {
         );
         const nonEraCycles = derivedCycles.filter((cy) => !allEntityEraCycles.includes(cy));
 
-        // Helper to calculate baseline scoped count for any volume multiplier (R13-1)
-        const calcBaselineScoped = (targetVM: typeof vm): number => {
-          const vmKey = `${targetVM.entity}:${JSON.stringify(targetVM.where ?? {})}`;
-          const cached = baselineScopedCache.get(vmKey);
-          if (cached !== undefined) return cached;
-
-          let sc = 0;
-          let samples = 0;
-          for (const cy of nonEraCycles) {
-            const inCyRecords = getRecordsForEntityCycle(targetVM.entity, cy);
-            const inCy = inCyRecords.filter((r) => matchesWhere(r, entityCfg, targetVM.where)).length;
-            sc += inCy;
-            samples++;
-          }
-          const result = samples > 0 ? sc / samples : 0;
-          baselineScopedCache.set(vmKey, result);
-          return result;
-        };
-
-        let baselineTotalCount = 0;
-        let nonEraSamples = 0;
-        for (const cy of nonEraCycles) {
-          const totalInCy = getRecordsForEntityCycle(vm.entity, cy).length;
-          baselineTotalCount += totalInCy;
-          nonEraSamples++;
-        }
-        const avgBaselineScoped = calcBaselineScoped(vm);
-        const avgBaselineTotal = nonEraSamples > 0 ? baselineTotalCount / nonEraSamples : 0;
-
         for (const targetCycle of era.cycles) {
+          // Determine populated non-era baseline cycles for this entity (D.8).
+          // Prioritize pre-era cycles (e.g. 2019 baseline before 2020 pandemic)
+          const populatedPriorNonEra = nonEraCycles.filter(
+            (cy) => cy < targetCycle && getRecordsForEntityCycle(vm.entity, cy).length > 0
+          );
+          const baselineCyclesToUse = populatedPriorNonEra.length > 0
+            ? populatedPriorNonEra
+            : nonEraCycles.filter((cy) => getRecordsForEntityCycle(vm.entity, cy).length > 0);
+
+          let baselineTotalCount = 0;
+          let nonEraSamples = 0;
+          for (const cy of baselineCyclesToUse) {
+            const totalInCy = getRecordsForEntityCycle(vm.entity, cy).length;
+            baselineTotalCount += totalInCy;
+            nonEraSamples++;
+          }
+          const avgBaselineTotal = nonEraSamples > 0 ? baselineTotalCount / nonEraSamples : 0;
+
+          // Helper to calculate baseline scoped count for any volume multiplier (R13-1)
+          const calcBaselineScoped = (targetVM: typeof vm): number => {
+            const vmKey = `${targetVM.entity}:${targetCycle}:${JSON.stringify(targetVM.where ?? {})}`;
+            const cached = baselineScopedCache.get(vmKey);
+            if (cached !== undefined) return cached;
+
+            let sc = 0;
+            let samples = 0;
+            for (const cy of baselineCyclesToUse) {
+              const inCyRecords = getRecordsForEntityCycle(targetVM.entity, cy);
+              const inCy = inCyRecords.filter((r) => matchesWhere(r, entityCfg, targetVM.where)).length;
+              sc += inCy;
+              samples++;
+            }
+            const result = samples > 0 ? sc / samples : 0;
+            baselineScopedCache.set(vmKey, result);
+            return result;
+          };
+
+          const avgBaselineScoped = calcBaselineScoped(vm);
           const allInEraCycle = getRecordsForEntityCycle(vm.entity, targetCycle);
           const matchingInEraCycle = allInEraCycle.filter((r) => matchesWhere(r, entityCfg, vm.where));
 
@@ -1601,6 +1629,9 @@ export class Validator {
               message = passed
                 ? `Era '${era.eraKey}' realized multiplier 0: 0 rows generated for ${vm.entity} [scoped] and total volume fell by category share to ${realizedTotal} (expected ~${Math.round(expectedTotal)}, diff: ${(relDiffTotal * 100).toFixed(1)}% <= 20%)`
                 : `Era '${era.eraKey}' scoped multiplier 0 failed: scoped=${realizedScoped} (expected 0), total=${realizedTotal} (expected ~${Math.round(expectedTotal)}, diff: ${(relDiffTotal * 100).toFixed(1)}%)`;
+            } else if (effectiveBaselineScoped === 0) {
+              passed = false;
+              message = `Era '${era.eraKey}' scoped volume multiplier ${vm.multiplier}x for entity '${vm.entity}' could not be evaluated: 0 scoped baseline records found across non-era cycles`;
             } else {
               const expectedScoped = effectiveBaselineScoped * vm.multiplier;
               const relDiffScoped = expectedScoped === 0
@@ -1647,6 +1678,9 @@ export class Validator {
               message = passed
                 ? `Era '${era.eraKey}' realized multiplier 0: 0 rows generated for ${vm.entity} in cycle ${targetCycle}`
                 : `Era '${era.eraKey}' expected 0 rows (multiplier=0) for ${vm.entity} in cycle ${targetCycle}, found ${realizedTotal}`;
+            } else if (effectiveAvgBaselineTotal === 0) {
+              passed = false;
+              message = `Era '${era.eraKey}' volume multiplier ${vm.multiplier}x for entity '${vm.entity}' could not be evaluated: 0 baseline records found across non-era cycles`;
             } else {
               const expectedCount = effectiveAvgBaselineTotal * vm.multiplier * childRetentionRate;
               const relDiff = Math.abs(realizedTotal - expectedCount) / Math.max(expectedCount, 1);
