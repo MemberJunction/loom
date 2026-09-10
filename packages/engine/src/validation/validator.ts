@@ -1288,14 +1288,29 @@ export class Validator {
   ): void {
     if (!eras || eras.length === 0) return;
 
+    // Helper to resolve cycle field: explicit entity config or naming/type heuristic (D.6)
+    const resolveCycleField = (entityCfg: DomainConfig['entities'][string]): string | undefined => {
+      const explicit = entityCfg.cycleField;
+      if (explicit && entityCfg.fields[explicit]) {
+        return explicit;
+      }
+      return Object.keys(entityCfg.fields).find(
+        (f) =>
+          f === 'Cycle' ||
+          f === 'Year' ||
+          f.endsWith('Date') ||
+          f.endsWith('At') ||
+          f.endsWith('On') ||
+          entityCfg.fields[f]?.type === 'date'
+      );
+    };
+
     // Derive cycles present in dataset across all entities (R13-3)
     const allDatasetCycles = new Set<number>();
     for (const [eName, eRecords] of Object.entries(data)) {
       const cfg = domain.entities[eName];
       if (!cfg) continue;
-      const cField = Object.keys(cfg.fields).find(
-        (f) => f === 'Cycle' || f === 'Year' || f.endsWith('Date') || f.endsWith('At')
-      );
+      const cField = resolveCycleField(cfg);
       if (cField) {
         for (const r of eRecords) {
           const raw = r[cField];
@@ -1350,9 +1365,7 @@ export class Validator {
         return rowYearCache.get(r);
       }
       let year: number | undefined;
-      const cycleField = Object.keys(entityCfg.fields).find(
-        (f) => f === 'Cycle' || f === 'Year' || f.endsWith('Date') || f.endsWith('At')
-      );
+      const cycleField = resolveCycleField(entityCfg);
       if (cycleField) {
         const raw = r[cycleField];
         if (raw !== undefined && raw !== null && raw !== '') {
@@ -1378,9 +1391,7 @@ export class Validator {
             if (parentRow) {
               const parentTargetCfg = domain.entities[fk.targetEntity];
               if (parentTargetCfg) {
-                const parentCycleField = Object.keys(parentTargetCfg.fields).find(
-                  (f) => f === 'Cycle' || f === 'Year' || f.endsWith('Date') || f.endsWith('At')
-                );
+                const parentCycleField = resolveCycleField(parentTargetCfg);
                 if (parentCycleField && parentRow[parentCycleField]) {
                   const raw = parentRow[parentCycleField];
                   let y: number | undefined;
@@ -1474,6 +1485,31 @@ export class Validator {
       for (const vm of era.volumeMultipliers) {
         const entityCfg = domain.entities[vm.entity];
         if (!entityCfg) continue;
+
+        // Verify cycle field can be resolved directly or via foreign keys (D.6 durable architecture)
+        const hasResolvableCycleField = (): boolean => {
+          if (resolveCycleField(entityCfg)) return true;
+          for (const fk of Object.values(entityCfg.foreignKeys ?? {})) {
+            const parentCfg = domain.entities[fk.targetEntity];
+            if (parentCfg && resolveCycleField(parentCfg)) return true;
+          }
+          return false;
+        };
+
+        if (!hasResolvableCycleField()) {
+          for (const targetCycle of era.cycles) {
+            gates.push({
+              name: `Realized Era Volume: ${era.eraKey} [${vm.entity} in ${targetCycle}]`,
+              category: 'era',
+              passed: false,
+              message: `Entity '${vm.entity}' has active volume multipliers in era '${era.eraKey}', but no cycle field could be resolved on '${vm.entity}' or its foreign keys`,
+              populationCount: 0,
+              expected: 'resolvable cycle field',
+              actual: 'none',
+            });
+          }
+          continue;
+        }
 
         // Find pure non-era baseline cycles for this entity
         const allEntityEraCycles = eras.flatMap((e) =>

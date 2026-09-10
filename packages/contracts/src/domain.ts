@@ -143,6 +143,7 @@ export const EntityConfigSchema = z.object({
   syncRoot: z.boolean().optional().default(false),
   outputDirectory: z.string().optional(),
   outputFileName: z.string().optional(),
+  cycleField: z.string().optional(),
 }).transform((entity) => {
   const normalizedFKs: Record<string, Omit<ForeignKeyConfig, 'fieldName'> & { fieldName: string }> = {};
   for (const [fkKey, fk] of Object.entries(entity.foreignKeys)) {

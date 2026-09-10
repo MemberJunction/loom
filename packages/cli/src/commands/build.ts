@@ -821,8 +821,14 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
                 childRow[fName] = `${fName.slice(0, 3).toUpperCase()}-${c}${seq}`;
               }
             }
-            const cycleDateField = Object.keys(childCfg.fields).find(
-              (f) => f === 'Cycle' || f === 'Year' || f.endsWith('Date') || f.endsWith('At')
+            const cycleDateField = childCfg.cycleField ?? Object.keys(childCfg.fields).find(
+              (f) =>
+                f === 'Cycle' ||
+                f === 'Year' ||
+                f.endsWith('Date') ||
+                f.endsWith('At') ||
+                f.endsWith('On') ||
+                childCfg.fields[f]?.type === 'date'
             );
             if (cycleDateField) {
               childRow[cycleDateField] = childCfg.fields[cycleDateField]?.type === 'number' ? c : `${c}-06-15`;

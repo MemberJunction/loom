@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Validator } from '../src/validation/validator.js';
-import type { DomainConfig, FactorContract } from '@memberjunction/loom-contracts';
+import type { DomainConfig, FactorContract, EraConfig } from '@memberjunction/loom-contracts';
 
 describe('Validator', () => {
   const domain: DomainConfig = {
@@ -440,6 +440,87 @@ describe('Validator', () => {
     expect(gate).toBeDefined();
     expect(gate?.passed).toBe(true);
     expect(gate?.populationCount).toBe(0);
+  });
+
+  it('resolves cycle field via endsWith(On), type: date, or explicit cycleField (D.6)', () => {
+    const eraDomain: DomainConfig = {
+      name: 'era-test',
+      namespace: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+      packs: { common: { name: 'common', dependsOn: [] } },
+      entities: {
+        Registration: {
+          name: 'Registration',
+          targetTable: 'reg',
+          schema: 'dbo',
+          pack: 'common',
+          businessKey: ['ID'],
+          fields: {
+            ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+            RegisteredOn: { name: 'RegisteredOn', type: 'date' },
+          },
+          foreignKeys: {},
+          isImmutable: false,
+        },
+      },
+    };
+
+    const era: EraConfig = {
+      eraKey: 'era-2020',
+      scope: 'all',
+      cycles: [2020],
+      factorAdjustments: [],
+      volumeMultipliers: [{ entity: 'Registration', multiplier: 0.5 }],
+    };
+
+    // 10 records in 2019 baseline, 5 in 2020 (exact 0.5x match)
+    const records = [
+      ...Array.from({ length: 10 }, (_, i) => ({ ID: `b-${i}`, RegisteredOn: '2019-06-01' })),
+      ...Array.from({ length: 5 }, (_, i) => ({ ID: `e-${i}`, RegisteredOn: '2020-06-01' })),
+    ];
+
+    const report = validator.Validate(eraDomain, { Registration: records }, [], [], [era]);
+    const eraGate = report.gates.find((g) => g.name.includes('Realized Era Volume: era-2020 [Registration in 2020]'));
+    expect(eraGate).toBeDefined();
+    expect(eraGate?.passed).toBe(true);
+    expect(eraGate?.populationCount).toBe(5);
+  });
+
+  it('emits failing gate when entity has era volume multiplier but unresolvable cycle field (D.6)', () => {
+    const eraDomain: DomainConfig = {
+      name: 'era-test',
+      namespace: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+      packs: { common: { name: 'common', dependsOn: [] } },
+      entities: {
+        StaticCatalog: {
+          name: 'StaticCatalog',
+          targetTable: 'cat',
+          schema: 'dbo',
+          pack: 'common',
+          businessKey: ['ID'],
+          fields: {
+            ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+            Description: { name: 'Description', type: 'string' },
+          },
+          foreignKeys: {},
+          isImmutable: false,
+        },
+      },
+    };
+
+    const era: EraConfig = {
+      eraKey: 'era-shock',
+      scope: 'all',
+      cycles: [2020],
+      factorAdjustments: [],
+      volumeMultipliers: [{ entity: 'StaticCatalog', multiplier: 0.5 }],
+    };
+
+    const report = validator.Validate(eraDomain, { StaticCatalog: [{ ID: 'c-1', Description: 'Item' }] }, [], [], [era]);
+    const unresolvableGate = report.gates.find((g) => g.name.includes('StaticCatalog in 2020'));
+    expect(unresolvableGate).toBeDefined();
+    expect(unresolvableGate?.passed).toBe(false);
+    expect(unresolvableGate?.category).toBe('era');
+    expect(unresolvableGate?.message).toContain("no cycle field could be resolved on 'StaticCatalog' or its foreign keys");
   });
 });
 
