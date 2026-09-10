@@ -20,6 +20,8 @@
 >
 > ### Owner decision — 2026-09-10
 >
+> **§4.7 is retention-based, not equality-based**, because loom accumulates: it is re-run roughly monthly to add the next period rather than to re-render the corpus. Records may be added; none may be dropped or re-keyed. The two modes (regeneration vs monthly increment) expect different deltas and §4.7 now says which is which.
+>
 > **Avatars ship as inline base64 data URIs.** Chosen for portability and to avoid an external runtime dependency; the `NVARCHAR(MAX)` prerequisite is already merged, so there is nothing to defer. URL mode stays implemented and tested as a non-default option. §3 reflects this as settled, not as an open trade.
 
 ---
@@ -327,9 +329,14 @@ Loom's validation suite (`npm run validate:loom`) and mutation test suite (`npm 
 7. **`Corpus Stability Gate`** — **new (reviewer), highest value of the seven**:
    - Every change in this plan alters the deterministic draw for `FirstName`, `Prefix`, `PronounSet`, `DateOfBirth` and the cancellation set. Any of those can shift the RNG stream for entities generated *after* them and silently change populations or primary keys — and WP3 calls for a full regeneration, which is precisely when that happens.
    - **This is not hypothetical.** On `more-cheese` #36, a composition change silently took `payments` from 12,527 rows to 5,137 and re-keyed **all** of them, and every existing gate passed: deleting a header together with its line leaves the corpus self-consistent, and the payment→order FK points from the deleted side, so closure found no orphans. The PR's own reported totals contained the evidence (PKs 119,962 → 105,182 = exactly 7,390 × 2) and nothing was diffing them.
-   - The gate: for every entity directory, compare **row count and the primary-key set** against the base commit. Any entity that changes must be listed in the PR body with a reason. Unexplained drift fails.
-   - Expected output of WP3 is that **only the fields this plan touches change**. Person/Organization/Order/etc. keys must be identical. If they are not, the regeneration did more than intended and that needs an answer before the corpus is committed.
-   - Rationale worth keeping: `mj sync push` matches on primary key and never deletes, so a silent re-key does not replace rows on an already-seeded host — it **doubles** them.
+   - **The invariant is RETENTION, not equality — this matters, because loom accumulates.** Loom is designed to be re-run on a cadence (roughly monthly) to extend the world forward with the next period's data, not to re-render the corpus from scratch. `generated/checkpoint.json` carries that continuity state: `cycleIndex`, `committedRecordCounts`, and a `continuity` block with `asOfDate` and `activeEntityIds` — the last of which is how a later run references entities that already exist instead of minting new ones. A gate that demanded unchanged row counts would therefore fail every normal monthly run.
+   - So the assertion is **`base ⊆ head`**: every primary key present in the base commit is still present, with the same id, in the same (or its composed parent) directory. Records may be **added** freely. Records may never be **dropped** or **re-keyed**.
+   - *(Verified against the implementation merged in `more-cheese` #36: appending a new record with a new primary key exits 0; dropping one payment header exits 1 and reports 2 lost PKs — the header and its nested line — so the audit walks composed collections as well as roots.)*
+   - **Two operating modes, and they expect different deltas. State which one a PR is in.**
+     - **Regeneration** (what WP3 does): re-deriving the *same* period with changed generator logic. Retention is required **and** additions are also suspect — a new record in a period that already exists means the change did more than intended. Expected output of WP3 is that only the fields this plan touches change; Person / Organization / Order keys must be identical.
+     - **Increment** (the monthly cadence): extending into a *new* period. Retention is required; additions are the point. What must be checked instead is that additions are confined to the new period, and that no prior-period record changed in any field — not just that its key survived.
+   - Whichever mode, put the per-entity delta in the PR body. Unexplained drift fails; explained drift is a sentence.
+   - Rationale worth keeping: `mj sync push` matches on primary key and never deletes. A silent re-key therefore does not replace rows on an already-seeded host — it **doubles** them. That is also precisely why accumulation is safe: new keys insert as new rows, and retained keys update in place.
 
 ---
 
