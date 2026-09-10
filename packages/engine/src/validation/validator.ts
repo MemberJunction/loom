@@ -32,6 +32,7 @@ export interface ValidateOptions {
   heroes?: readonly HeroConfig[];
   eras?: readonly EraConfig[];
   catalogs?: Record<string, readonly Record<string, unknown>[]>;
+  baseData?: Record<string, readonly Record<string, unknown>[]>;
 }
 
 export class Validator {
@@ -41,22 +42,31 @@ export class Validator {
     factorsOrOptions: readonly FactorContract[] | ValidateOptions | Record<string, readonly Record<string, unknown>[]> = [],
     heroes: readonly HeroConfig[] = [],
     eras: readonly EraConfig[] = [],
-    catalogs?: Record<string, readonly Record<string, unknown>[]>
+    catalogs?: Record<string, readonly Record<string, unknown>[]>,
+    baseData?: Record<string, readonly Record<string, unknown>[]>
   ): ValidationReport {
     let actualFactors: readonly FactorContract[] = [];
     let actualHeroes: readonly HeroConfig[] = heroes;
     let actualEras: readonly EraConfig[] = eras;
     let actualCatalogs: Record<string, readonly Record<string, unknown>[]> | undefined = catalogs;
+    let actualBaseData: Record<string, readonly Record<string, unknown>[]> | undefined = baseData;
 
     if (Array.isArray(factorsOrOptions)) {
       actualFactors = factorsOrOptions;
     } else if (factorsOrOptions && typeof factorsOrOptions === 'object') {
       const opts = factorsOrOptions as ValidateOptions;
-      if (opts.factors !== undefined || opts.heroes !== undefined || opts.eras !== undefined || opts.catalogs !== undefined) {
+      if (
+        opts.factors !== undefined ||
+        opts.heroes !== undefined ||
+        opts.eras !== undefined ||
+        opts.catalogs !== undefined ||
+        opts.baseData !== undefined
+      ) {
         actualFactors = opts.factors ?? [];
         actualHeroes = opts.heroes ?? heroes;
         actualEras = opts.eras ?? eras;
         actualCatalogs = opts.catalogs ?? catalogs;
+        actualBaseData = opts.baseData ?? baseData;
       } else {
         actualCatalogs = factorsOrOptions as Record<string, readonly Record<string, unknown>[]>;
       }
@@ -168,10 +178,28 @@ export class Validator {
     // 9. Avatar/logo maxLength
     this.checkGeneratedFieldMaxLength(domain, data, gates);
 
-    // 10. Name–Gender consistency
-    this.checkNameGenderConsistency(domain, data, gates);
+    // 10. Name–Gender consistency (Gate 1)
+    this.checkNameGenderConsistency(domain, data, gates, actualCatalogs);
 
-    // 11. Composition invariants (isA, collections, embeds)
+    // 11. Prefix-Gender consistency (Gate 2)
+    this.checkPrefixGenderConsistency(domain, data, gates);
+
+    // 12. Pronoun-Gender consistency (Gate 3)
+    this.checkPronounGenderConsistency(domain, data, gates, relationalCtx);
+
+    // 13. Minimum Age at Intake (Gate 4)
+    this.checkMinimumAgeAtIntake(domain, data, gates);
+
+    // 14. Reversal Coherence (Gate 5)
+    this.checkReversalCoherence(domain, data, gates);
+
+    // 15. Avatar Uniqueness (Gate 6)
+    this.checkAvatarUniqueness(domain, data, gates);
+
+    // 16. Corpus Stability (Gate 7)
+    this.checkCorpusStability(data, actualBaseData, gates);
+
+    // 17. Composition invariants (isA, collections, embeds)
     this.checkCompositionInvariants(domain, data, gates);
 
     const passedCount = gates.filter((g) => g.passed).length;
@@ -366,48 +394,649 @@ export class Validator {
     domain: DomainConfig,
     data: Record<string, readonly Record<string, unknown>[]>,
     gates: GateResult[],
+    catalogs?: Record<string, readonly Record<string, unknown>[]>,
   ): void {
+    let femaleCatalogSet: Set<string> | undefined;
+    let maleCatalogSet: Set<string> | undefined;
+    let unisexCatalogSet: Set<string> | undefined;
+
+    if (catalogs && catalogs['given-names']) {
+      const gn = catalogs['given-names'];
+      if (Array.isArray(gn) && gn.length > 0) {
+        const firstElem = gn[0];
+        if (firstElem && typeof firstElem === 'object' && ('female' in firstElem || 'male' in firstElem)) {
+          const catObj = firstElem as { female?: string[]; male?: string[]; unisex?: string[] };
+          femaleCatalogSet = new Set((catObj.female ?? []).map((s) => s.toLowerCase()));
+          maleCatalogSet = new Set((catObj.male ?? []).map((s) => s.toLowerCase()));
+          unisexCatalogSet = new Set((catObj.unisex ?? []).map((s) => s.toLowerCase()));
+        } else {
+          femaleCatalogSet = new Set();
+          maleCatalogSet = new Set();
+          unisexCatalogSet = new Set();
+          for (const entry of gn) {
+            const name = String(entry['name'] ?? entry['Name'] ?? '').toLowerCase();
+            const gender = String(entry['gender'] ?? entry['Gender'] ?? '').toLowerCase();
+            if (!name) continue;
+            if (gender === 'female') femaleCatalogSet.add(name);
+            else if (gender === 'male') maleCatalogSet.add(name);
+            else if (gender === 'unisex') unisexCatalogSet.add(name);
+          }
+        }
+      } else if (gn && typeof gn === 'object') {
+        const catObj = gn as unknown as { female?: string[]; male?: string[]; unisex?: string[] };
+        femaleCatalogSet = new Set((catObj.female ?? []).map((s) => s.toLowerCase()));
+        maleCatalogSet = new Set((catObj.male ?? []).map((s) => s.toLowerCase()));
+        unisexCatalogSet = new Set((catObj.unisex ?? []).map((s) => s.toLowerCase()));
+      }
+    }
+
     for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
       if (!entityCfg.fields.FirstName || !entityCfg.fields.Gender) continue;
       const records = data[entityName] ?? [];
+      if (records.length === 0) {
+        gates.push({
+          name: `Name-Gender consistency: ${entityName}`,
+          category: 'identity',
+          passed: false,
+          populationCount: 0,
+          message: `Evaluation failed: target entity '${entityName}' has 0 records`,
+          expected: '> 0',
+          actual: 0,
+        });
+        continue;
+      }
+
       let mismatches = 0;
       let classified = 0;
       let unclassified = 0;
+      let unisexObserved = 0;
       let notApplicable = 0;
+
       for (const row of records) {
         const gender = String(row.Gender ?? '').trim().toLowerCase();
         if (!gender || gender === 'unknown') continue;
         if (gender !== 'female' && gender !== 'male') {
-          // GenderFromName only ever answers Female or Male. A first name says nothing
-          // about Non-binary, Prefer not to say or Self-described, so those rows are
-          // outside the gate's population rather than guaranteed mismatches.
           notApplicable++;
           continue;
         }
-        const inferred = IdentityService.GenderFromName(String(row.FirstName ?? ''));
-        if (inferred === 'Unknown') {
-          unclassified++;
-          continue;
-        }
-        classified++;
-        if (inferred.toLowerCase() !== gender) {
-          mismatches++;
+
+        const name = String(row.FirstName ?? '').trim().toLowerCase();
+        if (!name) continue;
+
+        if (femaleCatalogSet && maleCatalogSet) {
+          const inFemale = femaleCatalogSet.has(name);
+          const inMale = maleCatalogSet.has(name);
+          const inUnisex = (unisexCatalogSet && unisexCatalogSet.has(name)) || (inFemale && inMale);
+
+          if (inUnisex) {
+            unisexObserved++;
+            classified++;
+          } else if (gender === 'female') {
+            if (inFemale) {
+              classified++;
+            } else if (inMale) {
+              mismatches++;
+              classified++;
+            } else {
+              unclassified++;
+            }
+          } else if (gender === 'male') {
+            if (inMale) {
+              classified++;
+            } else if (inFemale) {
+              mismatches++;
+              classified++;
+            } else {
+              unclassified++;
+            }
+          }
+        } else {
+          const inferred = IdentityService.GenderFromName(name);
+          if (inferred === 'Unknown') {
+            unclassified++;
+            continue;
+          }
+          classified++;
+          if (inferred.toLowerCase() !== gender) {
+            mismatches++;
+          }
         }
       }
-      const coverage = `${unclassified} unclassified, ${notApplicable} non-binary/undisclosed not applicable`;
+
+      const passed = mismatches === 0;
+      const coverage = `${unclassified} unclassified${unisexObserved > 0 ? `, ${unisexObserved} unisex` : ''}, ${notApplicable} non-binary/undisclosed not applicable`;
+      const sourceName = femaleCatalogSet && maleCatalogSet ? 'gender bucket' : 'GenderFromName';
       gates.push({
         name: `Name-Gender consistency: ${entityName}`,
         category: 'identity',
-        passed: mismatches === 0,
+        passed,
         populationCount: classified,
         message:
           mismatches === 0
-            ? `All ${classified} classified ${entityName} record(s) match GenderFromName (${coverage})`
-            : `${mismatches} of ${classified} classified ${entityName} record(s) disagree with GenderFromName (${coverage})`,
+            ? `All ${classified} classified ${entityName} record(s) match ${sourceName} (${coverage})`
+            : `${mismatches} of ${classified} classified ${entityName} record(s) disagree with ${sourceName} (${coverage})`,
         expected: 0,
         actual: mismatches,
       });
     }
+  }
+
+  private checkPrefixGenderConsistency(
+    domain: DomainConfig,
+    data: Record<string, readonly Record<string, unknown>[]>,
+    gates: GateResult[],
+  ): void {
+    const malePrefixes = new Set(['mr', 'sir', 'lord', 'master']);
+    const femalePrefixes = new Set(['ms', 'mrs', 'miss', 'madam', 'dame', 'lady']);
+
+    for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
+      const prefixField = Object.keys(entityCfg.fields).find(
+        (f) => f === 'Prefix' || f === 'Salutation'
+      );
+      if (!prefixField || !entityCfg.fields.Gender) continue;
+
+      const records = data[entityName] ?? [];
+      if (records.length === 0) {
+        gates.push({
+          name: `Prefix-Gender consistency: ${entityName}`,
+          category: 'identity',
+          passed: false,
+          populationCount: 0,
+          message: `Evaluation failed: target entity '${entityName}' has 0 records`,
+          expected: '> 0',
+          actual: 0,
+        });
+        continue;
+      }
+
+      let mismatches = 0;
+      let examined = 0;
+
+      for (const row of records) {
+        const rawPrefix = String(row[prefixField] ?? '').trim().toLowerCase().replace(/\.$/, '');
+        const gender = String(row.Gender ?? '').trim().toLowerCase();
+        if (!rawPrefix || !gender) continue;
+
+        if (gender === 'female' && malePrefixes.has(rawPrefix)) {
+          mismatches++;
+          examined++;
+        } else if (gender === 'male' && femalePrefixes.has(rawPrefix)) {
+          mismatches++;
+          examined++;
+        } else if (malePrefixes.has(rawPrefix) || femalePrefixes.has(rawPrefix)) {
+          examined++;
+        } else {
+          // Neutral prefix (Dr, Prof, Rev, Mx)
+          examined++;
+        }
+      }
+
+      const passed = mismatches === 0 && examined > 0;
+      gates.push({
+        name: `Prefix-Gender consistency: ${entityName}`,
+        category: 'identity',
+        passed,
+        populationCount: examined,
+        message:
+          examined === 0
+            ? `Evaluation failed: 0 records with Prefix and Gender examined for ${entityName}`
+            : passed
+              ? `All ${examined} records with Prefix and Gender are consistent (0 mismatches)`
+              : `${mismatches} of ${examined} records have mismatched Prefix and Gender`,
+        expected: 0,
+        actual: mismatches,
+      });
+    }
+  }
+
+  private checkPronounGenderConsistency(
+    domain: DomainConfig,
+    data: Record<string, readonly Record<string, unknown>[]>,
+    gates: GateResult[],
+    ctx: RelationalContext,
+  ): void {
+    for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
+      const pronounField = Object.keys(entityCfg.fields).find(
+        (f) => f === 'PronounSet' || f === 'Pronouns'
+      );
+      if (!pronounField) continue;
+
+      const records = data[entityName] ?? [];
+      if (records.length === 0) {
+        gates.push({
+          name: `Pronoun-Gender consistency: ${entityName}`,
+          category: 'identity',
+          passed: false,
+          populationCount: 0,
+          message: `Evaluation failed: target entity '${entityName}' has 0 records`,
+          expected: '> 0',
+          actual: 0,
+        });
+        continue;
+      }
+
+      const hasDirectGender = !!entityCfg.fields.Gender;
+      let fkToGenderParent: { targetEntity: string; fieldName: string } | undefined;
+      if (!hasDirectGender) {
+        for (const [fkKey, fk] of Object.entries(entityCfg.foreignKeys)) {
+          if (domain.entities[fk.targetEntity]?.fields.Gender) {
+            fkToGenderParent = { targetEntity: fk.targetEntity, fieldName: fk.fieldName ?? fkKey };
+            break;
+          }
+        }
+      }
+
+      if (!hasDirectGender && !fkToGenderParent) continue;
+
+      let mismatches = 0;
+      let examined = 0;
+
+      for (const row of records) {
+        const pronoun = String(row[pronounField] ?? '').trim().toLowerCase();
+        if (!pronoun) continue;
+
+        let gender = '';
+        if (hasDirectGender) {
+          gender = String(row.Gender ?? '').trim().toLowerCase();
+        } else if (fkToGenderParent) {
+          const parentId = String(row[fkToGenderParent.fieldName] ?? '');
+          if (parentId) {
+            const parent = ctx.getEntity(fkToGenderParent.targetEntity, parentId);
+            gender = String(parent?.['Gender'] ?? '').trim().toLowerCase();
+          }
+        }
+
+        if (!gender) continue;
+
+        const isMalePronoun = pronoun === 'he/him' || pronoun === 'he/him/his' || pronoun.startsWith('he/');
+        const isFemalePronoun = pronoun === 'she/her' || pronoun === 'she/her/hers' || pronoun.startsWith('she/');
+
+        if (gender === 'female' && isMalePronoun) {
+          mismatches++;
+          examined++;
+        } else if (gender === 'male' && isFemalePronoun) {
+          mismatches++;
+          examined++;
+        } else {
+          examined++;
+        }
+      }
+
+      const passed = mismatches === 0 && examined > 0;
+      gates.push({
+        name: `Pronoun-Gender consistency: ${entityName}`,
+        category: 'identity',
+        passed,
+        populationCount: examined,
+        message:
+          examined === 0
+            ? `Evaluation failed: 0 records with Pronouns and Gender examined for ${entityName}`
+            : passed
+              ? `All ${examined} records with Pronouns and Gender are consistent (0 mismatches)`
+              : `${mismatches} of ${examined} records have mismatched Pronouns and Gender`,
+        expected: 0,
+        actual: mismatches,
+      });
+    }
+  }
+
+  private checkMinimumAgeAtIntake(
+    domain: DomainConfig,
+    data: Record<string, readonly Record<string, unknown>[]>,
+    gates: GateResult[],
+  ): void {
+    for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
+      const dobField = Object.keys(entityCfg.fields).find(
+        (f) => f === 'DateOfBirth' || f === 'DOB' || f === 'BirthDate'
+      );
+      if (!dobField) continue;
+
+      const records = data[entityName] ?? [];
+      if (records.length === 0) {
+        gates.push({
+          name: `Minimum age at intake: ${entityName}`,
+          category: 'schema',
+          passed: false,
+          populationCount: 0,
+          message: `Evaluation failed: target entity '${entityName}' has 0 records`,
+          expected: '> 0',
+          actual: 0,
+        });
+        continue;
+      }
+
+      const memberProfileRecords = data['MemberProfile'] ?? [];
+      const memberProfileJoinDates = new Map<string, string>();
+      for (const mp of memberProfileRecords) {
+        const pId = String(mp['PersonID'] ?? mp['personId'] ?? '').toLowerCase();
+        const jd = mp['JoinDate'] ?? mp['CreatedAt'];
+        if (pId && jd) {
+          const existing = memberProfileJoinDates.get(pId);
+          if (!existing || String(jd) < existing) {
+            memberProfileJoinDates.set(pId, String(jd));
+          }
+        }
+      }
+
+      let underage = 0;
+      let examined = 0;
+
+      for (const row of records) {
+        const dobStr = row[dobField];
+        if (!dobStr) continue;
+
+        const rowId = String(row['ID'] ?? row['id'] ?? '').toLowerCase();
+        const intakeDateStr =
+          row['IntakeDate'] ??
+          row['CreatedAt'] ??
+          row['JoinDate'] ??
+          memberProfileJoinDates.get(rowId);
+
+        if (!intakeDateStr) continue;
+
+        const dob = new Date(String(dobStr));
+        const intake = new Date(String(intakeDateStr));
+        if (isNaN(dob.getTime()) || isNaN(intake.getTime())) continue;
+
+        const diffYears = (intake.getTime() - dob.getTime()) / (365.2425 * 24 * 3600 * 1000);
+        examined++;
+
+        if (diffYears < 18.0 - 0.001) {
+          underage++;
+        }
+      }
+
+      const passed = underage === 0 && examined > 0;
+      gates.push({
+        name: `Minimum age at intake: ${entityName}`,
+        category: 'schema',
+        passed,
+        populationCount: examined,
+        message:
+          examined === 0
+            ? `Evaluation failed: 0 records with DOB and Intake date examined for ${entityName}`
+            : passed
+              ? `All ${examined} records meet minimum age at intake (≥ 18.0 years, 0 underage)`
+              : `${underage} of ${examined} records are underage (< 18.0 years) at intake`,
+        expected: 0,
+        actual: underage,
+      });
+    }
+  }
+
+  private checkReversalCoherence(
+    domain: DomainConfig,
+    data: Record<string, readonly Record<string, unknown>[]>,
+    gates: GateResult[],
+  ): void {
+    const orderEntityName = Object.keys(domain.entities).find(
+      (e) =>
+        domain.entities[e]?.fields['ReversesOrderHeaderID'] ||
+        (domain.entities[e]?.fields['OrderDate'] && domain.entities[e]?.fields['OrderType'])
+    );
+    if (!orderEntityName) return;
+
+    const orders = data[orderEntityName] ?? [];
+    const cancellations = orders.filter(
+      (r) =>
+        r['OrderType'] === 'Cancellation' ||
+        (r['ReversesOrderHeaderID'] !== undefined &&
+          r['ReversesOrderHeaderID'] !== null &&
+          r['ReversesOrderHeaderID'] !== '')
+    );
+
+    if (cancellations.length === 0) {
+      gates.push({
+        name: `Reversal Coherence: ${orderEntityName}`,
+        category: 'schema',
+        passed: false,
+        populationCount: 0,
+        message: `Evaluation failed: 0 cancellation orders found to verify reversal coherence`,
+        expected: '> 0',
+        actual: 0,
+      });
+      return;
+    }
+
+    const orderMap = new Map<string, Record<string, unknown>>();
+    for (const o of orders) {
+      const oId = String(o['ID'] ?? o['id'] ?? '').toLowerCase();
+      if (oId) orderMap.set(oId, o as Record<string, unknown>);
+    }
+
+    const lineEntityName = Object.keys(domain.entities).find(
+      (e) =>
+        domain.entities[e]?.fields['ReversesOrderLineID'] ||
+        (domain.entities[e]?.fields['UnitPrice'] && domain.entities[e]?.fields['Quantity'])
+    );
+    const lines = lineEntityName ? (data[lineEntityName] ?? []) : [];
+    const linesByOrder = new Map<string, Record<string, unknown>[]>();
+    for (const l of lines) {
+      const parentId = String(l['OrderHeaderID'] ?? l['OrderID'] ?? '').toLowerCase();
+      if (parentId) {
+        let list = linesByOrder.get(parentId);
+        if (!list) {
+          list = [];
+          linesByOrder.set(parentId, list);
+        }
+        list.push(l as Record<string, unknown>);
+      }
+    }
+
+    let violations = 0;
+    const violationMessages: string[] = [];
+
+    for (const cancel of cancellations) {
+      const cancelId = String(cancel['ID'] ?? cancel['id'] ?? '');
+      const revHeaderId = String(cancel['ReversesOrderHeaderID'] ?? '').toLowerCase();
+      if (!revHeaderId) {
+        violations++;
+        violationMessages.push(`Cancellation order ${cancelId} missing ReversesOrderHeaderID`);
+        continue;
+      }
+
+      const origOrder = orderMap.get(revHeaderId);
+      if (!origOrder) {
+        violations++;
+        violationMessages.push(`Cancellation order ${cancelId} targets nonexistent original order ${revHeaderId}`);
+        continue;
+      }
+
+      const cancelDate = cancel['OrderDate'] ? new Date(String(cancel['OrderDate'])).getTime() : 0;
+      const origDate = origOrder['OrderDate'] ? new Date(String(origOrder['OrderDate'])).getTime() : 0;
+      if (cancelDate && origDate && cancelDate < origDate) {
+        violations++;
+        violationMessages.push(
+          `Cancellation order ${cancelId} date (${cancel['OrderDate']}) precedes original (${origOrder['OrderDate']})`
+        );
+      }
+
+      const cancelCust = cancel['BillToPersonID'] ?? cancel['CustomerID'] ?? cancel['BillToOrganizationID'];
+      const origCust = origOrder['BillToPersonID'] ?? origOrder['CustomerID'] ?? origOrder['BillToOrganizationID'];
+      if (cancelCust && origCust && String(cancelCust).toLowerCase() !== String(origCust).toLowerCase()) {
+        violations++;
+        violationMessages.push(`Cancellation order ${cancelId} customer mismatch with original`);
+      }
+
+      const cancelLines = linesByOrder.get(cancelId.toLowerCase()) ?? [];
+      const origLines = linesByOrder.get(revHeaderId) ?? [];
+      if (origLines.length > 0 && cancelLines.length === 0) {
+        violations++;
+        violationMessages.push(`Cancellation order ${cancelId} has 0 reversed order lines`);
+      }
+
+      for (const cl of cancelLines) {
+        const revLineId = String(cl['ReversesOrderLineID'] ?? '').toLowerCase();
+        if (!revLineId) {
+          violations++;
+          violationMessages.push(`Cancellation line ${cl['ID']} missing ReversesOrderLineID`);
+          continue;
+        }
+        const origLine = origLines.find((ol) => String(ol['ID'] ?? ol['id'] ?? '').toLowerCase() === revLineId);
+        if (!origLine) {
+          violations++;
+          violationMessages.push(`Cancellation line ${cl['ID']} targets nonexistent original line ${revLineId}`);
+          continue;
+        }
+
+        const clQty = Number(cl['Quantity'] ?? 0);
+        const olQty = Number(origLine['Quantity'] ?? 0);
+        if (clQty !== -olQty) {
+          violations++;
+          violationMessages.push(
+            `Cancellation line ${cl['ID']} quantity (${clQty}) does not mirror original (-${olQty})`
+          );
+        }
+
+        const clGross = Number(cl['LineTotalGross'] ?? cl['TotalGross'] ?? 0);
+        const olGross = Number(origLine['LineTotalGross'] ?? origLine['TotalGross'] ?? 0);
+        if (olGross > 0 && clGross > 0) {
+          violations++;
+          violationMessages.push(`Cancellation line ${cl['ID']} gross (${clGross}) must be negative`);
+        }
+      }
+    }
+
+    const passed = violations === 0 && cancellations.length > 0;
+    gates.push({
+      name: `Reversal Coherence: ${orderEntityName}`,
+      category: 'schema',
+      passed,
+      populationCount: cancellations.length,
+      message: passed
+        ? `All ${cancellations.length} cancellation orders satisfy 100% reversal coherence invariants`
+        : `${violations} reversal coherence violation(s) across ${cancellations.length} cancellations: ${violationMessages.slice(0, 3).join('; ')}`,
+      expected: 0,
+      actual: violations,
+    });
+  }
+
+  private checkAvatarUniqueness(
+    domain: DomainConfig,
+    data: Record<string, readonly Record<string, unknown>[]>,
+    gates: GateResult[],
+  ): void {
+    for (const [entityName, entityCfg] of Object.entries(domain.entities)) {
+      const avatarField = Object.keys(entityCfg.fields).find(
+        (f) => entityCfg.fields[f]?.avatar || f === 'PhotoURL'
+      );
+      if (!avatarField) continue;
+
+      const records = data[entityName] ?? [];
+      if (records.length === 0) {
+        gates.push({
+          name: `Avatar Uniqueness: ${entityName}.${avatarField}`,
+          category: 'generated',
+          passed: false,
+          populationCount: 0,
+          message: `Evaluation failed: target entity '${entityName}' has 0 records`,
+          expected: '> 0',
+          actual: 0,
+        });
+        continue;
+      }
+
+      const values = records
+        .map((r) => r[avatarField])
+        .filter((v) => v !== undefined && v !== null && v !== '');
+
+      if (values.length === 0) {
+        gates.push({
+          name: `Avatar Uniqueness: ${entityName}.${avatarField}`,
+          category: 'generated',
+          passed: false,
+          populationCount: 0,
+          message: `Evaluation failed: 0 avatar values populated for ${entityName}.${avatarField}`,
+          expected: '> 0',
+          actual: 0,
+        });
+        continue;
+      }
+
+      const distinctSet = new Set(values.map((v) => String(v)));
+      const distinctCount = distinctSet.size;
+      const totalCount = values.length;
+      const distinctRatio = distinctCount / totalCount;
+      const passed = distinctRatio >= 0.99 && totalCount > 0;
+
+      gates.push({
+        name: `Avatar Uniqueness: ${entityName}.${avatarField}`,
+        category: 'generated',
+        passed,
+        populationCount: totalCount,
+        message:
+          distinctCount === totalCount
+            ? `All ${totalCount} rendered avatars are distinct (100.0% uniqueness)`
+            : `${distinctCount} distinct avatars across ${totalCount} records (${(distinctRatio * 100).toFixed(2)}% distinct, threshold ≥ 99.0%)`,
+        expected: totalCount,
+        actual: distinctCount,
+      });
+    }
+  }
+
+  private checkCorpusStability(
+    data: Record<string, readonly Record<string, unknown>[]>,
+    baseData: Record<string, readonly Record<string, unknown>[]> | undefined,
+    gates: GateResult[],
+  ): void {
+    if (!baseData || Object.keys(baseData).length === 0) {
+      return;
+    }
+
+    let totalBaseRecords = 0;
+    let missingPks = 0;
+    const droppedDetails: string[] = [];
+
+    for (const [entityName, baseRecords] of Object.entries(baseData)) {
+      totalBaseRecords += baseRecords.length;
+      const headRecords = data[entityName] ?? [];
+      const headPkSet = new Set<string>();
+      for (const hr of headRecords) {
+        const pk = hr['ID'] ?? hr['id'] ?? hr['primaryKey'];
+        if (pk !== undefined && pk !== null) {
+          headPkSet.add(typeof pk === 'string' ? pk.toLowerCase() : String(pk));
+        }
+      }
+
+      for (const br of baseRecords) {
+        const pk = br['ID'] ?? br['id'] ?? br['primaryKey'];
+        if (pk !== undefined && pk !== null) {
+          const norm = typeof pk === 'string' ? pk.toLowerCase() : String(pk);
+          if (!headPkSet.has(norm)) {
+            missingPks++;
+            if (droppedDetails.length < 5) {
+              droppedDetails.push(`${entityName}:${norm}`);
+            }
+          }
+        }
+      }
+    }
+
+    if (totalBaseRecords === 0) {
+      gates.push({
+        name: 'Corpus Stability (base ⊆ head)',
+        category: 'schema',
+        passed: false,
+        populationCount: 0,
+        message: 'Evaluation failed: baseData provided but contains 0 records',
+        expected: '> 0',
+        actual: 0,
+      });
+      return;
+    }
+
+    const passed = missingPks === 0 && totalBaseRecords > 0;
+    gates.push({
+      name: 'Corpus Stability (base ⊆ head)',
+      category: 'schema',
+      passed,
+      populationCount: totalBaseRecords,
+      message: passed
+        ? `All ${totalBaseRecords} primary keys from base commit retained in head dataset (base ⊆ head)`
+        : `${missingPks} primary key(s) from base commit dropped or re-keyed in head: ${droppedDetails.join(', ')}`,
+      expected: 0,
+      actual: missingPks,
+    });
   }
 
   private checkFactorContracts(

@@ -16,3 +16,5 @@ export * from './simulation/RetrospectiveUnroller.js';
 export * from './avatars/AvatarGenerator.js';
 export * from './avatars/LogoGenerator.js';
 export * from './avatars/FieldGeneratorPass.js';
+export * from './generators/DeclarativeGenerators.js';
+export * from './generators/ReversalEngine.js';

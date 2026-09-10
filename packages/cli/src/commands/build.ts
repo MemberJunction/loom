@@ -14,6 +14,7 @@ import {
   nestedEvent,
   temporalRole,
   scopedDecision,
+  ReversalEngine,
   type SimulationNode,
   type EntityCandidate,
 } from '@memberjunction/loom-engine';
@@ -527,6 +528,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
               parentPool,
               rng: entityRng,
               identityService,
+              catalogs: loaded.catalogs,
+              asOfDate: releaseDate,
             });
             row['ID'] = parentId;
             backgroundRecords.push(row);
@@ -540,6 +543,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
               parentPool,
               rng: entityRng,
               identityService,
+              catalogs: loaded.catalogs,
+              asOfDate: releaseDate,
             });
             backgroundRecords.push(row);
           }
@@ -803,6 +808,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
               parentPool: allRecords,
               rng: rowRng,
               identityService,
+              catalogs: loaded.catalogs,
+              asOfDate: `${c}-06-15`,
             });
             childRow[fkFieldName] = parentId;
             childRow['ID'] = identityService.MintId(loaded.domain.name, cr.entity, [parentId, String(c), String(k)]);
@@ -875,6 +882,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
           parentPool: allRecords,
           rng: createRng(seed, `hero:${hero.heroKey}`),
           identityService,
+          catalogs: loaded.catalogs,
+          asOfDate: releaseDate,
         });
         const heroRow: Record<string, unknown> = {
           ...baseRow,
@@ -955,6 +964,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
               parentPool: allRecords,
               rng: childRng,
               identityService,
+              catalogs: loaded.catalogs,
+              asOfDate: releaseDate,
             });
             childRow[fkFieldName] = heroId;
             childRow['ID'] = identityService.MintId(loaded.domain.name, entityName, [heroId, String(j)]);
@@ -982,6 +993,25 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         }
       }
     }
+  }
+
+  // 8. Coherify order cancellations if order records are present
+  const orderEntity = Object.keys(allRecords).find(
+    (e) =>
+      loaded.domain.entities[e]?.fields['ReversesOrderHeaderID'] ||
+      (loaded.domain.entities[e]?.fields['OrderDate'] && loaded.domain.entities[e]?.fields['OrderType'])
+  );
+  if (orderEntity && allRecords[orderEntity]) {
+    const lineEntity = Object.keys(allRecords).find(
+      (e) =>
+        loaded.domain.entities[e]?.fields['ReversesOrderLineID'] ||
+        (loaded.domain.entities[e]?.fields['UnitPrice'] && loaded.domain.entities[e]?.fields['Quantity'])
+    );
+    ReversalEngine.CoherifyCancellations({
+      orders: allRecords[orderEntity]!,
+      orderLines: lineEntity ? allRecords[lineEntity] : undefined,
+      rng,
+    });
   }
 
   // Emit metadata tree

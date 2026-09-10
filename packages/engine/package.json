@@ -23,10 +23,10 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@dicebear/core": "^9.4.2",
-    "@dicebear/lorelei": "^9.4.2",
-    "@dicebear/micah": "^9.4.2",
-    "@dicebear/toon-head": "^9.4.2",
+    "@dicebear/core": "9.4.2",
+    "@dicebear/lorelei": "9.4.2",
+    "@dicebear/micah": "9.4.2",
+    "@dicebear/toon-head": "9.4.2",
     "@memberjunction/loom-contracts": "workspace:*",
     "svgo": "^4.0.0",
     "uuid": "^11.0.0",

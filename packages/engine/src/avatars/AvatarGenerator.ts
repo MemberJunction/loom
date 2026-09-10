@@ -72,6 +72,7 @@ export interface AvatarOptions {
   format?: 'base64' | 'svg' | 'url';
   backgroundColor?: string;
   maxLength?: number;
+  version?: string;
 }
 
 const DICEBEAR_STYLES: Record<DiceBearStyle, Style<object>> = {
@@ -248,7 +249,8 @@ export class AvatarGenerator {
       if (Array.isArray(value)) params.set(key, value.map(String).join(','));
       else if (value !== undefined && value !== null) params.set(key, String(value));
     }
-    return `https://api.dicebear.com/9.x/${style}/svg?${params.toString()}`;
+    const version = options.version ?? '9.x';
+    return `https://api.dicebear.com/${version}/${style}/svg?${params.toString()}`;
   }
 
   private static BuildDiceBearSvg(
