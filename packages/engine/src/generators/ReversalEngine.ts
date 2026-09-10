@@ -152,23 +152,28 @@ export class ReversalEngine {
 
     for (const cancellation of cancellations) {
       const cancelId = getId(cancellation);
+      const cancelLines = getOrderLines(cancellation);
+      const neededLineCount = cancelLines.length;
+
       const rawTargetId = getField(cancellation, 'ReversesOrderHeaderID')
         ? String(getField(cancellation, 'ReversesOrderHeaderID')).toLowerCase()
         : null;
 
       let originalOrder: Record<string, unknown> | undefined;
 
-      // 1. Check if existing ReversesOrderHeaderID points to a valid confirmed sale
+      // 1. Check if existing ReversesOrderHeaderID points to a valid confirmed sale with matching line count
       if (rawTargetId && orderById.has(rawTargetId)) {
         const target = orderById.get(rawTargetId)!;
         const targetType = String(getField(target, 'OrderType') ?? '');
         const targetStatus = String(getField(target, 'Status') ?? getField(target, 'OrderStatus') ?? '');
-        if (targetType === 'Sale' && targetStatus === 'Confirmed' && !claimedSales.has(rawTargetId)) {
+        const targetLines = getOrderLines(target);
+        const lineCountMatches = neededLineCount === 0 || targetLines.length === neededLineCount;
+        if (targetType === 'Sale' && targetStatus === 'Confirmed' && !claimedSales.has(rawTargetId) && lineCountMatches) {
           originalOrder = target;
         }
       }
 
-      // 2. If no valid target yet, find the best confirmed sale for this customer
+      // 2. If no valid target yet, find the best confirmed sale for this customer with matching line count
       const cancelCustomer = String(
         getField(cancellation, 'BillToPersonID') ?? getField(cancellation, 'CustomerID') ?? getField(cancellation, 'BillToOrganizationID') ?? ''
       );
@@ -176,10 +181,13 @@ export class ReversalEngine {
         const customerSales = confirmedSales.filter((s) => {
           const sId = getId(s).toLowerCase();
           const sCust = String(getField(s, 'BillToPersonID') ?? getField(s, 'CustomerID') ?? getField(s, 'BillToOrganizationID') ?? '');
+          const sLines = getOrderLines(s);
+          const lineMatches = neededLineCount === 0 || sLines.length === neededLineCount;
           return (
             sCust === cancelCustomer &&
             !claimedSales.has(sId) &&
-            sId !== cancelId.toLowerCase()
+            sId !== cancelId.toLowerCase() &&
+            lineMatches
           );
         });
 
@@ -193,7 +201,9 @@ export class ReversalEngine {
       if (!originalOrder) {
         const available = confirmedSales.filter((s) => {
           const sId = getId(s).toLowerCase();
-          return !claimedSales.has(sId) && sId !== cancelId.toLowerCase();
+          const sLines = getOrderLines(s);
+          const lineMatches = neededLineCount === 0 || sLines.length === neededLineCount;
+          return !claimedSales.has(sId) && sId !== cancelId.toLowerCase() && lineMatches;
         });
         if (available.length > 0) {
           const orig = available[0]!;
@@ -258,7 +268,6 @@ export class ReversalEngine {
 
       // Mirror lines from original order
       const origLines = getOrderLines(originalOrder);
-      const cancelLines = getOrderLines(cancellation);
 
       const mirroredLines: Record<string, unknown>[] = [];
       let totalNegativeGross = 0;

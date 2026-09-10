@@ -2,7 +2,14 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execSync } from 'node:child_process';
 import { loadProject } from '../project.js';
-import { Validator, readEntityMetadata, extractComposedRecords, type ValidationReport, type GateResult } from '@memberjunction/loom-engine';
+import {
+  Validator,
+  readEntityMetadata,
+  extractComposedRecords,
+  type ValidationReport,
+  type GateResult,
+  type BaseDataStatus,
+} from '@memberjunction/loom-engine';
 
 export interface ValidateCommandOptions {
   project?: string;
@@ -15,16 +22,33 @@ export interface ValidateCommandOptions {
 function loadBaseRecords(
   dataDir: string,
   domain: Parameters<typeof extractComposedRecords>[0],
-): Record<string, Record<string, unknown>[]> | null {
+): BaseDataStatus {
   if (process.env.SKIP_BASE_DELTA_CHECK === '1') {
-    return null;
+    return {
+      status: 'skipped',
+      reason: 'Explicit override (SKIP_BASE_DELTA_CHECK=1)',
+    };
   }
 
   let gitRoot = '';
   try {
-    gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    gitRoot = execSync('git rev-parse --show-toplevel', {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
   } catch {
-    return null;
+    return {
+      status: 'error',
+      reason: 'Failed to determine git repository root (git rev-parse failed)',
+    };
+  }
+
+  const relDataDir = path.relative(gitRoot, dataDir);
+  if (relDataDir.startsWith('..') || path.isAbsolute(relDataDir)) {
+    return {
+      status: 'skipped',
+      reason: `Data directory '${dataDir}' is outside git repository root '${gitRoot}' (standalone/ephemeral fixture)`,
+    };
   }
 
   const candidates = [
@@ -35,12 +59,18 @@ function loadBaseRecords(
   ].filter(Boolean) as string[];
 
   let baseSha = '';
+  let matchedRef = '';
   for (const ref of candidates) {
     try {
       execSync(`git rev-parse --verify ${ref}^{commit}`, { stdio: 'ignore', cwd: gitRoot });
-      const sha = execSync(`git merge-base HEAD ${ref}`, { encoding: 'utf8', cwd: gitRoot, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      const sha = execSync(`git merge-base HEAD ${ref}`, {
+        encoding: 'utf8',
+        cwd: gitRoot,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
       if (sha) {
         baseSha = sha;
+        matchedRef = ref;
         break;
       }
     } catch {
@@ -49,10 +79,13 @@ function loadBaseRecords(
   }
 
   if (!baseSha) {
-    return null;
+    return {
+      status: 'error',
+      reason:
+        'Could not resolve merge-base with any candidate base ref (origin/next, origin/main, HEAD~1) — verify git history is not a shallow clone',
+    };
   }
 
-  const relDataDir = path.relative(gitRoot, dataDir);
   let baseFilesOut = '';
   try {
     baseFilesOut = execSync(`git ls-tree -r --name-only ${baseSha} "${relDataDir}"`, {
@@ -61,11 +94,17 @@ function loadBaseRecords(
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
   } catch {
-    return null;
+    return {
+      status: 'error',
+      reason: `Failed to inspect git tree at commit ${baseSha.slice(0, 8)} for path '${relDataDir}'`,
+    };
   }
 
   if (!baseFilesOut) {
-    return null;
+    return {
+      status: 'error',
+      reason: `No data files found in git tree at commit ${baseSha.slice(0, 8)} for path '${relDataDir}'`,
+    };
   }
 
   const baseFiles = baseFilesOut
@@ -79,6 +118,7 @@ function loadBaseRecords(
   }
 
   const baseRecords: Record<string, Record<string, unknown>[]> = {};
+  const failedFiles: string[] = [];
 
   for (const f of baseFiles) {
     const relFromData = path.relative(relDataDir, f);
@@ -118,8 +158,15 @@ function loadBaseRecords(
         }
       }
     } catch {
-      // skip unreadable
+      failedFiles.push(f);
     }
+  }
+
+  if (failedFiles.length > 0) {
+    return {
+      status: 'error',
+      reason: `Failed to read ${failedFiles.length} base file(s) from git tree at ${baseSha.slice(0, 8)}: ${failedFiles.slice(0, 3).join(', ')}`,
+    };
   }
 
   const decomposedBase = extractComposedRecords(domain, baseRecords);
@@ -127,7 +174,12 @@ function loadBaseRecords(
     baseRecords[e] = rows;
   }
 
-  return baseRecords;
+  return {
+    status: 'loaded',
+    data: baseRecords,
+    ref: matchedRef,
+    sha: baseSha,
+  };
 }
 
 export async function executeValidate(options: ValidateCommandOptions): Promise<ValidationReport> {
@@ -247,7 +299,9 @@ export async function executeValidate(options: ValidateCommandOptions): Promise<
     Object.values(mod.effects)
   );
 
-  const baseData = options.skipBaseCheck ? null : loadBaseRecords(dataDir, loaded.domain);
+  const baseData = options.skipBaseCheck
+    ? ({ status: 'skipped', reason: 'Explicit override (--skip-base-check)' } as const)
+    : loadBaseRecords(dataDir, loaded.domain);
   const validator = new Validator();
   const heroes = loaded.heroesManifest?.heroes ?? [];
   const eras = loaded.erasManifest?.eras ?? [];

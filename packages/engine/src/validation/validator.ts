@@ -27,12 +27,28 @@ export interface ValidationReport {
  * factor tolerance bands, and schema constraints.
  * Enforces Invariant 7: every check states the size of the population it visited.
  */
+export type BaseDataStatus =
+  | {
+      status: 'loaded';
+      data: Record<string, readonly Record<string, unknown>[]>;
+      ref?: string;
+      sha?: string;
+    }
+  | {
+      status: 'skipped';
+      reason: string;
+    }
+  | {
+      status: 'error';
+      reason: string;
+    };
+
 export interface ValidateOptions {
   factors?: readonly FactorContract[];
   heroes?: readonly HeroConfig[];
   eras?: readonly EraConfig[];
   catalogs?: Record<string, readonly Record<string, unknown>[]>;
-  baseData?: Record<string, readonly Record<string, unknown>[]> | null;
+  baseData?: Record<string, readonly Record<string, unknown>[]> | BaseDataStatus | null;
   skipBaseCheck?: boolean;
 }
 
@@ -44,13 +60,13 @@ export class Validator {
     heroes: readonly HeroConfig[] = [],
     eras: readonly EraConfig[] = [],
     catalogs?: Record<string, readonly Record<string, unknown>[]>,
-    baseData?: Record<string, readonly Record<string, unknown>[]> | null
+    baseData?: Record<string, readonly Record<string, unknown>[]> | BaseDataStatus | null
   ): ValidationReport {
     let actualFactors: readonly FactorContract[] = [];
     let actualHeroes: readonly HeroConfig[] = heroes;
     let actualEras: readonly EraConfig[] = eras;
     let actualCatalogs: Record<string, readonly Record<string, unknown>[]> | undefined = catalogs;
-    let actualBaseData: Record<string, readonly Record<string, unknown>[]> | null | undefined = baseData;
+    let actualBaseData: Record<string, readonly Record<string, unknown>[]> | BaseDataStatus | null | undefined = baseData;
 
     if (Array.isArray(factorsOrOptions)) {
       actualFactors = factorsOrOptions;
@@ -956,27 +972,29 @@ export class Validator {
         continue;
       }
 
-      const sample = String(values[0]);
-      const isDataUri = sample.startsWith('data:image/svg+xml;base64,') || sample.startsWith('data:');
+      let renderedSvgCount = 0;
+      let urlCount = 0;
+      const distinctSet = new Set<string>();
 
-      let distinctSet: Set<string>;
-      if (isDataUri) {
-        distinctSet = new Set(
-          values.map((v) => {
-            const str = String(v);
-            const commaIdx = str.indexOf(',');
-            if (commaIdx >= 0) {
-              try {
-                return Buffer.from(str.slice(commaIdx + 1), 'base64').toString('utf8');
-              } catch {
-                return str;
-              }
+      for (const v of values) {
+        const str = String(v);
+        if (str.startsWith('data:image/svg+xml') || str.startsWith('data:')) {
+          renderedSvgCount++;
+          const commaIdx = str.indexOf(',');
+          if (commaIdx >= 0) {
+            try {
+              const decoded = Buffer.from(str.slice(commaIdx + 1), 'base64').toString('utf8');
+              distinctSet.add(decoded);
+            } catch {
+              distinctSet.add(str);
             }
-            return str;
-          })
-        );
-      } else {
-        distinctSet = new Set(values.map((v) => String(v)));
+          } else {
+            distinctSet.add(str);
+          }
+        } else {
+          urlCount++;
+          distinctSet.add(str);
+        }
       }
 
       const distinctCount = distinctSet.size;
@@ -985,16 +1003,21 @@ export class Validator {
       const passed = distinctRatio >= 0.99 && totalCount > 0;
 
       let msg: string;
-      if (isDataUri) {
+      if (renderedSvgCount > 0 && urlCount === 0) {
         msg =
           distinctCount === totalCount
             ? `All ${totalCount} rendered avatars are distinct (100.0% decoded SVG payload uniqueness)`
             : `${distinctCount} distinct rendered SVGs across ${totalCount} records (${(distinctRatio * 100).toFixed(2)}% distinct, threshold ≥ 99.0%)`;
-      } else {
+      } else if (urlCount > 0 && renderedSvgCount === 0) {
         msg =
           distinctCount === totalCount
             ? `All ${totalCount} avatar URLs are distinct (seed/URL mode; note: rendered SVGs not hashed offline)`
             : `${distinctCount} distinct avatar URLs across ${totalCount} records (${(distinctRatio * 100).toFixed(2)}% distinct, threshold ≥ 99.0%)`;
+      } else {
+        msg =
+          distinctCount === totalCount
+            ? `All ${totalCount} avatars are distinct (${renderedSvgCount} rendered SVGs hashed offline, ${urlCount} URLs)`
+            : `${distinctCount} distinct avatars across ${totalCount} records (${renderedSvgCount} rendered SVGs, ${urlCount} URLs, ${(distinctRatio * 100).toFixed(2)}% distinct)`;
       }
 
       gates.push({
@@ -1011,19 +1034,47 @@ export class Validator {
 
   private checkCorpusStability(
     data: Record<string, readonly Record<string, unknown>[]>,
-    baseData: Record<string, readonly Record<string, unknown>[]> | null | undefined,
+    baseInput: Record<string, readonly Record<string, unknown>[]> | BaseDataStatus | null | undefined,
     gates: GateResult[],
   ): void {
-    if (!baseData || Object.keys(baseData).length === 0) {
+    if (baseInput === null || baseInput === undefined) {
       gates.push({
         name: 'Corpus Stability (base ⊆ head)',
         category: 'schema',
         passed: true,
         populationCount: 0,
-        message: 'Skipped: baseData not provided or empty (standalone evaluation)',
+        message: 'Skipped: baseData not provided (standalone evaluation)',
       });
       return;
     }
+
+    if ('status' in baseInput) {
+      if (baseInput.status === 'skipped') {
+        gates.push({
+          name: 'Corpus Stability (base ⊆ head)',
+          category: 'schema',
+          passed: true,
+          populationCount: 0,
+          message: `Skipped: ${baseInput.reason}`,
+        });
+        return;
+      }
+      if (baseInput.status === 'error') {
+        gates.push({
+          name: 'Corpus Stability (base ⊆ head)',
+          category: 'schema',
+          passed: false,
+          populationCount: 0,
+          message: `Evaluation failed: ${baseInput.reason}`,
+        });
+        return;
+      }
+    }
+
+    const baseData =
+      'status' in baseInput && baseInput.status === 'loaded'
+        ? baseInput.data
+        : (baseInput as Record<string, readonly Record<string, unknown>[]>);
 
     let totalBaseRecords = 0;
     let missingPks = 0;

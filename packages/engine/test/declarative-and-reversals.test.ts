@@ -436,5 +436,65 @@ describe('Automated Quality & Validation Gates', () => {
     const failGate = failReport.gates.find((g) => g.name.includes('Corpus Stability'));
     expect(failGate?.passed).toBe(false);
     expect(failGate?.actual).toBe(1);
+
+    // Explicit skipped status passes with 0 population
+    const skipReport = validator.Validate(domain, headDataRetained, {
+      baseData: { status: 'skipped', reason: 'Explicit override (SKIP_BASE_DELTA_CHECK=1)' },
+    });
+    const skipGate = skipReport.gates.find((g) => g.name.includes('Corpus Stability'));
+    expect(skipGate?.passed).toBe(true);
+    expect(skipGate?.populationCount).toBe(0);
+    expect(skipGate?.message).toContain('Skipped: Explicit override');
+
+    // Error status fails loudly
+    const errReport = validator.Validate(domain, headDataRetained, {
+      baseData: { status: 'error', reason: 'Could not resolve git merge-base' },
+    });
+    const errGate = errReport.gates.find((g) => g.name.includes('Corpus Stability'));
+    expect(errGate?.passed).toBe(false);
+    expect(errGate?.populationCount).toBe(0);
+    expect(errGate?.message).toContain('Evaluation failed: Could not resolve git merge-base');
+  });
+
+  it('evaluates avatar uniqueness with mixed base64 data URIs and URLs honestly', () => {
+    const validator = new Validator();
+    const domain: DomainConfig = {
+      name: 'test-mixed-avatars',
+      description: 'Test mixed avatars',
+      version: '1.0.0',
+      entities: {
+        Person: {
+          name: 'Person',
+          entityName: 'Person',
+          schema: 'test',
+          fields: {
+            ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+            PhotoURL: { name: 'PhotoURL', type: 'string' },
+          },
+          foreignKeys: {},
+          isImmutable: false,
+        },
+      },
+    };
+
+    const svg1 = '<svg>Elena</svg>';
+    const svg2 = '<svg>Marcus</svg>';
+    const b64_1 = `data:image/svg+xml;base64,${Buffer.from(svg1).toString('base64')}`;
+    const b64_2 = `data:image/svg+xml;base64,${Buffer.from(svg2).toString('base64')}`;
+    const url1 = 'https://api.dicebear.com/9.4.2/toon-head/svg?seed=Person-3';
+
+    const data = {
+      Person: [
+        { ID: 'p-1', PhotoURL: b64_1 },
+        { ID: 'p-2', PhotoURL: b64_2 },
+        { ID: 'p-3', PhotoURL: url1 },
+      ],
+    };
+
+    const report = validator.Validate(domain, data, []);
+    const gate = report.gates.find((g) => g.name.includes('Avatar Uniqueness'));
+    expect(gate?.passed).toBe(true);
+    expect(gate?.populationCount).toBe(3);
+    expect(gate?.message).toContain('2 rendered SVGs hashed offline, 1 URLs');
   });
 });
