@@ -2,8 +2,21 @@
 
 **Repository**: `MemberJunction/loom` (Plan of Record)  
 **Downstream Repositories**: `MemberJunction/more-cheese`, `MemberJunction/bizapps-common`  
-**Status**: Proposal for Review  
+**Status**: Proposal — reviewer revisions applied 2026-09-10  
 **Target Milestone**: September 2026 Release Alignment  
+**Supersedes / extends**: `plans/06-avatar-realism-and-generation-follow-ups.md` (see §1, *Relationship to Plan 06*)
+
+---
+
+> ### Reviewer revision note — 2026-09-10
+>
+> Revisions are marked inline as *(reviewer)*. Substance of the plan is kept; five things changed because they were measured against the current heads rather than assumed:
+>
+> 1. **WP1 is already delivered.** `bizapps-common` `V202609051800` widened `PhotoURL`/`LogoURL` to `NVARCHAR(MAX)` and is merged on `next`. WP1 no longer gates WP2. (§5)
+> 2. **The `NVARCHAR(1000)` premise behind the avatar phasing is stale.** The shipped corpus already carries 3,058 `data:` URIs up to 9,862 chars. With that column equalised, the case for CDN URL mode has to be re-argued on payload size, not schema cost. (§1, §3.1, §3.3)
+> 3. **Plan 06 already decided this**, via a design-it-twice that chose offline embedding. Plan 07 should extend it, not silently re-open it. (§1)
+> 4. **Two gates could not fail as written** — avatar uniqueness is true by construction in URL mode, and the name/gender gate asserts an outcome real data does not satisfy. Both re-specified. (§4)
+> 5. **A corpus-stability gate is added** and is the highest-value item here: this plan's changes move the deterministic draw, and WP3 regenerates the whole dataset. (§4.7)
 
 ---
 
@@ -22,9 +35,24 @@ During full-scale validation of the 120,000-record `more-cheese` world model acr
    - Out of 218 cancellations in the dataset, only 24 are coherent.
    - 114 share no products with what they reverse, 185 differ in amount, 23 reverse an order dated *after* the cancellation, 16 originals are reversed multiple times, 2 reverse someone else's order, and 6 reverse a Voided or Draft order.
    - Crucially, cancellations were generated with positive `TotalGross` and positive line quantities, adding +$52,310 to sales instead of netting them out.
-4. **Avatar Visual Fidelity and Combinatorial Collapse**:
-   - Current hand-drawn SVGs (`AvatarGenerator.BuildSvg`) were strictly constrained to 700 bytes to fit under `NVARCHAR(1000)`.
-   - The limited part library produces winking expressions and unnatural hairstyles, collapsing 3,058 people onto only 1,501 distinct avatars.
+4. **Avatar Visual Fidelity**:
+   - The hand-drawn part library (`AvatarGenerator.BuildSvg`) produces winking expressions and unnatural hairstyles.
+   - **Corrected 2026-09-10 (reviewer):** the 700-byte / `NVARCHAR(1000)` ceiling this section originally cited is **historical, not current**. Measured on merged `more-cheese` `next` (`86acb5b`):
+     - `Person.PhotoURL`: **3,058 of 3,058 are `data:` URIs, max 9,862 chars — every one already exceeds 1,000.**
+     - `Organization.LogoURL`: max 922 chars.
+     - `bizapps-common` widened both columns to `NVARCHAR(MAX)` in `V202609051800__v5.39.x__Widen_PhotoURL_LogoURL.sql`, merged on `origin/next`. Its own header records the provenance: *"loom #12 WP1"*.
+   - The earlier claim of "1,501 distinct avatars" is also stale — the current corpus reports 3,058 distinct `PhotoURL` values. Any distinctness figure quoted here must be re-measured against the head being planned from, not carried forward.
+
+### Relationship to Plan 06 (read before implementing §3)
+
+`plans/06-avatar-realism-and-generation-follow-ups.md` (2026-09-05) already covers the avatar half of this plan and **already ran a design-it-twice** on the exact question §3 re-opens. Plan 06 §2 evaluated *"widen the columns, render offline, embed"* against the alternatives and marked it **Recommended**; its WP1 is the migration that is now merged.
+
+Two consequences, and they change §3's economics rather than its goals:
+
+- **Plan 07 must not re-litigate that decision without new evidence that overturns it.** The evidence offered in §3.1 for preferring CDN URL mode is *"Schema Impact: Zero. Fits in `NVARCHAR(1000)`"* — an advantage that stopped existing on 2026-09-05.
+- **Plan 06 §1.6 already recorded the name/gender independence finding (F-E).** §1 item 1 of this plan is a re-discovery, not a new defect. Keep it, but cite F-E so the history is traceable.
+
+Where the two plans overlap, **Plan 06 is the plan of record for avatars** and this plan extends it. Where they conflict, say so explicitly and give the reason.
 
 ### Core Architecture Principle: Generalized Loom Primitives
 Loom must remain a **general-purpose synthetic data engine**. It must **not** hardcode English names, specific gender rules, or association-specific logic into its core algorithms. Instead, Loom will provide generalized declarative primitives in `contracts` and `engine`:
@@ -168,6 +196,10 @@ MemberJunction's accounting and order framework (`@mj-biz-apps/orders-core-entit
    - `OriginalOrder.OrderDate <= CancellationOrder.OrderDate`
    - `OriginalOrder.BillToPersonID === CancellationOrder.BillToPersonID` (same customer)
    - `OriginalOrder.ReversedByOrderHeaderID IS NULL` (strictly 1:1, no double-reversals)
+   - ⚠️ **Unresolved contradiction (reviewer):** invariant 1 mandates strict 1:1 at the header, but invariant 2 permits mirroring *"the original order (or returned subset)"*. Partial returns imply a second reversal against the remaining lines, which strict 1:1 forbids. Pick one before implementing:
+     - **(a) Full reversals only** — keep `ReversedByOrderHeaderID` 1:1, drop "or returned subset". Simplest, and matches the `ReversalBehavior.ts` field being a single header FK.
+     - **(b) Partial returns allowed** — then 1:1 must move to the *line* level (`ReversesOrderLineID` unique per original line) and the header guard must become "no line reversed twice", not "no order reversed twice".
+     Verify which `ReversalBehavior.ts` actually enforces and cite the file/line, rather than deciding it here.
 2. **Line Mirroring & Negative Arithmetic**:
    - For each line in the original order (or returned subset):
      - `ReversalLine.ReversesOrderLineID = OriginalLine.ID`
@@ -190,17 +222,26 @@ MemberJunction's accounting and order framework (`@mj-biz-apps/orders-core-entit
 | Dimension | Option A: DiceBear URL Mode (Immediate) | Option B: DiceBear Offline Base64 (Plan 06) | Option C: Tweak Hand-Drawn SVG |
 | :--- | :--- | :--- | :--- |
 | **Visual Quality** | **Modern vector illustration** (`toon-head` / `micah`). No winking, natural hair. | **Identical to Option A** (`toon-head` / `micah`). | Flat geometric shapes; improved over today but still primitive. |
-| **Schema Impact** | **Zero**. Fits in `NVARCHAR(1000)`. | Requires `NVARCHAR(MAX)` on `PhotoURL`/`LogoURL` (`bizapps-common`). | **Zero**. Fits in `NVARCHAR(1000)`. |
+| **Schema Impact** | Zero. | **Also zero — already paid.** `NVARCHAR(MAX)` shipped in `V202609051800`, merged on `bizapps-common` `next`. | Zero. |
+| **External dependency** | Every avatar is a live request to `api.dicebear.com`. Breaks on airgap, firewall, or CDN outage. | None. | None. |
+| **Data egress** | Seeds travel in the URL (`?seed=Elena-Vasquez`). Synthetic here; a hazard if the pattern is copied to real people. | None. | None. |
 | **Payload Size** | ~120 characters per row. Zero JSON / SQL bloat. | ~6.8 KB per row (+21 MB across 3,058 people). | ~700 bytes per row. |
 | **Offline Operation** | Requires internet access in Explorer. | 100% offline, airgapped, zero external requests. | 100% offline. |
 | **Distinctness** | **3,058 / 3,058 distinct**. | **3,058 / 3,058 distinct**. | ~2,500 / 3,058 distinct. |
 | **Licensing** | MIT (code) + CC BY 4.0 / CC0 (art). | MIT (code) + CC BY 4.0 / CC0 (art). | Custom MIT. |
 
+> ⚠️ **Reviewer — the row that decided this table is stale.** Option A was preferred on "zero schema impact", but Option B's schema cost was paid five days before this plan was written. With that column equalised, Option A's remaining differentiators are *negative*: an external runtime dependency and seed egress, in exchange for nothing Option B lacks. Two rows that were never in the table (external dependency, data egress) are added above because they are the actual discriminators now.
+>
+> This does not automatically make Option A wrong — a smaller payload and a lighter metadata push are real. But the case has to be re-argued on those grounds, not on a ceiling that no longer exists. See §3.3.
+
 ### 3.2 Parameter Mapping & CDN Determinism
 
 DiceBear's HTTP API is **100% deterministic and stateless**:
 - **Format**: `https://api.dicebear.com/9.x/{style}/svg?seed={seed}&{traits}`
-- **Determinism Guarantee**: DiceBear uses a seeded PRNG (`prando`). For any given style and version (e.g. `9.x`), passing the same `seed` and trait query parameters produces the exact same SVG output every single time across any machine or browser.
+- **Determinism Guarantee**: DiceBear uses a seeded PRNG (`prando`). For a given style **and exact version**, the same `seed` plus trait parameters produce the same SVG on any machine.
+- ⚠️ **`9.x` is a range, not a version (reviewer).** Every example URL in this plan pins `9.x`, which is precisely the part that can move underneath us: a minor release may add a trait value, change an enum's ordering, or alter a default, and the PRNG then lands somewhere else for the same seed. "Deterministic forever" and "pinned to a floating minor" cannot both be true.
+  - Pin an exact version in the generated URL, and record that version in `domain.json` so a regeneration diff attributes any avatar churn to a deliberate bump.
+  - Determinism must be **tested, not asserted**: a gate that renders a fixed seed set and compares against committed expected output is what makes the claim checkable. Absent that, the first upstream change surfaces as unexplained corpus churn.
 - **Root Cause of Unconstrained Anomalies**: DiceBear styles do **not** take a generic `&gender=` parameter. Passing `&gender=female` is silently ignored by the CDN. Without explicit trait constraints:
   - `beardProbability` defaults to 50% (giving female seeds mustaches/beards).
   - `rearHairProbability` defaults to 50% (giving male seeds long shoulder-length hair / mullets).
@@ -234,14 +275,22 @@ Loom's `AvatarGenerator` translates persona attributes into explicit query param
    - [Elena (Personas)](https://api.dicebear.com/9.x/personas/svg?seed=Elena-Vasquez&facialHairProbability=0&eyes=open,happy&mouth=smile)
    - [Bob (Personas)](https://api.dicebear.com/9.x/personas/svg?seed=Bob-Kowalski&facialHairProbability=30&eyes=open,happy&mouth=smile)
 
-### 3.3 Phased Implementation Roadmap
-- **Phase 1 (Immediate / Thursday Release Cut)**:
-  - Configure `Person.PhotoURL.avatar` with `format: "url"` and `style: "toon-head"` using `RECOMMENDED_TOON_HEAD_TRAITS` in `more-cheese/data/domain.json`.
-  - Instantly resolves winking icons, female beards, male dresses, sad frowns, and overly dark skin tones.
-  - Zero database migration required; keeps the metadata push lightweight.
-- **Phase 2 (Permanent Infrastructure — Post-Release)**:
-  - Execute WP1 in `bizapps-common` (widening `PhotoURL` to `NVARCHAR(MAX)`).
-  - Transition Loom's `AvatarGenerator` to offline data URI rendering (`format: "base64"` with `svgo` minification) for full airgapped deployment guarantees.
+### 3.3 Implementation Roadmap — **revised 2026-09-10 (reviewer)**
+
+The original two-phase split existed to defer a migration. That migration is already merged, so the deferral buys nothing and the phases collapse.
+
+**Recommended: go straight to offline data URI mode.** It is Plan 06's recommendation, its blocking prerequisite is delivered, and it is the only option with no runtime dependency on a third party.
+
+- Point `Person.PhotoURL.avatar` at `style: "toon-head"` with the trait guardrails in §3.2, `format: "base64"`, `svgo`-minified, **pinned to an exact DiceBear version**.
+- Traits, expression guardrails and the skin-tone palette are identical in both modes — they are the actual fix for beards on female seeds, dresses on male seeds, winking, frowns and muddy tones. **None of that visual work depends on the transport.** Choosing URL vs base64 does not change a single trait.
+- Keep `format: "url"` implemented and tested as a supported mode. It is genuinely useful for a lightweight demo profile, and building both is nearly free once the trait mapping exists. What it should *not* be is the default that ships.
+
+**If the release cut forces URL mode anyway**, that is a legitimate call — but record it as a deliberate, time-boxed trade with:
+1. the exact DiceBear version pinned in `domain.json`;
+2. a dated follow-up to switch the default to `base64`;
+3. an explicit note that Explorer then requires outbound access to `api.dicebear.com`, so an airgapped or firewalled demo renders 3,058 broken images.
+
+**Do not carry "Zero database migration required" as the justification.** It was true when Plan 07 was drafted against an older mental model of `bizapps-common`; it is not true against `next`.
 
 ---
 
@@ -249,8 +298,12 @@ Loom's `AvatarGenerator` translates persona attributes into explicit query param
 
 Loom's validation suite (`npm run validate:loom`) and mutation test suite (`npm run test:loom-mutations`) will enforce these invariants:
 
-1. **`Name-Gender Consistency Gate`**:
-   - Compares `FirstName` against gendered catalog entries. Fails if mismatch rate exceeds 0% on recognized names.
+> **Standing requirement for every gate below (reviewer).** Each gate must **print the population it examined** and **fail when that population is zero**. A gate that silently passes at `n=0` is indistinguishable from a gate that passed on real data — we hit exactly that on `more-cheese` when ~10 gates passed vacuously under a stale loom pin. `n` in the output is what makes a green result mean something.
+
+1. **`Name-Gender Consistency Gate`** — *revised (reviewer)*:
+   - ⚠️ As originally written ("fails if mismatch rate exceeds 0% on recognized names") this gate has two problems. "Recognized" is undefined, so the denominator is whatever the implementer decides. And a 0% ceiling asserts that names are deterministically gendered, which real populations are not — Jordan, Alex, Sam, Rowan are legitimately either. A plan whose stated purpose is realism should not require the corpus to be *less* realistic than reality.
+   - **Assert the mechanism, not the outcome:** every `FirstName` was drawn from the catalog bucket its `Gender` maps to. That is exact, has no fuzzy denominator, and is the property actually being fixed — the defect was independent draws, not the existence of unisex names.
+   - Report the unisex-bucket share as an observation, not a failure condition.
 2. **`Prefix-Gender Consistency Gate`**:
    - Asserts that male prefixes (`Mr.`) never attach to `Female` persons, and female prefixes (`Ms.`, `Mrs.`) never attach to `Male` persons.
 3. **`Pronoun-Gender Consistency Gate`**:
@@ -259,8 +312,18 @@ Loom's validation suite (`npm run validate:loom`) and mutation test suite (`npm 
    - Asserts that for every person, $\text{JoinDate} - \text{DateOfBirth} \ge 18.0\text{ years}$.
 5. **`Reversal Coherence Gate`**:
    - Asserts 100% coherence on order cancellations (prior order date, same customer, matching products, negative quantities, negative gross).
-6. **`Avatar Uniqueness Gate`**:
-   - Asserts that 100% of generated avatars (3,058 of 3,058) are unique.
+6. **`Avatar Uniqueness Gate`** — ⚠️ *vacuous as specified (reviewer)*:
+   - In URL mode the avatar string is `…?seed={seed}&{fixed traits}`. If seeds are unique, the URLs are unique **by construction** — the gate passes without saying anything about whether the rendered images differ. Ask the standing question: *what would make this pass while the thing it names is broken?* Answer: every person rendering an identical picture, which is the exact failure it claims to exclude.
+   - **Assert distinctness of what is rendered**, not of the string that requests it: hash the resolved SVG for a sampled seed set (base64 mode makes this free, since the SVG is already in hand).
+   - Keep a seed-uniqueness check too — but name it that, and don't let it stand in for image distinctness.
+   - Re-measure the baseline before quoting it. The "1,501 distinct" figure in §1 does not match the current corpus, which reports 3,058 distinct `PhotoURL` values.
+
+7. **`Corpus Stability Gate`** — **new (reviewer), highest value of the seven**:
+   - Every change in this plan alters the deterministic draw for `FirstName`, `Prefix`, `PronounSet`, `DateOfBirth` and the cancellation set. Any of those can shift the RNG stream for entities generated *after* them and silently change populations or primary keys — and WP3 calls for a full regeneration, which is precisely when that happens.
+   - **This is not hypothetical.** On `more-cheese` #36, a composition change silently took `payments` from 12,527 rows to 5,137 and re-keyed **all** of them, and every existing gate passed: deleting a header together with its line leaves the corpus self-consistent, and the payment→order FK points from the deleted side, so closure found no orphans. The PR's own reported totals contained the evidence (PKs 119,962 → 105,182 = exactly 7,390 × 2) and nothing was diffing them.
+   - The gate: for every entity directory, compare **row count and the primary-key set** against the base commit. Any entity that changes must be listed in the PR body with a reason. Unexplained drift fails.
+   - Expected output of WP3 is that **only the fields this plan touches change**. Person/Organization/Order/etc. keys must be identical. If they are not, the regeneration did more than intended and that needs an answer before the corpus is committed.
+   - Rationale worth keeping: `mj sync push` matches on primary key and never deletes, so a silent re-key does not replace rows on an already-seeded host — it **doubles** them.
 
 ---
 
@@ -268,15 +331,20 @@ Loom's validation suite (`npm run validate:loom`) and mutation test suite (`npm 
 
 ```mermaid
 graph TD
-    WP1[WP1: bizapps-common<br/>Widen PhotoURL to NVARCHAR MAX] --> WP2[WP2: loom<br/>Loom Engine Core Features]
-    WP2 --> WP3[WP3: more-cheese<br/>Domain Ruleset & Dataset Regeneration]
-    WP3 --> WP4[WP4: Reviewer Gate<br/>Full Stack & Sync Verification]
+    WP1["WP1: bizapps-common — ALREADY DELIVERED<br/>V202609051800, merged on next"]:::done
+    WP2["WP2: loom<br/>Engine primitives + gates"] --> WP3["WP3: more-cheese<br/>Ruleset + single regeneration"]
+    WP3 --> WP4["WP4: Reviewer gate<br/>Full-stack + corpus-stability verification"]
+    WP1 -.->|prerequisite, satisfied| WP2
+    classDef done fill:#d4edda,stroke:#28a745,color:#155724
 ```
 
-### WP1: `MemberJunction/bizapps-common`
-- New V migration: `ALTER TABLE __mj_BizAppsCommon.Person ALTER COLUMN PhotoURL NVARCHAR(MAX) NULL;`
-- Same for `Organization.LogoURL`.
-- CodeGen regeneration and changeset.
+### WP1: `MemberJunction/bizapps-common` — ✅ **already delivered, do not re-do**
+**Revised 2026-09-10 (reviewer).** This work package is complete and merged; it was delivered under Plan 06's WP1.
+
+- `migrations/V202609051800__v5.39.x__Widen_PhotoURL_LogoURL.sql` on `origin/next` already sets both `Person.PhotoURL` and `Organization.LogoURL` to `NVARCHAR(MAX)`, guarded idempotently on `COLUMNPROPERTY(..., 'Precision') <> -1`, and regenerates the CRUD procs with `nvarchar(MAX)` parameters. Its header cites *"loom #12 WP1"*.
+- **Authoring a second migration for this would be a duplicate**, and re-editing the existing one is forbidden — it is merged, so a checksum change would block every database that has run it (this exact mistake is live right now on `bizapps-orders` #188).
+- The only WP1 action left is **verification**: confirm the target database has actually applied `V202609051800` before relying on `NVARCHAR(MAX)`. A repo having the migration and a given database having *run* it are different facts.
+- Because WP1 is done, it **must not gate WP2**. The original strictly-sequential chain would have serialised all loom work behind a no-op.
 
 ### WP2: `MemberJunction/loom`
 - Implement `conditionalDistribution` and `catalogLookup` in `loom-contracts` and `loom-engine`.
@@ -291,6 +359,7 @@ graph TD
 - Set `Person.PhotoURL` to `toon-head`.
 - Run single deterministic regeneration (`npm run generate`).
 - Verify all gates: `check:ownership`, `validate:loom`, `test:loom-mutations`, and `check-metadata-closure.mjs`.
+- **Run the new Corpus Stability Gate (§4.7) and put its output in the PR body** — per-entity row count and primary-key-set delta against the base commit. State up front which entities are *expected* to change (those carrying the fields this plan touches) and treat every other change as a defect until explained. This is the step that would have caught the `payments` regression on #36.
 
 ### WP4: Reviewer Gate & Release Sign-off
 - Clean-checkout verification of zero orphaned FKs, 100% passing gates, and zero negative-sales distortions.
