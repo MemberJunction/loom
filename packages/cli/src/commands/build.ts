@@ -823,12 +823,14 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
             }
             const cycleDateField = childCfg.cycleField ?? Object.keys(childCfg.fields).find(
               (f) =>
-                f === 'Cycle' ||
-                f === 'Year' ||
-                f.endsWith('Date') ||
-                f.endsWith('At') ||
-                f.endsWith('On') ||
-                childCfg.fields[f]?.type === 'date'
+                f !== 'DateOfBirth' &&
+                f !== 'BirthDate' &&
+                (f === 'Cycle' ||
+                  f === 'Year' ||
+                  f.endsWith('Date') ||
+                  f.endsWith('At') ||
+                  f.endsWith('On') ||
+                  childCfg.fields[f]?.type === 'date')
             );
             if (cycleDateField) {
               childRow[cycleDateField] = childCfg.fields[cycleDateField]?.type === 'number' ? c : `${c}-06-15`;

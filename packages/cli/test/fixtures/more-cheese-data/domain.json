@@ -130,6 +130,7 @@
       "schema": "morecheese_members",
       "pack": "community",
       "outputDirectory": "membership-periods",
+      "cycleField": "RenewalDate",
       "businessKey": ["PeriodKey"],
       "fields": {
         "ID": { "name": "ID", "type": "uuid", "isPrimaryKey": true },

@@ -1204,17 +1204,17 @@ export class Validator {
   }
 
   /**
-   * Helper to resolve cycle field: explicit entity config or naming/type heuristic (D.6)
+   * Helper to return all heuristic candidate cycle fields on an entity (D.9)
    */
-  public static ResolveCycleField(entityCfg: DomainConfig['entities'][string]): string | undefined {
-    const explicit = entityCfg.cycleField;
-    if (explicit && entityCfg.fields[explicit]) {
-      return explicit;
-    }
-    return Object.keys(entityCfg.fields).find(
+  public static GetCandidateCycleFields(entityCfg: DomainConfig['entities'][string]): string[] {
+    return Object.keys(entityCfg.fields).filter(
       (f) =>
         f !== 'DateOfBirth' &&
         f !== 'BirthDate' &&
+        f !== 'CreatedAt' &&
+        f !== 'UpdatedAt' &&
+        f !== '__mj_CreatedAt' &&
+        f !== '__mj_UpdatedAt' &&
         (f === 'Cycle' ||
           f === 'Year' ||
           f.endsWith('Date') ||
@@ -1222,6 +1222,18 @@ export class Validator {
           f.endsWith('On') ||
           entityCfg.fields[f]?.type === 'date')
     );
+  }
+
+  /**
+   * Helper to resolve cycle field: explicit entity config or naming/type heuristic (D.6, D.9)
+   */
+  public static ResolveCycleField(entityCfg: DomainConfig['entities'][string]): string | undefined {
+    const explicit = entityCfg.cycleField;
+    if (explicit && entityCfg.fields[explicit]) {
+      return explicit;
+    }
+    const candidates = Validator.GetCandidateCycleFields(entityCfg);
+    return candidates[0];
   }
 
   private checkHeroPins(
@@ -1273,11 +1285,20 @@ export class Validator {
               const children = ctx.getChildren(hero.entity, String(heroRecord['ID'] ?? heroRecord['id']), factor.effect, '');
               const childCfg = domain.entities[factor.effect];
               const cycleField = childCfg ? Validator.ResolveCycleField(childCfg) : undefined;
-              if (pin.cycle !== undefined && !cycleField) {
-                failedPins.push(
-                  `Outcome for factor '${pin.factor}' specifies pin.cycle=${pin.cycle}, but no cycle field could be resolved on child entity '${factor.effect}'`
-                );
-                continue;
+              if (pin.cycle !== undefined) {
+                if (!cycleField) {
+                  failedPins.push(
+                    `Outcome for factor '${pin.factor}' specifies pin.cycle=${pin.cycle}, but no cycle field could be resolved on child entity '${factor.effect}'`
+                  );
+                  continue;
+                }
+                const candidateFields = childCfg ? Validator.GetCandidateCycleFields(childCfg) : [];
+                if (!childCfg?.cycleField && candidateFields.length > 1) {
+                  failedPins.push(
+                    `Outcome for factor '${pin.factor}' specifies pin.cycle=${pin.cycle}, but child entity '${factor.effect}' has multiple candidate date fields (${candidateFields.join(', ')}); explicit 'cycleField' declaration required in domain config`
+                  );
+                  continue;
+                }
               }
               const matchingChild = children.find((c) => {
                 if (!pin.cycle) return true;
@@ -1525,6 +1546,22 @@ export class Validator {
               populationCount: 0,
               expected: 'resolvable cycle field',
               actual: 'none',
+            });
+          }
+          continue;
+        }
+
+        const candidateFields = Validator.GetCandidateCycleFields(entityCfg);
+        if (!entityCfg.cycleField && candidateFields.length > 1) {
+          for (const targetCycle of era.cycles) {
+            gates.push({
+              name: `Realized Era Volume: ${era.eraKey} [${vm.entity} in ${targetCycle}]`,
+              category: 'era',
+              passed: false,
+              message: `Entity '${vm.entity}' has active volume multipliers in era '${era.eraKey}', but has multiple candidate date fields (${candidateFields.join(', ')}); explicit 'cycleField' declaration required in domain config`,
+              populationCount: 0,
+              expected: 'explicit cycleField',
+              actual: candidateFields.join(', '),
             });
           }
           continue;

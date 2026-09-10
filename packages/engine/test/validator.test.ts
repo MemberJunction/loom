@@ -721,5 +721,210 @@ describe('Validator', () => {
     expect(heroGate?.passed).toBe(true);
     expect(heroGate?.message).toContain('All 1 pin(s) satisfied');
   });
+
+  it('fails hero outcome pin when child entity has multiple candidate date fields and no explicit cycleField (D.9)', () => {
+    const heroDomain: DomainConfig = {
+      name: 'hero-test-multi',
+      namespace: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+      packs: { common: { name: 'common', dependsOn: [] } },
+      entities: {
+        Person: {
+          name: 'Person',
+          targetTable: 'p',
+          schema: 'dbo',
+          pack: 'common',
+          businessKey: ['ID'],
+          fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true } },
+          foreignKeys: {},
+          isImmutable: false,
+        },
+        MembershipPeriod: {
+          name: 'MembershipPeriod',
+          targetTable: 'mp',
+          schema: 'dbo',
+          pack: 'common',
+          businessKey: ['ID'],
+          fields: {
+            ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+            PersonID: { name: 'PersonID', type: 'uuid' },
+            StartDate: { name: 'StartDate', type: 'date' },
+            EndDate: { name: 'EndDate', type: 'date' },
+            RenewalDate: { name: 'RenewalDate', type: 'date' },
+            Active: { name: 'Active', type: 'boolean' },
+          },
+          foreignKeys: {
+            FK_MP_Person: {
+              fieldName: 'PersonID',
+              targetEntity: 'Person',
+              targetField: 'ID',
+              cardinality: 'many-to-one',
+            },
+          },
+          isImmutable: false,
+        },
+      },
+    };
+
+    const factor: FactorContract = {
+      id: 'factor-renewal',
+      category: 'behavioral',
+      scope: 'individual',
+      effect: 'MembershipPeriod',
+      outcome: { from: 'self', where: { Active: true } },
+      arrows: {},
+    };
+
+    const hero: HeroConfig = {
+      heroKey: 'hero-renewal',
+      entity: 'Person',
+      businessKeys: { ID: 'p-1' },
+      fixedFields: {},
+      birthCycle: 2024,
+      latentDials: {},
+      ladderEntries: [],
+      eras: [],
+      pins: [
+        { kind: 'outcome', factor: 'factor-renewal', cycle: 2026, value: true },
+      ],
+    };
+
+    const data = {
+      Person: [{ ID: 'p-1' }],
+      MembershipPeriod: [
+        { ID: 'mp-1', PersonID: 'p-1', StartDate: '2025-03-21', EndDate: '2026-03-20', RenewalDate: '2026-03-20', Active: true },
+      ],
+    };
+
+    const report = validator.Validate(heroDomain, data, [factor], [hero]);
+    const heroGate = report.gates.find((g) => g.name.includes('hero-renewal'));
+    expect(heroGate).toBeDefined();
+    expect(heroGate?.passed).toBe(false);
+    expect(heroGate?.message).toContain('multiple candidate date fields (StartDate, EndDate, RenewalDate)');
+    expect(heroGate?.message).toContain("explicit 'cycleField' declaration required");
+  });
+
+  it('succeeds hero outcome pin when child entity has multiple candidate date fields with explicit cycleField configured (D.9)', () => {
+    const heroDomain: DomainConfig = {
+      name: 'hero-test-explicit',
+      namespace: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+      packs: { common: { name: 'common', dependsOn: [] } },
+      entities: {
+        Person: {
+          name: 'Person',
+          targetTable: 'p',
+          schema: 'dbo',
+          pack: 'common',
+          businessKey: ['ID'],
+          fields: { ID: { name: 'ID', type: 'uuid', isPrimaryKey: true } },
+          foreignKeys: {},
+          isImmutable: false,
+        },
+        MembershipPeriod: {
+          name: 'MembershipPeriod',
+          targetTable: 'mp',
+          schema: 'dbo',
+          pack: 'common',
+          cycleField: 'RenewalDate',
+          businessKey: ['ID'],
+          fields: {
+            ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+            PersonID: { name: 'PersonID', type: 'uuid' },
+            StartDate: { name: 'StartDate', type: 'date' },
+            EndDate: { name: 'EndDate', type: 'date' },
+            RenewalDate: { name: 'RenewalDate', type: 'date' },
+            Active: { name: 'Active', type: 'boolean' },
+          },
+          foreignKeys: {
+            FK_MP_Person: {
+              fieldName: 'PersonID',
+              targetEntity: 'Person',
+              targetField: 'ID',
+              cardinality: 'many-to-one',
+            },
+          },
+          isImmutable: false,
+        },
+      },
+    };
+
+    const factor: FactorContract = {
+      id: 'factor-renewal',
+      category: 'behavioral',
+      scope: 'individual',
+      effect: 'MembershipPeriod',
+      outcome: { from: 'self', where: { Active: true } },
+      arrows: {},
+    };
+
+    const hero: HeroConfig = {
+      heroKey: 'hero-renewal-explicit',
+      entity: 'Person',
+      businessKeys: { ID: 'p-1' },
+      fixedFields: {},
+      birthCycle: 2024,
+      latentDials: {},
+      ladderEntries: [],
+      eras: [],
+      pins: [
+        { kind: 'outcome', factor: 'factor-renewal', cycle: 2026, value: true },
+      ],
+    };
+
+    const data = {
+      Person: [{ ID: 'p-1' }],
+      MembershipPeriod: [
+        { ID: 'mp-1', PersonID: 'p-1', StartDate: '2025-03-21', EndDate: '2026-03-20', RenewalDate: '2026-03-20', Active: true },
+      ],
+    };
+
+    const report = validator.Validate(heroDomain, data, [factor], [hero]);
+    const heroGate = report.gates.find((g) => g.name.includes('hero-renewal-explicit'));
+    expect(heroGate).toBeDefined();
+    expect(heroGate?.passed).toBe(true);
+    expect(heroGate?.message).toContain('All 1 pin(s) satisfied');
+  });
+
+  it('fails era volume gate when entity has multiple candidate date fields and no explicit cycleField (D.9)', () => {
+    const eraDomain: DomainConfig = {
+      name: 'era-multi-candidate',
+      namespace: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+      packs: { common: { name: 'common', dependsOn: [] } },
+      entities: {
+        Order: {
+          name: 'Order',
+          targetTable: 'ord',
+          schema: 'dbo',
+          pack: 'common',
+          businessKey: ['ID'],
+          fields: {
+            ID: { name: 'ID', type: 'uuid', isPrimaryKey: true },
+            OrderDate: { name: 'OrderDate', type: 'date' },
+            DueDate: { name: 'DueDate', type: 'date' },
+          },
+          foreignKeys: {},
+          isImmutable: false,
+        },
+      },
+    };
+
+    const era: EraConfig = {
+      eraKey: 'era-recession',
+      scope: 'all',
+      cycles: [2023],
+      factorAdjustments: [],
+      volumeMultipliers: [{ entity: 'Order', multiplier: 0.8 }],
+    };
+
+    const records = [
+      { ID: 'o-1', OrderDate: '2022-01-01', DueDate: '2022-01-15' },
+    ];
+
+    const report = validator.Validate(eraDomain, { Order: records }, [], [], [era]);
+    const eraGate = report.gates.find((g) => g.name.includes('Realized Era Volume: era-recession [Order in 2023]'));
+    expect(eraGate).toBeDefined();
+    expect(eraGate?.passed).toBe(false);
+    expect(eraGate?.message).toContain('multiple candidate date fields (OrderDate, DueDate)');
+    expect(eraGate?.message).toContain("explicit 'cycleField' declaration required");
+  });
 });
 
