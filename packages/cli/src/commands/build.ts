@@ -1009,11 +1009,14 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         loaded.domain.entities[e]?.fields['ReversesOrderLineID'] ||
         (loaded.domain.entities[e]?.fields['UnitPrice'] && loaded.domain.entities[e]?.fields['Quantity'])
     );
-    ReversalEngine.CoherifyCancellations({
+    const reversalResult = ReversalEngine.CoherifyCancellations({
       orders: allRecords[orderEntity]!,
       orderLines: lineEntity ? allRecords[lineEntity] : undefined,
       rng,
     });
+    console.log(
+      `   ✓ Cohered reversals: ${reversalResult.coherentCount} of ${reversalResult.reversalsCount} cancellation orders matched`
+    );
   }
 
   // Emit metadata tree

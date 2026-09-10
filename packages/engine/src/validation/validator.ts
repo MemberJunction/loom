@@ -1300,8 +1300,19 @@ export class Validator {
         for (const r of eRecords) {
           const raw = r[cField];
           if (raw !== undefined && raw !== null && raw !== '') {
-            const y = typeof raw === 'number' ? raw : new Date(String(raw)).getFullYear();
-            if (!isNaN(y)) allDatasetCycles.add(y);
+            let y: number | undefined;
+            if (typeof raw === 'number') {
+              y = raw;
+            } else {
+              const m = String(raw).match(/^(\d{4})/);
+              if (m) {
+                y = parseInt(m[1]!, 10);
+              } else {
+                const d = new Date(String(raw)).getFullYear();
+                if (!isNaN(d)) y = d;
+              }
+            }
+            if (y !== undefined && !isNaN(y)) allDatasetCycles.add(y);
           }
         }
       }
@@ -1345,7 +1356,17 @@ export class Validator {
       if (cycleField) {
         const raw = r[cycleField];
         if (raw !== undefined && raw !== null && raw !== '') {
-          year = typeof raw === 'number' ? raw : new Date(String(raw)).getFullYear();
+          if (typeof raw === 'number') {
+            year = raw;
+          } else {
+            const m = String(raw).match(/^(\d{4})/);
+            if (m) {
+              year = parseInt(m[1]!, 10);
+            } else {
+              const d = new Date(String(raw)).getFullYear();
+              if (!isNaN(d)) year = d;
+            }
+          }
         }
       }
       if (year === undefined || isNaN(year)) {
@@ -1362,8 +1383,19 @@ export class Validator {
                 );
                 if (parentCycleField && parentRow[parentCycleField]) {
                   const raw = parentRow[parentCycleField];
-                  const y = typeof raw === 'number' ? raw : new Date(String(raw)).getFullYear();
-                  if (!isNaN(y)) {
+                  let y: number | undefined;
+                  if (typeof raw === 'number') {
+                    y = raw;
+                  } else {
+                    const m = String(raw).match(/^(\d{4})/);
+                    if (m) {
+                      y = parseInt(m[1]!, 10);
+                    } else {
+                      const d = new Date(String(raw)).getFullYear();
+                      if (!isNaN(d)) y = d;
+                    }
+                  }
+                  if (y !== undefined && !isNaN(y)) {
                     year = y;
                     break;
                   }
@@ -1594,9 +1626,11 @@ export class Validator {
             category: 'era',
             passed,
             message,
-            populationCount: realizedScoped,
-            expected: vm.multiplier === 0 ? 0 : `~${Math.round(avgBaselineScoped * vm.multiplier)}`,
-            actual: realizedScoped,
+            populationCount: vm.where ? realizedScoped : realizedTotal,
+            expected: vm.where
+              ? (vm.multiplier === 0 ? 0 : `~${Math.round(avgBaselineScoped * vm.multiplier)}`)
+              : (vm.multiplier === 0 ? 0 : `~${Math.round(effectiveAvgBaselineTotal * vm.multiplier)}`),
+            actual: vm.where ? realizedScoped : realizedTotal,
           });
         }
       }
