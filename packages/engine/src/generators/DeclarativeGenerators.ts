@@ -244,8 +244,16 @@ export function evaluateRelativeDateRange(
     anchorDateStr = context.asOfDate ?? '2026-09-02';
   }
 
-  const anchorDate = new Date(anchorDateStr.slice(0, 10));
-  const validAnchor = !isNaN(anchorDate.getTime()) ? anchorDate : new Date('2026-09-02');
+  // Parse calendar date parts (YYYY-MM-DD) directly without timezone skew
+  const dateMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(anchorDateStr);
+  let anchorYear = 2026;
+  let anchorMonth = 9;
+  let anchorDay = 2;
+  if (dateMatch && dateMatch[1] && dateMatch[2] && dateMatch[3]) {
+    anchorYear = parseInt(dateMatch[1], 10);
+    anchorMonth = parseInt(dateMatch[2], 10);
+    anchorDay = parseInt(dateMatch[3], 10);
+  }
 
   const minOffset = config.minOffsetYears ?? -75;
   const maxOffset = config.maxOffsetYears ?? -18;
@@ -264,31 +272,32 @@ export function evaluateRelativeDateRange(
   }
 
   // Calculate target birth date strictly bounded by maxOffsetYears
-  const targetYear = validAnchor.getFullYear() + Math.round(offsetYears);
+  const targetYear = anchorYear + Math.round(offsetYears);
   const targetMonth = context.rng.int(1, 12);
   const targetDay = context.rng.int(1, 28);
-
-  const dob = new Date(targetYear, targetMonth - 1, targetDay);
+  let finalYear = targetYear;
+  let finalMonth = targetMonth;
+  let finalDay = targetDay;
 
   // Assert minimum age invariant: anchorDate - dob >= 18.0 years
   if (maxOffset <= -18) {
-    const latestAllowedDobYear = validAnchor.getFullYear() - 18;
-    if (dob.getFullYear() > latestAllowedDobYear) {
-      dob.setFullYear(latestAllowedDobYear);
-    } else if (dob.getFullYear() === latestAllowedDobYear) {
+    const latestAllowedYear = anchorYear - 18;
+    if (finalYear > latestAllowedYear) {
+      finalYear = latestAllowedYear;
+    } else if (finalYear === latestAllowedYear) {
       if (
-        dob.getMonth() > validAnchor.getMonth() ||
-        (dob.getMonth() === validAnchor.getMonth() && dob.getDate() > validAnchor.getDate())
+        finalMonth > anchorMonth ||
+        (finalMonth === anchorMonth && finalDay > anchorDay)
       ) {
-        dob.setDate(validAnchor.getDate());
-        dob.setMonth(validAnchor.getMonth());
+        finalMonth = anchorMonth;
+        finalDay = anchorDay;
       }
     }
   }
 
-  const yStr = String(dob.getFullYear()).padStart(4, '0');
-  const mStr = String(dob.getMonth() + 1).padStart(2, '0');
-  const dStr = String(dob.getDate()).padStart(2, '0');
+  const yStr = String(finalYear).padStart(4, '0');
+  const mStr = String(finalMonth).padStart(2, '0');
+  const dStr = String(finalDay).padStart(2, '0');
   return `${yStr}-${mStr}-${dStr}`;
 }
 
