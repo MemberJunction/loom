@@ -4,7 +4,13 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DomainConfigSchema, LogoConfigSchema, AvatarConfigSchema } from "@memberjunction/loom-contracts";
-import { AvatarGenerator, type DiceBearStyle, type StyleOptionsMap } from "../src/avatars/AvatarGenerator.js";
+import {
+  AvatarGenerator,
+  RECOMMENDED_TOON_HEAD_TRAITS,
+  REALISTIC_SKIN_TONES,
+  type DiceBearStyle,
+  type StyleOptionsMap,
+} from "../src/avatars/AvatarGenerator.js";
 import { LogoGenerator } from "../src/avatars/LogoGenerator.js";
 import { applyFieldGenerators, validateDomainAvatarConfigs } from "../src/avatars/FieldGeneratorPass.js";
 import { IdentityService } from "../src/identity/index.js";
@@ -170,7 +176,7 @@ describe("AvatarGenerator (Loom Deterministic Profile Image Generation)", () => 
       });
 
       expect(url1).toBe(url2);
-      expect(url1).toContain("https://api.dicebear.com/9.x/toon-head/svg");
+      expect(url1).toContain("https://api.dicebear.com/9.4.2/toon-head/svg");
       expect(url1).toContain("seed=elena.rodriguez.000101%40lakemail.example");
       expect(url1).toContain("rearHairProbability=100");
       expect(url1).toContain("beardProbability=0");
@@ -184,7 +190,7 @@ describe("AvatarGenerator (Loom Deterministic Profile Image Generation)", () => 
         style: "toon-head",
       });
 
-      expect(url).toContain("https://api.dicebear.com/9.x/toon-head/svg");
+      expect(url).toContain("https://api.dicebear.com/9.4.2/toon-head/svg");
       expect(url).toContain("rearHairProbability=0");
       expect(url).toContain("beardProbability=40");
     });
@@ -512,3 +518,43 @@ describe("applyFieldGenerators", () => {
     expect(once.Sample?.[0]?.PhotoURL).toEqual(twice.Sample?.[0]?.PhotoURL);
   });
 });
+
+describe("RECOMMENDED_TOON_HEAD_TRAITS and REALISTIC_SKIN_TONES", () => {
+  it("defines a calibrated 7-step natural skin tone spectrum excluding #5c3829", () => {
+    expect(REALISTIC_SKIN_TONES.length).toBe(7);
+    expect(REALISTIC_SKIN_TONES).not.toContain("5c3829");
+    for (const hex of REALISTIC_SKIN_TONES) {
+      expect(hex).toMatch(/^[a-fA-F0-9]{6}$/);
+    }
+  });
+
+  it("validates recommended ToonHead traits cleanly against the collection schema", () => {
+    for (const [gender, traits] of Object.entries(RECOMMENDED_TOON_HEAD_TRAITS)) {
+      expect(() => AvatarGenerator.ValidateStyleOptions("toon-head", traits)).not.toThrow();
+    }
+  });
+
+  it("generates valid and deterministic URLs with recommended traits", () => {
+    const elenaUrl = AvatarGenerator.BuildUrl({
+      seed: "Elena-Vasquez",
+      style: "toon-head",
+      trait: "Female",
+      traits: RECOMMENDED_TOON_HEAD_TRAITS,
+    });
+    expect(elenaUrl).toContain("beardProbability=0");
+    expect(elenaUrl).toContain("rearHairProbability=100");
+    expect(elenaUrl).toContain("eyes=happy%2Cwide");
+    expect(elenaUrl).toContain("mouth=smile%2Claugh");
+    expect(elenaUrl).toContain("skinColor=");
+
+    const bobUrl = AvatarGenerator.BuildUrl({
+      seed: "Bob-Kowalski",
+      style: "toon-head",
+      trait: "Male",
+      traits: RECOMMENDED_TOON_HEAD_TRAITS,
+    });
+    expect(bobUrl).toContain("beardProbability=20");
+    expect(bobUrl).toContain("rearHairProbability=0");
+  });
+});
+

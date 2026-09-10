@@ -14,6 +14,7 @@ import {
   nestedEvent,
   temporalRole,
   scopedDecision,
+  ReversalEngine,
   type SimulationNode,
   type EntityCandidate,
 } from '@memberjunction/loom-engine';
@@ -234,7 +235,9 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
   const allRecords: Record<string, Record<string, unknown>[]> = {};
   if (loaded.catalogs) {
     for (const [catEnt, catRows] of Object.entries(loaded.catalogs)) {
-      allRecords[catEnt] = [...catRows] as Record<string, unknown>[];
+      if (Array.isArray(catRows)) {
+        allRecords[catEnt] = [...catRows] as Record<string, unknown>[];
+      }
     }
   }
 
@@ -279,7 +282,7 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         }
         if (loaded.catalogs) {
           for (const [catEnt, catRows] of Object.entries(loaded.catalogs)) {
-            if (!parentPool[catEnt]) {
+            if (Array.isArray(catRows) && !parentPool[catEnt]) {
               parentPool[catEnt] = [...catRows] as Record<string, unknown>[];
             }
           }
@@ -527,6 +530,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
               parentPool,
               rng: entityRng,
               identityService,
+              catalogs: loaded.catalogs,
+              asOfDate: releaseDate,
             });
             row['ID'] = parentId;
             backgroundRecords.push(row);
@@ -540,6 +545,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
               parentPool,
               rng: entityRng,
               identityService,
+              catalogs: loaded.catalogs,
+              asOfDate: releaseDate,
             });
             backgroundRecords.push(row);
           }
@@ -803,6 +810,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
               parentPool: allRecords,
               rng: rowRng,
               identityService,
+              catalogs: loaded.catalogs,
+              asOfDate: `${c}-06-15`,
             });
             childRow[fkFieldName] = parentId;
             childRow['ID'] = identityService.MintId(loaded.domain.name, cr.entity, [parentId, String(c), String(k)]);
@@ -812,8 +821,16 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
                 childRow[fName] = `${fName.slice(0, 3).toUpperCase()}-${c}${seq}`;
               }
             }
-            const cycleDateField = Object.keys(childCfg.fields).find(
-              (f) => f === 'Cycle' || f === 'Year' || f.endsWith('Date') || f.endsWith('At')
+            const cycleDateField = childCfg.cycleField ?? Object.keys(childCfg.fields).find(
+              (f) =>
+                f !== 'DateOfBirth' &&
+                f !== 'BirthDate' &&
+                (f === 'Cycle' ||
+                  f === 'Year' ||
+                  f.endsWith('Date') ||
+                  f.endsWith('At') ||
+                  f.endsWith('On') ||
+                  childCfg.fields[f]?.type === 'date')
             );
             if (cycleDateField) {
               childRow[cycleDateField] = childCfg.fields[cycleDateField]?.type === 'number' ? c : `${c}-06-15`;
@@ -875,6 +892,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
           parentPool: allRecords,
           rng: createRng(seed, `hero:${hero.heroKey}`),
           identityService,
+          catalogs: loaded.catalogs,
+          asOfDate: releaseDate,
         });
         const heroRow: Record<string, unknown> = {
           ...baseRow,
@@ -955,6 +974,8 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
               parentPool: allRecords,
               rng: childRng,
               identityService,
+              catalogs: loaded.catalogs,
+              asOfDate: releaseDate,
             });
             childRow[fkFieldName] = heroId;
             childRow['ID'] = identityService.MintId(loaded.domain.name, entityName, [heroId, String(j)]);
@@ -982,6 +1003,28 @@ export async function executeBuild(options: BuildCommandOptions): Promise<void> 
         }
       }
     }
+  }
+
+  // 8. Coherify order cancellations if order records are present
+  const orderEntity = Object.keys(allRecords).find(
+    (e) =>
+      loaded.domain.entities[e]?.fields['ReversesOrderHeaderID'] ||
+      (loaded.domain.entities[e]?.fields['OrderDate'] && loaded.domain.entities[e]?.fields['OrderType'])
+  );
+  if (orderEntity && allRecords[orderEntity]) {
+    const lineEntity = Object.keys(allRecords).find(
+      (e) =>
+        loaded.domain.entities[e]?.fields['ReversesOrderLineID'] ||
+        (loaded.domain.entities[e]?.fields['UnitPrice'] && loaded.domain.entities[e]?.fields['Quantity'])
+    );
+    const reversalResult = ReversalEngine.CoherifyCancellations({
+      orders: allRecords[orderEntity]!,
+      orderLines: lineEntity ? allRecords[lineEntity] : undefined,
+      rng,
+    });
+    console.log(
+      `   ✓ Cohered reversals: ${reversalResult.coherentCount} of ${reversalResult.reversalsCount} cancellation orders matched`
+    );
   }
 
   // Emit metadata tree

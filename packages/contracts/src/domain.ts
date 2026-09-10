@@ -33,17 +33,59 @@ export const LogoConfigSchema = z.object({
 });
 export type LogoConfig = z.infer<typeof LogoConfigSchema>;
 
+export const ConditionalDistributionSchema = z.object({
+  type: z.literal('conditionalDistribution'),
+  conditionalOn: z.string().min(1), // e.g. "Gender" or "parent.Gender"
+  distributions: z.record(
+    z.string(),
+    z.object({
+      values: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])),
+      weights: z.array(z.number().positive()).optional(),
+    })
+  ),
+});
+export type ConditionalDistribution = z.infer<typeof ConditionalDistributionSchema>;
+
+export const CatalogLookupSchema = z.object({
+  type: z.literal('catalogLookup'),
+  catalog: z.string().min(1), // references a catalog declared under data/catalogs/<name>.json
+  conditionalOn: z.string().optional(), // key in catalog or field on row, e.g. "Gender"
+  mappingKey: z.record(z.string(), z.string()).optional(), // maps row value to catalog bucket
+});
+export type CatalogLookup = z.infer<typeof CatalogLookupSchema>;
+
+export const RelativeDateRangeSchema = z.object({
+  type: z.literal('relativeDateRange').optional(),
+  relativeTo: z.enum(['intakeDate', 'asOfDate', 'parentDateField', 'now']),
+  anchorField: z.string().optional(),
+  minOffsetYears: z.number().optional(), // e.g. -75
+  maxOffsetYears: z.number().optional(), // e.g. -18 (ensures age >= 18 at intake)
+  distribution: z.enum(['uniform', 'normal']).default('normal'),
+  meanOffsetYears: z.number().optional(), // e.g. -42
+  stdDevYears: z.number().optional(),     // e.g. 12
+});
+export type RelativeDateRange = z.infer<typeof RelativeDateRangeSchema>;
+
+export const FieldGeneratorConfigSchema = z.union([
+  z.string(),
+  ConditionalDistributionSchema,
+  CatalogLookupSchema,
+  RelativeDateRangeSchema,
+]);
+export type FieldGeneratorConfig = z.infer<typeof FieldGeneratorConfigSchema>;
+
 export const FieldConfigSchema = z.object({
-  name: z.string().min(1),
+  name: z.string().optional(),
   type: FieldTypeSchema,
   nullable: z.boolean().default(false),
   description: z.string().optional(),
-  defaultValue: z.union([z.string(), z.number(), z.boolean()]).optional(),
+  defaultValue: z.union([z.string(), z.number(), z.boolean(), z.null()]).optional(),
   isPrimaryKey: z.boolean().default(false),
   mjFieldType: z.string().optional(),
   valueListType: z.string().optional(),
-  values: z.array(z.union([z.string(), z.number(), z.boolean()])).optional(),
-  generator: z.string().optional(),
+  values: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
+  weights: z.array(z.number().positive()).optional(),
+  generator: FieldGeneratorConfigSchema.optional(),
   avatar: AvatarConfigSchema.optional(),
   logo: LogoConfigSchema.optional(),
   uniqueness: z.enum(['generated']).optional(),
@@ -101,6 +143,7 @@ export const EntityConfigSchema = z.object({
   syncRoot: z.boolean().optional().default(false),
   outputDirectory: z.string().optional(),
   outputFileName: z.string().optional(),
+  cycleField: z.string().optional(),
 }).transform((entity) => {
   const normalizedFKs: Record<string, Omit<ForeignKeyConfig, 'fieldName'> & { fieldName: string }> = {};
   for (const [fkKey, fk] of Object.entries(entity.foreignKeys)) {
@@ -109,8 +152,16 @@ export const EntityConfigSchema = z.object({
       fieldName: fk.fieldName ?? fkKey,
     };
   }
+  const normalizedFields: Record<string, FieldConfig> = {};
+  for (const [fKey, fCfg] of Object.entries(entity.fields)) {
+    normalizedFields[fKey] = {
+      ...fCfg,
+      name: fCfg.name ?? fKey,
+    };
+  }
   return {
     ...entity,
+    fields: normalizedFields,
     foreignKeys: normalizedFKs,
   };
 });

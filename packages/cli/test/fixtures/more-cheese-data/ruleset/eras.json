@@ -19,16 +19,7 @@
           "deltaIntercept": -0.40
         }
       ],
-      "volumeMultipliers": [
-        {
-          "entity": "EventRegistration",
-          "multiplier": 0.15
-        },
-        {
-          "entity": "CourseEnrollment",
-          "multiplier": 1.85
-        }
-      ],
+      "volumeMultipliers": [],
       "description": "85% collapse in physical event attendance; 85% surge in online affineur and culinary coursework"
     },
     {
@@ -41,16 +32,7 @@
           "deltaIntercept": 1.0
         }
       ],
-      "volumeMultipliers": [
-        {
-          "entity": "EventRegistration",
-          "multiplier": 0.45
-        },
-        {
-          "entity": "CourseEnrollment",
-          "multiplier": 1.50
-        }
-      ],
+      "volumeMultipliers": [],
       "description": "Virtual symposiums, online credentials, and emergency digital support programs yielding a strong retention surge among small creameries"
     },
     {
@@ -63,16 +45,7 @@
           "deltaIntercept": 1.35
         }
       ],
-      "volumeMultipliers": [
-        {
-          "entity": "EventRegistration",
-          "multiplier": 1.40
-        },
-        {
-          "entity": "CourseEnrollment",
-          "multiplier": 1.25
-        }
-      ],
+      "volumeMultipliers": [],
       "description": "Post-pandemic artisan cheese renaissance, return of the flagship in-person World Cheese Cup, and sustained multi-year corporate sponsor retention"
     },
     {

@@ -1,5 +1,13 @@
-import { IdentityService, applyFieldGeneratorsToRow, type RngStream } from '@memberjunction/loom-engine';
-import type { DomainConfig } from '@memberjunction/loom-contracts';
+import {
+  IdentityService,
+  applyFieldGeneratorsToRow,
+  evaluateConditionalDistribution,
+  evaluateCatalogLookup,
+  evaluateRelativeDateRange,
+  type RngStream,
+  type GeneratorContext,
+} from '@memberjunction/loom-engine';
+import type { DomainConfig, RelativeDateRange } from '@memberjunction/loom-contracts';
 
 export interface GenerateEntityRecordOptions {
   domain: DomainConfig;
@@ -8,6 +16,8 @@ export interface GenerateEntityRecordOptions {
   parentPool: Record<string, Record<string, unknown>[]>;
   rng: RngStream;
   identityService: IdentityService;
+  catalogs?: Record<string, unknown>;
+  asOfDate?: string;
 }
 
 /**
@@ -24,6 +34,12 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
   }
 
   const row: Record<string, unknown> = {};
+  const genCtx: GeneratorContext = {
+    parentPool,
+    catalogs: options.catalogs,
+    asOfDate: options.asOfDate,
+    rng,
+  };
 
   // 1. Populate all declared non-PK fields first
   const fkList = Object.values(entityCfg.foreignKeys ?? {});
@@ -116,8 +132,33 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
       continue;
     }
 
+    if (fieldCfg.generator && typeof fieldCfg.generator === 'object') {
+      if (fieldCfg.generator.type === 'conditionalDistribution') {
+        const val = evaluateConditionalDistribution(fieldCfg.generator, row, genCtx, entityCfg);
+        if (val !== undefined) {
+          row[fieldName] = val;
+          continue;
+        }
+      } else if (fieldCfg.generator.type === 'catalogLookup') {
+        const val = evaluateCatalogLookup(fieldCfg.generator, row, genCtx, entityCfg);
+        if (val !== undefined) {
+          row[fieldName] = val;
+          continue;
+        }
+      } else if (fieldCfg.generator.type === 'relativeDateRange' || 'relativeTo' in fieldCfg.generator) {
+        const val = evaluateRelativeDateRange(fieldCfg.generator as RelativeDateRange, row, genCtx, entityCfg);
+        row[fieldName] = val;
+        continue;
+      }
+    }
+
     if (fieldCfg.values && fieldCfg.values.length > 0) {
-      row[fieldName] = fieldCfg.values[(i - 1) % fieldCfg.values.length];
+      if (fieldCfg.weights && fieldCfg.weights.length === fieldCfg.values.length) {
+        const opts = fieldCfg.values.map((v, idx) => ({ value: v, weight: fieldCfg.weights![idx]! }));
+        row[fieldName] = rng.pickWeighted(opts);
+      } else {
+        row[fieldName] = fieldCfg.values[(i - 1) % fieldCfg.values.length];
+      }
     } else if (fieldName === 'Name') {
       row[fieldName] = `${entity} Corp ${i}`;
     } else if (fieldName === 'FirstName') {
@@ -197,5 +238,5 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
     row['ID'] = identityService.MintId(domainName, entity, [`${entity}-${i}`]);
   }
 
-  return applyFieldGeneratorsToRow(entityCfg, row, entity);
+  return applyFieldGeneratorsToRow(entityCfg, row, entity, genCtx);
 }

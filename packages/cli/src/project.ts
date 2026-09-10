@@ -229,39 +229,46 @@ export async function loadProject(projectPath: string): Promise<LoadedProject> {
     }
   }
 
-  // Auto-discover catalogs in catalogs/ directory if present
-  const catalogsDir = path.join(resolvedDir, 'catalogs');
-  try {
-    const catEntries = await fs.readdir(catalogsDir, { withFileTypes: true });
-    for (const entry of catEntries) {
-      if (entry.isFile() && entry.name.endsWith('.json')) {
-        const catPath = path.join(catalogsDir, entry.name);
-        const catRaw = await fs.readFile(catPath, 'utf8');
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(catRaw);
-        } catch (jsonErr) {
-          throw new Error(`Failed to parse catalog file '${catPath}': ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`);
-        }
-        const baseName = path.basename(entry.name, '.json');
-        if (Array.isArray(parsed)) {
-          if (!catalogs[baseName]) {
-            catalogs[baseName] = parsed;
+  // Auto-discover catalogs in catalogs/ or data/catalogs/ directory if present
+  const catalogDirCandidates = [
+    path.join(resolvedDir, 'catalogs'),
+    path.join(resolvedDir, 'data', 'catalogs'),
+  ];
+  for (const catalogsDir of catalogDirCandidates) {
+    try {
+      const catEntries = await fs.readdir(catalogsDir, { withFileTypes: true });
+      for (const entry of catEntries) {
+        if (entry.isFile() && entry.name.endsWith('.json')) {
+          const catPath = path.join(catalogsDir, entry.name);
+          const catRaw = await fs.readFile(catPath, 'utf8');
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(catRaw);
+          } catch (jsonErr) {
+            throw new Error(`Failed to parse catalog file '${catPath}': ${jsonErr instanceof Error ? jsonErr.message : String(jsonErr)}`);
           }
-        } else if (parsed && typeof parsed === 'object') {
-          const obj = parsed as Record<string, unknown>;
-          const entityKey = typeof obj['entity'] === 'string' ? obj['entity'] : (typeof obj['entityName'] === 'string' ? obj['entityName'] : baseName);
-          if (Array.isArray(obj['records'])) {
-            if (!catalogs[entityKey]) catalogs[entityKey] = obj['records'];
-          } else if (Array.isArray(obj['data'])) {
-            if (!catalogs[entityKey]) catalogs[entityKey] = obj['data'];
+          const baseName = path.basename(entry.name, '.json');
+          if (Array.isArray(parsed)) {
+            if (!catalogs[baseName]) {
+              catalogs[baseName] = parsed;
+            }
+          } else if (parsed && typeof parsed === 'object') {
+            const obj = parsed as Record<string, unknown>;
+            const entityKey = typeof obj['entity'] === 'string' ? obj['entity'] : (typeof obj['entityName'] === 'string' ? obj['entityName'] : baseName);
+            if (Array.isArray(obj['records'])) {
+              if (!catalogs[entityKey]) catalogs[entityKey] = obj['records'];
+            } else if (Array.isArray(obj['data'])) {
+              if (!catalogs[entityKey]) catalogs[entityKey] = obj['data'];
+            } else {
+              if (!catalogs[baseName]) catalogs[baseName] = obj as unknown as readonly Record<string, unknown>[];
+            }
           }
         }
       }
-    }
-  } catch (err) {
-    if (!isEnoent(err)) {
-      throw err;
+    } catch (err) {
+      if (!isEnoent(err)) {
+        throw err;
+      }
     }
   }
 
