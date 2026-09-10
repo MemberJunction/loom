@@ -196,30 +196,48 @@ MemberJunction's accounting and order framework (`@mj-biz-apps/orders-core-entit
 | **Distinctness** | **3,058 / 3,058 distinct**. | **3,058 / 3,058 distinct**. | ~2,500 / 3,058 distinct. |
 | **Licensing** | MIT (code) + CC BY 4.0 / CC0 (art). | MIT (code) + CC BY 4.0 / CC0 (art). | Custom MIT. |
 
-### 3.2 URL Determinism & Stability on DiceBear CDN
+### 3.2 Parameter Mapping & CDN Determinism
 
 DiceBear's HTTP API is **100% deterministic and stateless**:
-- **Format**: `https://api.dicebear.com/9.x/{style}/svg?seed={seed}`
-- **Determinism Guarantee**: DiceBear uses a seeded PRNG (`prando`). For any given style and version (e.g. `9.x`), passing the same `seed` string produces the exact same SVG output every single time across any machine or browser.
-- **Parametric Traits**: Query parameters can deterministically constrain traits (e.g. gender-appropriate hair):
-  `https://api.dicebear.com/9.x/toon-head/svg?seed={PersonID}&gender=female`
+- **Format**: `https://api.dicebear.com/9.x/{style}/svg?seed={seed}&{traits}`
+- **Determinism Guarantee**: DiceBear uses a seeded PRNG (`prando`). For any given style and version (e.g. `9.x`), passing the same `seed` and trait query parameters produces the exact same SVG output every single time across any machine or browser.
+- **Root Cause of Unconstrained Anomalies**: DiceBear styles do **not** take a generic `&gender=` parameter. Passing `&gender=female` is silently ignored by the CDN. Without explicit trait constraints:
+  - `beardProbability` defaults to 50% (giving female seeds mustaches/beards).
+  - `rearHairProbability` defaults to 50% (giving male seeds long shoulder-length hair / mullets).
+  - `eyes` and `mouth` default to the entire enum including `bow` (closed/crying eyes) and `sad` (frowns).
+  - `skinColor` defaults to 5 tones including `#5c3829` (which has ~26% lightness and appears excessively dark/muddy on cartoon vector characters).
+
+#### Curated Trait & Expression Guardrails (Built into Loom `AvatarGenerator`)
+Loom's `AvatarGenerator` translates persona attributes into explicit query parameters (for URL mode) and collection options (for base64 mode):
+1. **Gender Constraints**:
+   - `Female`: `beardProbability=0`, `rearHairProbability=100`, `hair=bun,sideComed`, `clothes=dress,turtleNeck,shirt,tShirt,openJacket`.
+   - `Male`: `rearHairProbability=0`, `beardProbability=20`, `hair=sideComed,undercut`, `clothes=shirt,tShirt,turtleNeck,openJacket`.
+2. **Expression Guardrails**:
+   - `mouth=smile,laugh` (excludes `sad`, `angry`, `agape`).
+   - `eyes=happy,wide` (excludes `bow` [crying/sleeping], `wink`, `humble`).
+   - `eyebrows=happy,neutral,raised` (excludes `angry`, `sad`).
+3. **Calibrated Realistic Skin Tone Palette**:
+   - Removed extreme `#5c3829` (too dark/muddy).
+   - Standardized on a 7-step natural spectrum (`REALISTIC_SKIN_TONES`):
+     `#f1c3a5` (fair warm peach), `#e8be9e` (light natural beige), `#d4a37a` (warm honey sand), `#c68e7a` (rosy warm tan), `#b98e6a` (golden bronze), `#a36b4f` (warm caramel/chestnut), `#8f5638` (rich warm cocoa).
 
 #### Live Interactive Examples (Click to inspect in browser):
-1. **`toon-head` (Default Candidate — Modern Illustrated Headshots)**:
-   - [Elena (Female)](https://api.dicebear.com/9.x/toon-head/svg?seed=Elena-Vasquez&gender=female)
-   - [Marcus (Male)](https://api.dicebear.com/9.x/toon-head/svg?seed=Marcus-Chen&gender=male)
-   - [Gwen (Female)](https://api.dicebear.com/9.x/toon-head/svg?seed=Gwen-Stirling&gender=female)
+1. **`toon-head` (Default Candidate — Calibrated Headshots)**:
+   - [Elena Vasquez (Female)](https://api.dicebear.com/9.x/toon-head/svg?seed=Elena-Vasquez&beardProbability=0&rearHairProbability=100&hair=bun,sideComed&mouth=smile,laugh&eyes=happy,wide&skinColor=f1c3a5,e8be9e,d4a37a,c68e7a,b98e6a,a36b4f,8f5638)
+   - [Bob Kowalski (Male)](https://api.dicebear.com/9.x/toon-head/svg?seed=Bob-Kowalski&rearHairProbability=0&beardProbability=20&hair=sideComed,undercut&mouth=smile,laugh&eyes=happy,wide&clothes=shirt,turtleNeck,tShirt,openJacket&skinColor=f1c3a5,e8be9e,d4a37a,c68e7a,b98e6a,a36b4f,8f5638)
+   - [Marcus Chen (Male)](https://api.dicebear.com/9.x/toon-head/svg?seed=Marcus-Chen&rearHairProbability=0&beardProbability=20&hair=sideComed,undercut&mouth=smile,laugh&eyes=happy,wide&clothes=shirt,turtleNeck,tShirt,openJacket&skinColor=f1c3a5,e8be9e,d4a37a,c68e7a,b98e6a,a36b4f,8f5638)
+   - [Aisha Al-Mansoor (Female)](https://api.dicebear.com/9.x/toon-head/svg?seed=Aisha-Al-Mansoor&beardProbability=0&rearHairProbability=100&hair=bun,sideComed&mouth=smile,laugh&eyes=happy,wide&skinColor=f1c3a5,e8be9e,d4a37a,c68e7a,b98e6a,a36b4f,8f5638)
 2. **`micah` (Alternate Candidate — Artistic Minimalist Vector)**:
-   - [Elena (Micah)](https://api.dicebear.com/9.x/micah/svg?seed=Elena-Vasquez)
-   - [Marcus (Micah)](https://api.dicebear.com/9.x/micah/svg?seed=Marcus-Chen)
+   - [Elena (Micah)](https://api.dicebear.com/9.x/micah/svg?seed=Elena-Vasquez&facialHairProbability=0&mouth=smile,laughing&eyes=round,smiling&hair=full,pixie)
+   - [Bob (Micah)](https://api.dicebear.com/9.x/micah/svg?seed=Bob-Kowalski&facialHairProbability=25&mouth=smile,laughing&eyes=round,smiling&hair=fonze,mrT,dannyPhantom)
 3. **`personas` (Clean Corporate Character Vector)**:
-   - [Elena (Personas)](https://api.dicebear.com/9.x/personas/svg?seed=Elena-Vasquez)
-   - [Marcus (Personas)](https://api.dicebear.com/9.x/personas/svg?seed=Marcus-Chen)
+   - [Elena (Personas)](https://api.dicebear.com/9.x/personas/svg?seed=Elena-Vasquez&facialHairProbability=0&eyes=open,happy&mouth=smile)
+   - [Bob (Personas)](https://api.dicebear.com/9.x/personas/svg?seed=Bob-Kowalski&facialHairProbability=30&eyes=open,happy&mouth=smile)
 
 ### 3.3 Phased Implementation Roadmap
 - **Phase 1 (Immediate / Thursday Release Cut)**:
-  - Configure `Person.PhotoURL.avatar` with `format: "url"` and `style: "toon-head"` in `more-cheese/data/domain.json`.
-  - Instantly resolves winking icons and odd hair.
+  - Configure `Person.PhotoURL.avatar` with `format: "url"` and `style: "toon-head"` using `RECOMMENDED_TOON_HEAD_TRAITS` in `more-cheese/data/domain.json`.
+  - Instantly resolves winking icons, female beards, male dresses, sad frowns, and overly dark skin tones.
   - Zero database migration required; keeps the metadata push lightweight.
 - **Phase 2 (Permanent Infrastructure — Post-Release)**:
   - Execute WP1 in `bizapps-common` (widening `PhotoURL` to `NVARCHAR(MAX)`).

@@ -18,6 +18,51 @@ export type StyleOptionValue = string | number | boolean | string[];
 export type StyleOptions = Record<string, StyleOptionValue>;
 export type StyleOptionsMap = Record<string, StyleOptions>;
 
+/**
+ * Calibrated 7-step natural skin tone spectrum (warm peach to rich warm cocoa).
+ * Narrowed to avoid overly dark, muddy tones (such as default #5c3829) while preserving natural diversity.
+ */
+export const REALISTIC_SKIN_TONES = [
+  'f1c3a5', // fair warm peach
+  'e8be9e', // light natural beige
+  'd4a37a', // warm honey sand
+  'c68e7a', // rosy warm tan
+  'b98e6a', // golden bronze
+  'a36b4f', // warm caramel / chestnut
+  '8f5638', // rich warm cocoa
+] as const;
+
+/**
+ * Curated trait constraints for the `toon-head` style pack.
+ * Enforces gender-appropriate hair / facial hair, clothing styles, cheerful facial expressions,
+ * and realistic calibrated skin tones.
+ */
+export const RECOMMENDED_TOON_HEAD_TRAITS: StyleOptionsMap = {
+  Female: {
+    hair: ['bun', 'sideComed'],
+    hairProbability: 100,
+    rearHair: ['longStraight', 'longWavy', 'shoulderHigh'],
+    rearHairProbability: 100,
+    beardProbability: 0,
+    clothes: ['dress', 'turtleNeck', 'shirt', 'tShirt', 'openJacket'],
+    mouth: ['smile', 'laugh'],
+    eyes: ['happy', 'wide'],
+    eyebrows: ['happy', 'neutral', 'raised'],
+    skinColor: [...REALISTIC_SKIN_TONES],
+  },
+  Male: {
+    hair: ['sideComed', 'undercut'],
+    hairProbability: 100,
+    rearHairProbability: 0,
+    beardProbability: 20,
+    clothes: ['shirt', 'tShirt', 'turtleNeck', 'openJacket'],
+    mouth: ['smile', 'laugh'],
+    eyes: ['happy', 'wide'],
+    eyebrows: ['happy', 'neutral', 'raised'],
+    skinColor: [...REALISTIC_SKIN_TONES],
+  },
+};
+
 export interface AvatarOptions {
   seed: string;
   trait?: string;
