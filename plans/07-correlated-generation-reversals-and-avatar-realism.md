@@ -17,6 +17,10 @@
 > 3. **Plan 06 already decided this**, via a design-it-twice that chose offline embedding. Plan 07 should extend it, not silently re-open it. (§1)
 > 4. **Two gates could not fail as written** — avatar uniqueness is true by construction in URL mode, and the name/gender gate asserts an outcome real data does not satisfy. Both re-specified. (§4)
 > 5. **A corpus-stability gate is added** and is the highest-value item here: this plan's changes move the deterministic draw, and WP3 regenerates the whole dataset. (§4.7)
+>
+> ### Owner decision — 2026-09-10
+>
+> **Avatars ship as inline base64 data URIs.** Chosen for portability and to avoid an external runtime dependency; the `NVARCHAR(MAX)` prerequisite is already merged, so there is nothing to defer. URL mode stays implemented and tested as a non-default option. §3 reflects this as settled, not as an open trade.
 
 ---
 
@@ -219,7 +223,7 @@ MemberJunction's accounting and order framework (`@mj-biz-apps/orders-core-entit
 
 ### 3.1 Analysis of Options
 
-| Dimension | Option A: DiceBear URL Mode (Immediate) | Option B: DiceBear Offline Base64 (Plan 06) | Option C: Tweak Hand-Drawn SVG |
+| Dimension | Option A: DiceBear URL Mode | **Option B: DiceBear Offline Base64 — ✅ DECIDED** | Option C: Tweak Hand-Drawn SVG |
 | :--- | :--- | :--- | :--- |
 | **Visual Quality** | **Modern vector illustration** (`toon-head` / `micah`). No winking, natural hair. | **Identical to Option A** (`toon-head` / `micah`). | Flat geometric shapes; improved over today but still primitive. |
 | **Schema Impact** | Zero. | **Also zero — already paid.** `NVARCHAR(MAX)` shipped in `V202609051800`, merged on `bizapps-common` `next`. | Zero. |
@@ -229,6 +233,7 @@ MemberJunction's accounting and order framework (`@mj-biz-apps/orders-core-entit
 | **Offline Operation** | Requires internet access in Explorer. | 100% offline, airgapped, zero external requests. | 100% offline. |
 | **Distinctness** | **3,058 / 3,058 distinct**. | **3,058 / 3,058 distinct**. | ~2,500 / 3,058 distinct. |
 | **Licensing** | MIT (code) + CC BY 4.0 / CC0 (art). | MIT (code) + CC BY 4.0 / CC0 (art). | Custom MIT. |
+| **Verdict** | Kept as a supported mode; not the default. | **CHOSEN (owner, 2026-09-10)** — portability and no external dependency. | Superseded. |
 
 > ⚠️ **Reviewer — the row that decided this table is stale.** Option A was preferred on "zero schema impact", but Option B's schema cost was paid five days before this plan was written. With that column equalised, Option A's remaining differentiators are *negative*: an external runtime dependency and seed egress, in exchange for nothing Option B lacks. Two rows that were never in the table (external dependency, data egress) are added above because they are the actual discriminators now.
 >
@@ -263,6 +268,8 @@ Loom's `AvatarGenerator` translates persona attributes into explicit query param
      `#f1c3a5` (fair warm peach), `#e8be9e` (light natural beige), `#d4a37a` (warm honey sand), `#c68e7a` (rosy warm tan), `#b98e6a` (golden bronze), `#a36b4f` (warm caramel/chestnut), `#8f5638` (rich warm cocoa).
 
 #### Live Interactive Examples (Click to inspect in browser):
+
+> These CDN links are **preview aids for choosing traits**, not the delivery mechanism. Per the 2026-09-10 decision the same style and trait set is rendered offline and embedded as a base64 data URI; the URLs below just make the trait choices inspectable in a browser while reviewing.
 1. **`toon-head` (Default Candidate — Calibrated Headshots)**:
    - [Elena Vasquez (Female)](https://api.dicebear.com/9.x/toon-head/svg?seed=Elena-Vasquez&beardProbability=0&rearHairProbability=100&hair=bun,sideComed&mouth=smile,laugh&eyes=happy,wide&skinColor=f1c3a5,e8be9e,d4a37a,c68e7a,b98e6a,a36b4f,8f5638)
    - [Bob Kowalski (Male)](https://api.dicebear.com/9.x/toon-head/svg?seed=Bob-Kowalski&rearHairProbability=0&beardProbability=20&hair=sideComed,undercut&mouth=smile,laugh&eyes=happy,wide&clothes=shirt,turtleNeck,tShirt,openJacket&skinColor=f1c3a5,e8be9e,d4a37a,c68e7a,b98e6a,a36b4f,8f5638)
@@ -279,18 +286,17 @@ Loom's `AvatarGenerator` translates persona attributes into explicit query param
 
 The original two-phase split existed to defer a migration. That migration is already merged, so the deferral buys nothing and the phases collapse.
 
-**Recommended: go straight to offline data URI mode.** It is Plan 06's recommendation, its blocking prerequisite is delivered, and it is the only option with no runtime dependency on a third party.
+**DECIDED — owner ruling, 2026-09-10: ship inline base64 data URIs.** Avatars are stored inline for portability and to avoid an external runtime dependency. This closes the question; it is not an open trade any more.
+
+The reasoning of record: once `NVARCHAR(MAX)` landed, URL mode's only real advantage disappeared, and what remained was a hard dependency on `api.dicebear.com` at render time plus seed egress in the query string. Inline base64 is self-contained, works airgapped, and keeps the corpus reproducible without a third party being up. It is also what Plan 06 concluded independently.
 
 - Point `Person.PhotoURL.avatar` at `style: "toon-head"` with the trait guardrails in §3.2, `format: "base64"`, `svgo`-minified, **pinned to an exact DiceBear version**.
 - Traits, expression guardrails and the skin-tone palette are identical in both modes — they are the actual fix for beards on female seeds, dresses on male seeds, winking, frowns and muddy tones. **None of that visual work depends on the transport.** Choosing URL vs base64 does not change a single trait.
 - Keep `format: "url"` implemented and tested as a supported mode. It is genuinely useful for a lightweight demo profile, and building both is nearly free once the trait mapping exists. What it should *not* be is the default that ships.
 
-**If the release cut forces URL mode anyway**, that is a legitimate call — but record it as a deliberate, time-boxed trade with:
-1. the exact DiceBear version pinned in `domain.json`;
-2. a dated follow-up to switch the default to `base64`;
-3. an explicit note that Explorer then requires outbound access to `api.dicebear.com`, so an airgapped or firewalled demo renders 3,058 broken images.
+**URL mode is not the shipping default and should not be reintroduced as one** without a new owner ruling. If a future profile wants it, the note that applies is: Explorer then needs outbound access to `api.dicebear.com`, so an airgapped or firewalled demo renders 3,058 broken images.
 
-**Do not carry "Zero database migration required" as the justification.** It was true when Plan 07 was drafted against an older mental model of `bizapps-common`; it is not true against `next`.
+**Do not carry "Zero database migration required" as a justification for anything.** It was true against an older mental model of `bizapps-common`; it is not true against `next`, and it is the argument that made this decision look closer than it was.
 
 ---
 
@@ -356,7 +362,7 @@ graph TD
 ### WP3: `MemberJunction/more-cheese`
 - Declare gender catalog and conditional distributions for `Prefix` and `PronounSet`.
 - Declare `minOffsetYears: -18` on `Person.DateOfBirth`.
-- Set `Person.PhotoURL` to `toon-head`.
+- Set `Person.PhotoURL` to `style: "toon-head"`, **`format: "base64"`** (inline data URI, `svgo`-minified, exact DiceBear version pinned) with the §3.2 trait guardrails. No `maxLength` — `NVARCHAR(MAX)` is already in place.
 - Run single deterministic regeneration (`npm run generate`).
 - Verify all gates: `check:ownership`, `validate:loom`, `test:loom-mutations`, and `check-metadata-closure.mjs`.
 - **Run the new Corpus Stability Gate (§4.7) and put its output in the PR body** — per-entity row count and primary-key-set delta against the base commit. State up front which entities are *expected* to change (those carrying the fields this plan touches) and treat every other change as a defect until explained. This is the step that would have caught the `payments` regression on #36.
