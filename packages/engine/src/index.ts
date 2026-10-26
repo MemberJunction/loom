@@ -1,6 +1,7 @@
 export * from './math/rng.js';
 export * from './math/calibration.js';
 export * from './identity/index.js';
+export * from './identity/primaryKey.js';
 export * from './graph/resolver.js';
 export * from './factors/engine.js';
 export * from './features/compiler.js';
@@ -9,6 +10,7 @@ export * from './patterns/index.js';
 export * from './accumulation/accumulator.js';
 export * from './validation/validator.js';
 export * from './emitters/metadata.js';
+export * from './emitters/append.js';
 export * from './heroes/HeroInjector.js';
 export * from './motifs/MotifSampler.js';
 export * from './ladders/StateLadderEngine.js';

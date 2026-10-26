@@ -1,4 +1,5 @@
-import type { DomainConfig, DeltaRecords } from '@memberjunction/loom-contracts';
+import type { DomainConfig, DeltaRecords, EntityConfig } from '@memberjunction/loom-contracts';
+import { ExtractPrimaryKey, GetPrimaryKeyFields } from '../identity/primaryKey.js';
 
 export interface AccumulationDiffResult {
   delta: DeltaRecords;
@@ -14,8 +15,9 @@ export interface AccumulatorOptions {
 /**
  * Computes stateful deltas between a committed prior state and the current simulation state.
  * Enforces:
- * 1. Every row must have a valid non-empty primary key (ID).
+ * 1. Every row must have a valid non-empty primary key (its declared primary key fields, else ID).
  * 2. Existing prior IDs are never reassigned to another entity or deleted (unless allowDeletions is set).
+ *    An IsA child and its parent share one ID by design, so that pair is not a reassignment.
  * 3. Immutable entity rows cannot modify previously committed fields (with deep object comparison).
  * 4. Tracks status transitions and new records explicitly.
  */
@@ -38,7 +40,7 @@ export class Accumulator {
     const globalPriorIds = new Map<string, string>();
     for (const [entityName, list] of Object.entries(priorState)) {
       for (const r of list) {
-        const id = this.extractId(r, entityName);
+        const id = this.extractId(r, entityName, domain.entities[entityName]);
         globalPriorIds.set(id, entityName);
       }
     }
@@ -50,7 +52,7 @@ export class Accumulator {
       // Index prior records by primary key (ID)
       const priorMap = new Map<string, Record<string, unknown>>();
       for (const r of priorList) {
-        const id = this.extractId(r, entityName);
+        const id = this.extractId(r, entityName, entityCfg);
         priorMap.set(id, r);
       }
 
@@ -60,12 +62,12 @@ export class Accumulator {
       let modCount = 0;
 
       for (const curr of currentList) {
-        const id = this.extractId(curr, entityName);
+        const id = this.extractId(curr, entityName, entityCfg);
         currentIdsSeen.add(id);
 
         // Check global prior ID collision across different entities
         const existingEntity = globalPriorIds.get(id);
-        if (existingEntity && existingEntity !== entityName) {
+        if (existingEntity && existingEntity !== entityName && !this.isIsAPair(domain, existingEntity, entityName)) {
           throw new Error(
             `Accumulator: invariant violation — ID '${id}' was previously committed for entity '${existingEntity}' and cannot be reassigned to '${entityName}'`
           );
@@ -146,13 +148,21 @@ export class Accumulator {
     };
   }
 
-  private extractId(record: Record<string, unknown>, entityName: string): string {
-    const idVal = record['ID'] ?? record['id'];
-    if (idVal === undefined || idVal === null || idVal === '') {
+  private extractId(record: Record<string, unknown>, entityName: string, entityCfg: EntityConfig | undefined): string {
+    const id = ExtractPrimaryKey(record, entityCfg);
+    if (id === undefined) {
       throw new Error(
-        `Accumulator: record in entity '${entityName}' is missing required primary key 'ID'`
+        `Accumulator: record in entity '${entityName}' is missing required primary key '${GetPrimaryKeyFields(entityCfg).join(', ')}'`
       );
     }
-    return String(idVal);
+    return id;
+  }
+
+  /** True when one entity is the IsA child of the other (the two rows share one primary key). */
+  private isIsAPair(domain: DomainConfig, a: string, b: string): boolean {
+    return (
+      domain.entities[a]?.composition?.isA?.parentEntity === b ||
+      domain.entities[b]?.composition?.isA?.parentEntity === a
+    );
   }
 }

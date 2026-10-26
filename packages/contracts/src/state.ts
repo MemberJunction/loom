@@ -3,7 +3,8 @@ import { z } from 'zod';
 export const ContinuityStateSchema = z.object({
   asOfDate: z.string().min(10), // YYYY-MM-DD
   cycleIndex: z.number().int().nonnegative(),
-  activeEntityIds: z.record(z.string(), z.array(z.string().uuid())).default({}),
+  // Primary keys as strings: UUIDs for most entities, natural keys (e.g. a sequence's ScopeCode) for the rest
+  activeEntityIds: z.record(z.string(), z.array(z.string().min(1))).default({}),
   latentStates: z.record(z.string(), z.record(z.string(), z.number())).default({}), // entityId -> { dialName: value }
   activeLifecycleStates: z.record(z.string(), z.array(z.record(z.string(), z.unknown()))).default({}),
   birthCycles: z.record(z.string(), z.number().int()).default({}),
@@ -17,7 +18,7 @@ export const DeltaRecordsSchema = z.object({
   generatedRecords: z.record(z.string(), z.array(z.record(z.string(), z.unknown()))),
   statusTransitions: z.array(z.object({
     entity: z.string(),
-    id: z.string().uuid(),
+    id: z.string().min(1),
     fromStatus: z.string(),
     toStatus: z.string(),
     effectiveDate: z.string(),
