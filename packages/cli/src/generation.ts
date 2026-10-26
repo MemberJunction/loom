@@ -18,6 +18,8 @@ export interface GenerateEntityRecordOptions {
   identityService: IdentityService;
   catalogs?: Record<string, unknown>;
   asOfDate?: string;
+  /** When set, generated date fields fall inside this window (start exclusive, end inclusive). */
+  dateWindow?: { start: string; end: string };
 }
 
 /**
@@ -201,6 +203,12 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
       row[fieldName] = i * 10;
     } else if (fieldCfg.type === 'boolean') {
       row[fieldName] = true;
+    } else if (fieldCfg.type === 'date' && options.dateWindow) {
+      if (fieldName === 'EndDate' && row['StartDate']) {
+        row[fieldName] = String(row['StartDate']).slice(0, 10);
+      } else {
+        row[fieldName] = dateInWindow(options.dateWindow, rng);
+      }
     } else if (fieldCfg.type === 'date') {
       const year = 2026;
       const month = String(1 + (i % 12)).padStart(2, '0');
@@ -239,4 +247,13 @@ export function generateEntityRecord(options: GenerateEntityRecordOptions): Reco
   }
 
   return applyFieldGeneratorsToRow(entityCfg, row, entity, genCtx);
+}
+
+/** A uniformly drawn calendar day after window.start and on or before window.end (YYYY-MM-DD). */
+function dateInWindow(window: { start: string; end: string }, rng: RngStream): string {
+  const startMs = Date.parse(`${window.start.slice(0, 10)}T00:00:00Z`);
+  const endMs = Date.parse(`${window.end.slice(0, 10)}T00:00:00Z`);
+  const days = Math.max(1, Math.round((endMs - startMs) / 86400000));
+  const offset = rng.int(1, days);
+  return new Date(startMs + offset * 86400000).toISOString().slice(0, 10);
 }
