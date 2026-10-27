@@ -32,6 +32,16 @@ describe("L10-6 Cadence First-Class & Calendar-Correct Month Advance", () => {
       expect(advanceDateByCycle("2026-10-31", 1, "month")).toBe("2026-11-30");
     });
 
+    it("keeps a month-end date on the month end so monthly windows follow the calendar", () => {
+      expect(advanceDateByCycle("2026-09-30", 1, "month")).toBe("2026-10-31");
+      expect(advanceDateByCycle("2026-10-31", 1, "month")).toBe("2026-11-30");
+      expect(advanceDateByCycle("2026-11-30", 1, "month")).toBe("2026-12-31");
+      expect(advanceDateByCycle("2024-02-29", 1, "month")).toBe("2024-03-31");
+      expect(advanceDateByCycle("2026-10-31", -1, "month")).toBe("2026-09-30");
+      // Not a month end: day is kept, capped at the target month's length
+      expect(advanceDateByCycle("2026-09-29", 1, "month")).toBe("2026-10-29");
+    });
+
     it("advances multi-month steps correctly", () => {
       expect(advanceDateByCycle("2026-01-15", 3, "month")).toBe("2026-04-15");
       expect(advanceDateByCycle("2026-11-15", 2, "month")).toBe("2027-01-15"); // year boundary

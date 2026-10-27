@@ -6,18 +6,25 @@ import {
   Accumulator,
   IdentityService,
   createRng,
-  emitMetadata,
+  appendMetadata,
   readEntityMetadata,
+  ExtractPrimaryKey,
+  GetPrimaryKeyFields,
   extractComposedRecords,
   FactorEngine,
   StateLadderEngine,
   nestedEvent,
   temporalRole,
   scopedDecision,
+  sigmoid,
+  logit,
+  Validator,
 } from '@memberjunction/loom-engine';
 import {
   SimulationCheckpointSchema,
   type SimulationCheckpoint,
+  type EraConfig,
+  type DomainConfig,
 } from '@memberjunction/loom-contracts';
 import { generateEntityRecord } from '../generation.js';
 
@@ -61,7 +68,9 @@ export function advanceDateByCycle(
     const targetYear = year + Math.floor(totalMonths / 12);
     const targetMonth = ((totalMonths % 12) + 12) % 12;
     const daysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
-    const targetDay = Math.min(day, daysInTargetMonth);
+    // A month-end date stays a month-end date (Sep 30 -> Oct 31), so monthly windows follow the calendar
+    const isMonthEnd = day === new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    const targetDay = isMonthEnd ? daysInTargetMonth : Math.min(day, daysInTargetMonth);
     return `${targetYear}-${String(targetMonth + 1).padStart(2, '0')}-${String(targetDay).padStart(2, '0')}`;
   }
   if (cycleUnit === 'year') {
@@ -127,9 +136,25 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     ? parseInt(options.seed, 10)
     : priorCheckpoint?.seed ?? 42;
 
+  // The cycle covers dates after the prior as-of date, up to and including the new one
+  const windowStart = priorCheckpoint
+    ? priorCheckpoint.continuity.asOfDate
+    : advanceDateByCycle(asOfDate, -cyclesToAdd, cycleUnit);
+  const cycleWindow = { start: windowStart, end: asOfDate };
+  const inCycleWindow = (dateStr: unknown): boolean => {
+    if (dateStr === undefined || dateStr === null || dateStr === '') return false;
+    const day = String(dateStr).slice(0, 10);
+    return day > cycleWindow.start && day <= cycleWindow.end;
+  };
+
+  // Eras are keyed by calendar year, whatever the cycle unit
+  const asOfCalendarYear = parseInt(asOfDate.slice(0, 4), 10);
+  const activeEras: EraConfig[] = (loaded.erasManifest?.eras ?? []).filter((era) => era.cycles.includes(asOfCalendarYear));
+
   console.log(`🧵 Loom Accumulate: Advancing simulation for '${loaded.domain.name}'`);
   console.log(`   Cycle: ${cycleIndex} (+${cyclesToAdd} ${cycleUnit}(s)) | As-Of: ${asOfDate} | Seed: ${seed}`);
   console.log(`   Prior State: ${priorDir}`);
+  console.log(`   Window: ${cycleWindow.start} < date <= ${cycleWindow.end}${activeEras.length ? ` | Eras: ${activeEras.map((e) => e.eraKey).join(', ')}` : ''}`);
 
   // 2. Read existing entity records from priorState
   const priorRecords: Record<string, Record<string, unknown>[]> = {};
@@ -144,16 +169,17 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       // Must NOT catch or swallow missing .mj-sync.json or corrupt files!
       // If entity directory exists, readEntityMetadata will throw if invalid.
       const { records: unwrapped } = await readEntityMetadata(entityDir, entityCfg.entityName);
+      const pkFields = GetPrimaryKeyFields(entityCfg);
       for (const row of unwrapped) {
-        const pkVal = row['ID'] ?? row['id'];
-        if (pkVal === undefined || pkVal === null || pkVal === '') {
+        if (ExtractPrimaryKey(row, entityCfg) === undefined) {
           throw new Error(
-            `Accumulate: record in entity '${entityName}' missing required primary key`
+            `Accumulate: record in entity '${entityName}' missing required primary key '${pkFields.join(', ')}'`
           );
         }
-        const pkFieldCfg = entityCfg.fields['ID'] ?? entityCfg.fields['id'];
-        if (pkFieldCfg?.type === 'uuid' || !pkFieldCfg) {
-          if (!UUID_REGEX.test(String(pkVal))) {
+        for (const pkField of pkFields) {
+          const pkFieldCfg = entityCfg.fields[pkField];
+          const pkVal = pkField === 'ID' ? row['ID'] ?? row['id'] : row[pkField];
+          if ((pkFieldCfg?.type === 'uuid' || !pkFieldCfg) && !UUID_REGEX.test(String(pkVal))) {
             throw new Error(
               `Accumulate: corrupted primary key '${pkVal}' in entity '${entityName}'`
             );
@@ -347,8 +373,14 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       continue;
     }
 
-    // Read authored intake volume from ruleset params, falling back to default 2
+    // Read authored intake volume from ruleset params, falling back to the project's intake_default (else 2)
     let newRowsCount = 2;
+    for (const mod of Object.values(loaded.rulesetModules)) {
+      if (typeof mod.params['intake_default'] === 'number') {
+        newRowsCount = mod.params['intake_default'];
+        break;
+      }
+    }
     for (const mod of Object.values(loaded.rulesetModules)) {
       const directIntake = mod.params[`intake_${entityName}`];
       const lowerIntake = mod.params[`intake_${entityName.toLowerCase()}`];
@@ -359,6 +391,16 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       if (typeof lowerIntake === 'number') {
         newRowsCount = lowerIntake;
         break;
+      }
+    }
+    // Era volume multipliers scale intake for the as-of year (entity-wide multipliers only)
+    for (const era of activeEras) {
+      for (const vm of era.volumeMultipliers) {
+        const matchesEntity =
+          vm.entity === entityName || vm.entity === entityCfg.targetTable || vm.entity === entityCfg.entityName;
+        if (matchesEntity && !vm.where) {
+          newRowsCount = Math.round(newRowsCount * vm.multiplier);
+        }
       }
     }
 
@@ -405,7 +447,6 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       const parentFk = Object.values(entityCfg.foreignKeys)[0];
       const parentRecords = parentFk ? (currentRecords[parentFk.targetEntity] ?? []) : [];
       const actorFkField = rolePoolRule.windowForeignKey;
-      const actorType = actorFkField.replace(/ID$/i, '') || 'Participant';
       const schedule = rolePoolRule.roleWindows && rolePoolRule.roleWindows.length > 0
         ? rolePoolRule.roleWindows
         : [
@@ -413,8 +454,27 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
             { startOffsetYears: 0, durationYears: 3 },
           ];
 
+      // Seats go to real actors when the actor entity is part of the domain; a domain that declares no
+      // actor entity keeps minted actor IDs (there is nothing for them to dangle from)
+      const actorFk = Object.values(entityCfg.foreignKeys).find(
+        (fk) => fk.fieldName === actorFkField && loaded.domain.entities[fk.targetEntity]
+      );
+      const actorType = actorFkField.replace(/ID$/i, '') || 'Participant';
+      const actorPool = actorFk ? (currentRecords[actorFk.targetEntity] ?? []) : [];
+      if (actorFk && newRowsCount > 0 && actorPool.length === 0) {
+        throw new Error(
+          `Accumulate: ${entityName}.${actorFkField} needs real actors, but no ${actorFk?.targetEntity ?? 'actor'} records exist`
+        );
+      }
+
       for (const b of parentRecords) {
         const parentId = String(b['ID'] ?? b['id']);
+        const seated = new Set(
+          list
+            .filter((m) => parentFk && String(m[parentFk.fieldName]) === parentId)
+            .map((m) => String(m[actorFkField]))
+        );
+        const seatRng = rng.substream(`seats:${parentId}`);
         for (let a = 0; a < Math.min(newRowsCount, schedule.length); a++) {
           const windowDef = schedule[a]!;
           let startDate = windowDef.startDate;
@@ -429,7 +489,16 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
           startDate = startDate ?? asOfDate;
           endDate = endDate ?? `${asOfYear + 2}-12-31`;
 
-          const actorId = identityService.MintId(loaded.domain.name, actorType, [parentId, `ACCUM-${actorType}-${cycleIndex}-${a + 1}`]);
+          let actorId: string;
+          if (actorFk) {
+            const candidates = actorPool.filter((p) => !seated.has(String(p[actorFk.targetField] ?? p['ID'])));
+            if (candidates.length === 0) break;
+            const actor = candidates[seatRng.int(0, candidates.length - 1)]!;
+            actorId = String(actor[actorFk.targetField] ?? actor['ID']);
+          } else {
+            actorId = identityService.MintId(loaded.domain.name, actorType, [parentId, `ACCUM-${actorType}-${cycleIndex}-${a + 1}`]);
+          }
+          seated.add(actorId);
           const roleId = identityService.MintId(loaded.domain.name, entityName, [parentId, actorId, startDate, String(cycleIndex)]);
           list.push({
             ID: roleId,
@@ -469,7 +538,9 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     } else if (outcomeRule && outcomeRule.kind === 'outcome-derived-from-ballots') {
       const parentFk = Object.values(entityCfg.foreignKeys)[0];
       const eventEntity = parentFk?.targetEntity ?? '';
-      const eventRecords = (eventEntity ? (currentRecords[eventEntity] ?? []) : []).slice(-newRowsCount);
+      const decidedEventIds = new Set(
+        parentFk ? list.map((d) => String(d[parentFk.fieldName] ?? '').toLowerCase()) : []
+      );
       const ballotTenureRule = (loaded.domain.relationalRules ?? []).find(
         (r) => r.kind === 'date-window' && r.sourceEntity === outcomeRule.ballotEntity
       );
@@ -483,61 +554,50 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       const tenureEndField = ballotTenureRule.windowEndField;
       const ballotDateField = ballotTenureRule.dateField;
 
-      const roleEntityCfg = loaded.domain.entities[ballotTenureRule.windowEntity];
-      const roleParentFk = roleEntityCfg ? Object.values(roleEntityCfg.foreignKeys)[0] : undefined;
+      // A ballot's actor is the tenure row's actor field when it has one; when the ballot points at the
+      // tenure row itself (e.g. Vote.MembershipID -> Membership.ID), the tenure row's own key is the actor
+      const tenureCfg = loaded.domain.entities[ballotTenureRule.windowEntity];
+      const tenureActorOf = (t: Record<string, unknown>): string =>
+        String(t[actorFkField] ?? ExtractPrimaryKey(t, tenureCfg) ?? '');
 
-      const actorIds = Array.from(new Set(tenureRecords.map((t) => String(t[actorFkField] ?? '')))).filter(Boolean);
+      const actorIds = Array.from(new Set(tenureRecords.map(tenureActorOf))).filter(Boolean);
       const actors = actorIds.map((id) => ({ ID: id }));
+
+      // Scope eligible voters to the nearest entity both the tenure and the event reach through foreign keys
+      // (e.g. Membership -> Term -> Committee and Meeting -> Committee meet at Committee)
+      const scope = resolveSharedScope(loaded.domain, currentRecords, ballotTenureRule.windowEntity, eventEntity);
       const rolePool = temporalRole({
         actors,
         roleAssignments: tenureRecords,
         actorIdOf: (a) => a.ID,
-        assignmentActorIdOf: (t) => String(t[actorFkField]),
+        assignmentActorIdOf: tenureActorOf,
         assignmentWindowOf: (t) => ({
           start: String(t[tenureStartField]),
           end: String(t[tenureEndField]),
         }),
-        scopeOf: roleParentFk ? (t) => String(t[roleParentFk.fieldName] ?? '') : undefined,
+        // Keys compare case-insensitively: committed rows carry upper-case UUIDs, newly minted ones lower-case
+        scopeOf: scope ? (t) => (scope.fromSource(t) ?? '').toLowerCase() : undefined,
       });
 
-      // Helper to resolve event scope matching roleParentFk target entity
-      const resolveScopeId = (ev: Record<string, unknown>): string | undefined => {
-        if (!roleParentFk) return undefined;
-        const targetScopeEntity = roleParentFk.targetEntity;
-        const eventCfg = loaded.domain.entities[eventEntity];
-        if (!eventCfg) return undefined;
-
-        const directFk = Object.values(eventCfg.foreignKeys).find((fk) => fk.targetEntity === targetScopeEntity);
-        if (directFk && ev[directFk.fieldName]) {
-          return String(ev[directFk.fieldName]);
-        }
-
-        for (const pFk of Object.values(eventCfg.foreignKeys)) {
-          const parentRecords = currentRecords[pFk.targetEntity];
-          const parentId = String(ev[pFk.fieldName] ?? '');
-          if (!parentRecords || !parentId) continue;
-          const parentRec = parentRecords.find((p) => String(p['ID'] ?? p['id']) === parentId);
-          if (!parentRec) continue;
-          const parentEntityCfg = loaded.domain.entities[pFk.targetEntity];
-          if (parentEntityCfg) {
-            const parentToScopeFk = Object.values(parentEntityCfg.foreignKeys).find(
-              (fk) => fk.targetEntity === targetScopeEntity
-            );
-            if (parentToScopeFk && parentRec[parentToScopeFk.fieldName]) {
-              return String(parentRec[parentToScopeFk.fieldName]);
-            }
-          }
-        }
-        return undefined;
-      };
+      const resolveScopeId = (ev: Record<string, unknown>): string | undefined => scope?.fromTarget(ev)?.toLowerCase();
 
       // Event date field from relational rule
       const eventDateRule = (loaded.domain.relationalRules ?? []).find(
         (r) => r.kind === 'date-window' && r.sourceEntity === eventEntity
       );
+      const eventCfgForDate = loaded.domain.entities[eventEntity];
       const eventDateField = eventDateRule && eventDateRule.kind === 'date-window'
         ? eventDateRule.dateField
-        : 'Date';
+        : (eventCfgForDate ? Validator.ResolveCycleField(eventCfgForDate) : undefined) ?? 'Date';
+
+      // Decide only the events that fall inside this cycle's window and have no decision yet
+      const eventRecords = (eventEntity ? (currentRecords[eventEntity] ?? []) : []).filter(
+        (ev) =>
+          inCycleWindow(ev[eventDateField]) &&
+          !decidedEventIds.has(String(ev['ID'] ?? ev['id']).toLowerCase())
+      )
+        .sort((a, b) => String(a[eventDateField]).localeCompare(String(b[eventDateField])))
+        .slice(0, newRowsCount);
 
       // Decision date field from entity schema
       const decisionDateField = Object.keys(entityCfg.fields).find(
@@ -594,6 +654,12 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       currentRecords[outcomeRule.ballotEntity]!.push(...ballots);
       list.push(...decisions);
     } else {
+      const pkFields = GetPrimaryKeyFields(entityCfg);
+      if (newRowsCount > 0 && (pkFields.length !== 1 || pkFields[0] !== 'ID')) {
+        throw new Error(
+          `Accumulate: cannot generate new ${entityName} rows: it is keyed by '${pkFields.join(', ')}', not a minted ID. Set intake_${entityName} to 0.`
+        );
+      }
       for (let i = startIdx; i < startIdx + newRowsCount; i++) {
         const row = generateEntityRecord({
           domain: loaded.domain,
@@ -602,6 +668,8 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
           parentPool: currentRecords,
           rng,
           identityService,
+          asOfDate,
+          dateWindow: cycleWindow,
         });
         list.push(row);
 
@@ -699,10 +767,17 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     const priorCount = priorRecords[contract.effect]?.length ?? 0;
     const newRecords = list.slice(priorCount);
 
+    // Active eras shift the contract's rate on the logit scale, as the retrospective unroller does
+    const eraDelta = activeEras
+      .flatMap((era) => era.factorAdjustments)
+      .filter((adj) => adj.factor === contract.id)
+      .reduce((sum, adj) => sum + adj.deltaIntercept, 0);
+    const targetRate = eraDelta === 0 ? contract.target : sigmoid(logit(contract.target) + eraDelta);
+
     for (const rec of newRecords) {
       const recId = String(rec['ID'] ?? rec['id']);
       const drawRng = createRng(seed, `intake:${contract.id}:${recId}`);
-      const isPositive = drawRng.bernoulli(contract.target);
+      const isPositive = drawRng.bernoulli(targetRate);
 
       if (isPositive && contract.outcome.where) {
         for (const [k, v] of Object.entries(contract.outcome.where)) {
@@ -740,11 +815,13 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     console.log(`     • Status Transitions: ${statusTransitions.length} transition(s)`);
   }
 
-  // 8. Update metadata directory
-  await emitMetadata({
+  // 8. Write the cycle onto the committed tree: prior records stay as committed, new ones are appended
+  await appendMetadata({
     outputDir,
+    priorDir,
     domain: loaded.domain,
-    data: currentRecords,
+    priorRecords,
+    currentRecords,
   });
 
   // 10. Update simulation checkpoint.json with advanced continuity
@@ -753,7 +830,7 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
 
   for (const [e, rows] of Object.entries(currentRecords)) {
     totalRecordCounts[e] = rows.length;
-    activeEntityIds[e] = rows.map((r) => String(r['ID'] ?? r['id']));
+    activeEntityIds[e] = rows.map((r) => ExtractPrimaryKey(r, loaded.domain.entities[e]) ?? String(r['ID'] ?? r['id']));
   }
 
   const updatedCheckpoint: SimulationCheckpoint = {
@@ -785,4 +862,73 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
 
   console.log(`   ✓ Saved checkpoint to: ${path.join(outputDir, 'checkpoint.json')}`);
   console.log(`✨ Accumulation complete.`);
+}
+
+type RowResolver = (row: Record<string, unknown>) => string | undefined;
+
+/**
+ * Finds the nearest entity that both `sourceEntity` and `targetEntity` reach by following foreign keys
+ * (up to three hops each; the target entity itself counts), and returns how to read that shared
+ * ancestor's key from a row of either side. Undefined when the two share no ancestor.
+ */
+export function resolveSharedScope(
+  domain: DomainConfig,
+  records: Record<string, readonly Record<string, unknown>[]>,
+  sourceEntity: string,
+  targetEntity: string
+): { scopeEntity: string; fromSource: RowResolver; fromTarget: RowResolver } | undefined {
+  const byId = new Map<string, Map<string, Record<string, unknown>>>();
+  const lookup = (entity: string, id: string): Record<string, unknown> | undefined => {
+    let idx = byId.get(entity);
+    if (!idx) {
+      idx = new Map();
+      for (const r of records[entity] ?? []) {
+        const pk = ExtractPrimaryKey(r, domain.entities[entity]);
+        if (pk !== undefined) idx.set(pk.toLowerCase(), r);
+      }
+      byId.set(entity, idx);
+    }
+    return idx.get(id.toLowerCase());
+  };
+
+  const ancestors = (entity: string, includeSelf: boolean): Map<string, { depth: number; resolve: RowResolver }> => {
+    const found = new Map<string, { depth: number; resolve: RowResolver }>();
+    if (includeSelf) {
+      found.set(entity, { depth: 0, resolve: (r) => ExtractPrimaryKey(r, domain.entities[entity]) });
+    }
+    const queue: Array<{ entity: string; depth: number; resolve: RowResolver }> = [
+      { entity, depth: 0, resolve: (r) => ExtractPrimaryKey(r, domain.entities[entity]) },
+    ];
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      if (cur.depth >= 3) continue;
+      for (const fk of Object.values(domain.entities[cur.entity]?.foreignKeys ?? {})) {
+        if (!domain.entities[fk.targetEntity] || found.has(fk.targetEntity)) continue;
+        const parentResolve: RowResolver = (row) => {
+          const ownKey = cur.resolve(row);
+          if (ownKey === undefined) return undefined;
+          const own = cur.depth === 0 ? row : lookup(cur.entity, ownKey);
+          const val = own?.[fk.fieldName];
+          return val === undefined || val === null || val === '' ? undefined : String(val);
+        };
+        const next = { entity: fk.targetEntity, depth: cur.depth + 1, resolve: parentResolve };
+        found.set(fk.targetEntity, { depth: next.depth, resolve: parentResolve });
+        queue.push(next);
+      }
+    }
+    return found;
+  };
+
+  const sourceAncestors = ancestors(sourceEntity, false);
+  const targetAncestors = ancestors(targetEntity, true);
+  let best: { scopeEntity: string; depth: number; fromSource: RowResolver; fromTarget: RowResolver } | undefined;
+  for (const [entity, src] of sourceAncestors) {
+    const tgt = targetAncestors.get(entity);
+    if (!tgt) continue;
+    const depth = src.depth + tgt.depth;
+    if (!best || depth < best.depth) {
+      best = { scopeEntity: entity, depth, fromSource: src.resolve, fromTarget: tgt.resolve };
+    }
+  }
+  return best && { scopeEntity: best.scopeEntity, fromSource: best.fromSource, fromTarget: best.fromTarget };
 }
