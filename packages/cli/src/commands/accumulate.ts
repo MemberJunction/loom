@@ -27,6 +27,7 @@ import {
   type DomainConfig,
 } from '@memberjunction/loom-contracts';
 import { generateEntityRecord } from '../generation.js';
+import { loadAccumulatePlan, applyAccumulatePlan } from '../plan.js';
 
 export interface AccumulateCommandOptions {
   project?: string;
@@ -37,6 +38,8 @@ export interface AccumulateCommandOptions {
   seed?: string;
   asOf?: string;
   output?: string;
+  /** JSON plan of records to append this cycle (see AccumulatePlanSchema). */
+  plan?: string;
 }
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -146,6 +149,12 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     const day = String(dateStr).slice(0, 10);
     return day > cycleWindow.start && day <= cycleWindow.end;
   };
+
+  // A plan is written for one cycle; applying it to another would date its records wrongly
+  const plan = options.plan ? await loadAccumulatePlan(path.resolve(process.cwd(), options.plan)) : undefined;
+  if (plan && plan.asOf !== asOfDate) {
+    throw new Error(`Accumulate: plan is for as-of ${plan.asOf}, but this cycle's as-of date is ${asOfDate}`);
+  }
 
   // Eras are keyed by calendar year, whatever the cycle unit
   const asOfCalendarYear = parseInt(asOfDate.slice(0, 4), 10);
@@ -354,9 +363,20 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
     }
   }
 
-  // 6. Generate simulated delta additions strictly conforming to ruleset intake
   const identityService = new IdentityService();
   identityService.RegisterNamespace(loaded.domain.name, loaded.domain.namespace);
+
+  // 5b. Append the plan's records before generation, so generated rows and cascades can build on them
+  const planned = plan ? applyAccumulatePlan({ domain: loaded.domain, plan, records: currentRecords, identityService }) : undefined;
+  const planAdded = planned?.added ?? {};
+  if (plan) {
+    console.log(`   Plan: ${plan.records.length} record(s)${plan.summary ? ` — ${plan.summary}` : ''}`);
+    for (const [entity, fields] of Object.entries(planned!.nulled)) {
+      console.log(`     ⚠ ${entity}: no value planned or generated for ${fields.join(', ')} (written as null)`);
+    }
+  }
+
+  // 6. Generate simulated delta additions strictly conforming to ruleset intake
   const factorContracts = Object.values(loaded.rulesetModules).flatMap((mod) =>
     Object.values(mod.effects)
   );
@@ -402,6 +422,10 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
           newRowsCount = Math.round(newRowsCount * vm.multiplier);
         }
       }
+    }
+    // A plan's intake is the decision for this cycle; it replaces ruleset intake and era scaling
+    if (plan && plan.intake[entityName] !== undefined) {
+      newRowsCount = plan.intake[entityName]!;
     }
 
     // Check if this entity is a structural dependent child of another entity
@@ -778,19 +802,24 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       const recId = String(rec['ID'] ?? rec['id']);
       const drawRng = createRng(seed, `intake:${contract.id}:${recId}`);
       const isPositive = drawRng.bernoulli(targetRate);
+      // A planned row keeps every value the plan gave it; the contract only fills what the plan left out
+      const fromPlan = planned?.supplied.get(rec);
+      const set = (k: string, v: unknown) => {
+        if (!fromPlan?.has(k)) rec[k] = v;
+      };
 
       if (isPositive && contract.outcome.where) {
         for (const [k, v] of Object.entries(contract.outcome.where)) {
-          rec[k] = v;
+          set(k, v);
         }
       } else if (!isPositive && contract.outcome.otherwise) {
         for (const [k, v] of Object.entries(contract.outcome.otherwise)) {
-          rec[k] = v;
+          set(k, v);
         }
       } else if (!isPositive && contract.outcome.where) {
         for (const [k, v] of Object.entries(contract.outcome.where)) {
           if (typeof v === 'boolean') {
-            rec[k] = false;
+            set(k, false);
           }
         }
       }
@@ -845,7 +874,10 @@ export async function executeAccumulate(options: AccumulateCommandOptions): Prom
       latentStates: updatedLatentStates,
       activeLifecycleStates: updatedLifecycleStates,
       birthCycles: priorCheckpoint?.continuity.birthCycles ?? {},
-      metadata: { lastAccumulatedAt: asOfDate },
+      metadata: {
+        lastAccumulatedAt: asOfDate,
+        ...(plan ? { plan: { summary: plan.summary ?? null, records: plan.records.length, added: planAdded, intake: plan.intake } } : {}),
+      },
     },
     committedRecordCounts: totalRecordCounts,
     lastGeneratedDelta: {
