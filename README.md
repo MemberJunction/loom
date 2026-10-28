@@ -135,6 +135,41 @@ loom accumulate --project=projects/enterprise --prior-state=./metadata --cycles=
 loom validate --project=projects/enterprise
 ```
 
+### Planned cycles (`accumulate --plan`)
+
+Intake generation can only invent rows. When a cycle should add particular records (named people, a real
+order with its lines, a registration for an existing event), write them in a plan and let Loom append them:
+
+```bash
+loom accumulate --project=projects/enterprise --prior-state=./metadata --plan=plans/2026-10.json
+```
+
+```json
+{
+  "asOf": "2026-10-31",
+  "summary": "One member joins and registers for the October workshop",
+  "intake": { "Vote": 4 },
+  "records": [
+    { "entity": "Person", "ref": "p1", "fields": { "FirstName": "Renata", "LastName": "Vasquez-Hale", "Email": "renata@example.test" } },
+    { "entity": "Order", "ref": "o1", "fields": { "OrderNumber": "ORD-1001", "BillToPersonID": { "ref": "p1" }, "TotalGross": 150 } },
+    { "entity": "OrderLine", "ref": "l1", "fields": { "OrderHeaderID": { "ref": "o1" }, "ProductID": { "lookup": { "SKU": "WORKSHOP" } } } },
+    { "entity": "EventOrderLine", "extends": "l1", "fields": { "PersonID": { "ref": "p1" }, "AttendanceStatus": "Registered" } }
+  ]
+}
+```
+
+- `asOf` must equal the cycle's as-of date, so a plan cannot land in the wrong cycle.
+- A field value is a literal, `{ "ref": "<ref>" }` (another planned record) or `{ "lookup": { …fields } }`
+  (exactly one existing or planned row of the foreign key's target entity). An IsA child names its planned
+  parent with `extends` and shares its key; collections compose through their foreign key as usual.
+- Loom mints keys (from the business key when the plan supplies it, so a planned duplicate collides), checks
+  every entity, field, type and reference, and rejects a plan with every problem listed before writing anything.
+- Planned values are final: factor contracts and generators only fill fields the plan left out. Declared
+  fields nothing filled are written as `null` and reported, never as placeholders.
+- `intake` replaces the ruleset's `intake_<Entity>` (and era scaling) for this cycle's generated rows, e.g. to
+  let ballot rules decide planned meetings.
+- The plan's summary and per-entity counts are kept in `checkpoint.json` under `continuity.metadata.plan`.
+
 ---
 
 ## 🤖 The Simulation Agent Skill Workflow

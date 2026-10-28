@@ -41,6 +41,7 @@ program
   .option('-s, --seed <number>', 'Simulation seed', '42')
   .option('-a, --as-of <date>', 'Explicit as-of simulation date (YYYY-MM-DD)')
   .option('-o, --output <dir>', 'Custom output directory for metadata')
+  .option('--plan <file>', 'JSON plan of records to append this cycle (asOf must match the cycle)')
   .action(async (opts) => {
     try {
       await executeAccumulate(opts);
