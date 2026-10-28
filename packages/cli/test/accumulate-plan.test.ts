@@ -49,6 +49,11 @@ const domain = {
       fields: { Scope: field("Scope", "string", { isPrimaryKey: true }), Next: field("Next", "number") },
       foreignKeys: {}, isImmutable: false,
     },
+    Note: {
+      name: "Note", entityName: "Note", targetTable: "Note", schema: "s", pack: "core",
+      fields: { ID: field("ID", "uuid", { isPrimaryKey: true }), EntityName: field("EntityName"), RecordID: field("RecordID", "uuid"), Body: field("Body") },
+      foreignKeys: {}, isImmutable: false,
+    },
   },
 } as unknown as DomainConfig;
 
@@ -173,6 +178,22 @@ describe("applyAccumulatePlan", () => {
     expect(() => apply({ records: [{ entity: "Sequence", fields: { Next: 1 } }] })).toThrow(/keyed by Scope; supply Scope/);
     const twin = { ...existing(), Item: [...existing().Item, { ID: "55555555-5555-4555-8555-555555555555", SKU: "MEM-1", Price: 1 }] };
     expect(() => apply({ records: [{ entity: "Header", ref: "h", fields: { Number: "H-2" } }, { entity: "Line", fields: { HeaderID: { ref: "h" }, ItemID: { lookup: { SKU: "MEM-1" } } } }] }, twin)).toThrow(/matched 2 records/);
+  });
+
+  it("resolves a ref on a polymorphic uuid field to the referenced row's key, and refuses one on other fields", () => {
+    const { records } = apply({
+      records: [
+        { entity: "Customer", ref: "dee", fields: { Name: "Dee", Email: "dee@example.test" } },
+        { entity: "Note", fields: { EntityName: "Customer", RecordID: { ref: "dee" }, Body: "joined" } },
+      ],
+    });
+    expect(records.Note[0]!["RecordID"]).toBe(records.Customer[1]!["ID"]);
+    expect(() => apply({
+      records: [
+        { entity: "Customer", ref: "eve", fields: { Email: "eve@example.test" } },
+        { entity: "Note", fields: { RecordID: null, Body: { ref: "eve" } } },
+      ],
+    })).toThrow(/Body is not a foreign key or a uuid field/);
   });
 });
 

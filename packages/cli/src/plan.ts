@@ -205,9 +205,18 @@ export function applyAccumulatePlan(options: ApplyPlanOptions): ApplyPlanResult 
     const fk = foreignKeyFor(cfg, field);
     const isObj = value !== null && typeof value === 'object';
     if (isObj && 'ref' in value) {
-      if (!fk) { problems.push(`${at(i, r)}: ${field} is not a foreign key, so it cannot take a ref`); return undefined; }
+      // A uuid field that is not a declared foreign key is a polymorphic link (EntityID + RecordID): it takes
+      // the referenced row's key, whatever its entity.
+      const polymorphic = !fk && cfg.fields[field]!.type === 'uuid';
+      if (!fk && !polymorphic) { problems.push(`${at(i, r)}: ${field} is not a foreign key or a uuid field, so it cannot take a ref`); return undefined; }
       const target = byRef.get(value.ref);
       if (!target) { problems.push(`${at(i, r)}: ${field} refers to '${value.ref}', which is not a ref in this plan`); return undefined; }
+      if (polymorphic) {
+        const targetPk = GetPrimaryKeyFields(domain.entities[target.record.entity]!);
+        if (targetPk.length !== 1) { problems.push(`${at(i, r)}: ${field} refers to '${value.ref}', a ${target.record.entity}, which has a composite key`); return undefined; }
+        return rows[target.index]![targetPk[0]!];
+      }
+      if (!fk) return undefined;
       if (!lineageOf(domain, target.record.entity).includes(fk.targetEntity)) {
         problems.push(`${at(i, r)}: ${field} points at ${fk.targetEntity}, but '${value.ref}' is a ${target.record.entity}`);
         return undefined;

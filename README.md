@@ -159,7 +159,8 @@ loom accumulate --project=projects/enterprise --prior-state=./metadata --plan=pl
 ```
 
 - `asOf` must equal the cycle's as-of date, so a plan cannot land in the wrong cycle.
-- A field value is a literal, `{ "ref": "<ref>" }` (another planned record) or `{ "lookup": { …fields } }`
+- A field value is a literal, `{ "ref": "<ref>" }` (another planned record; on a uuid field that is not a
+  declared foreign key, such as a polymorphic `RecordID`, it takes that record's key) or `{ "lookup": { …fields } }`
   (exactly one existing or planned row of the foreign key's target entity). An IsA child names its planned
   parent with `extends` and shares its key; collections compose through their foreign key as usual.
 - Loom mints keys (from the business key when the plan supplies it, so a planned duplicate collides), checks
