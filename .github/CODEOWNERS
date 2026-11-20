@@ -1,5 +1,2 @@
-# On `next` this file is advisory: protect-next does not require code-owner review. Each release
-# line gets its own CODEOWNERS at the cut (`*` owned by the line's reviewers), and protect-lts
-# requires their review there. Listed here so the owners of release-lines.json are on record.
-/release-lines.json @bg-BC @rkihm-BC
-/.github/CODEOWNERS @bg-BC @rkihm-BC
+# Code owners for the lts/0.1 release line. protect-lts requires review from a code owner.
+* @bg-BC @rkihm-BC
