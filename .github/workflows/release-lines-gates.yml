@@ -1,0 +1,82 @@
+# Standalone release-line checks, enforced on PRs (guides/RELEASE_LINES.md).
+#
+#   lines: record          PR into next   release-lines.json is valid, line identity never changes,
+#                                         an LTS line never reopens, backport labels name known lines,
+#                                         and the release-line script tests pass.
+#   lines: on next first   PR into lts/*  every commit is a cherry-pick of a commit on next.
+#
+# One workflow on all base branches with job-level `if:`s so each required check context reports a
+# conclusion instead of staying Pending forever.
+name: Release lines
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    branches: [next, main, 'lts/**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-lines-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  record:
+    name: 'lines: record'
+    if: github.event.pull_request.draft == false && github.base_ref == 'next'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: release-lines.json is valid and transitions are allowed
+        run: |
+          git fetch --no-tags origin next
+          node .github/scripts/release-lines.mjs validate --file release-lines.json --base origin/next
+      - name: Backport labels reference known release lines
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          node .github/scripts/check-backport.mjs labels --labels "$LABELS" --record release-lines.json
+      - name: Run release-line script unit tests
+        run: |
+          node --test .github/scripts/__tests__/release-lines.spec.mjs
+
+  on-next-first:
+    name: 'lines: on next first'
+    if: github.event.pull_request.draft == false && startsWith(github.base_ref, 'lts/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # issues/pull-requests read: the `line-cut` exemption looks up who added the label and their role.
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Every commit is a cherry-pick of a commit on next
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch --no-tags origin next "$BASE_REF"
+          node .github/scripts/check-backport.mjs provenance \
+            --base "$(git merge-base "origin/$BASE_REF" HEAD)" \
+            --labels "$LABELS" \
+            --next origin/next \
+            --head-ref "$HEAD_REF" \
+            --author-type "$AUTHOR_TYPE"
