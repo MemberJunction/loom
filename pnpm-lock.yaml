@@ -75,8 +75,8 @@ importers:
         version: 3.25.76
     devDependencies:
       '@memberjunction/core':
-        specifier: ^5.51.2
-        version: 5.51.2
+        specifier: ^6.3.0-edge.1
+        version: 6.3.0-edge.1
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
@@ -112,8 +112,8 @@ importers:
         version: 3.25.76
     devDependencies:
       '@memberjunction/core':
-        specifier: ^5.51.2
-        version: 5.51.2
+        specifier: ^6.3.0-edge.1
+        version: 6.3.0-edge.1
       '@types/node':
         specifier: ^22.10.0
         version: 22.20.1
@@ -160,14 +160,14 @@ packages:
   '@jridgewell/sourcemap-codec@1.6.0':
     resolution: {integrity: sha512-T7jf+5zgsZHwNJ4lvQ7/aezbyk0nNX+zJVWpmHA7VYsEx7a7qr5Rg5IbtJFqkgze5Y2sruq1RUY8Q837Od7iFw==}
 
-  '@memberjunction/core@5.51.2':
-    resolution: {integrity: sha512-PvwV3c506e+UvX8IZgzdpu55UqjyQ9gqsa6SqqRdk3heCXCbnz7L8xQ30lk+2yDM2jjFSR71hkF2uqjrbZGKwA==}
+  '@memberjunction/core@6.3.0-edge.1':
+    resolution: {integrity: sha512-0anHZSSJ/DeWQS8BT8a2eZGPmAzySXWus8M+UFMCFbdlAbFmYnlH4lHNW+GcPLy2LCzU9sd4LclTFKbZj8niEg==}
 
-  '@memberjunction/global@5.51.2':
-    resolution: {integrity: sha512-Q421vPB48wZc/KP9KtgGsJy3cxAYbVh2r4XMAjTxUA8bfuLlQd/2Dt7i2jNy8qAPSSyktZv6xcFP4rzXWJZNTQ==}
+  '@memberjunction/global@6.3.0-edge.1':
+    resolution: {integrity: sha512-4/t9FeEuT2J3ngENxnlB/xdXOi08C1wQ50sCuOb1pYrFmZIuEXrRQv4dUjdSbmwX7MMKi26P1ruQ0Na/rDkV9A==}
 
-  '@memberjunction/sql-dialect@5.51.2':
-    resolution: {integrity: sha512-n17Eh+blid3vBRZufmwqZXCB4iPn2PC7UtzKCfVCgbNGP49efcaHw0EMN4JfFjkONr33OWJEo81xXTZ+TXAFvg==}
+  '@memberjunction/sql-dialect@6.3.0-edge.1':
+    resolution: {integrity: sha512-08WCutdnGdLeGS8VrLtT1NGyXNwka/eSEy5+uamgwCDmH03FKOb8b5sOanShI9TzQK1xumKMdDk17MLyheCy/A==}
 
   '@oxc-project/types@0.148.0':
     resolution: {integrity: sha512-Nm4s/jB+4FpFsPhWGEC4h7rzksesmtnMXomo6rCMcg/b8zLQuOziRgkCS1fxDCXOlJB/6Q8oABOZ/OP6RIPj9A==}
@@ -350,6 +350,11 @@ packages:
 
   '@vitest/utils@4.1.11':
     resolution: {integrity: sha512-zTCVGpyFsGWBhllOyKlTw/vnr6D9qxsfSDyfbyZmTyjHw5N/VuvzHpHoQjm2ZJzn4RJgx5w4r7V0er69CmLgPQ==}
+
+  acorn@8.19.0:
+    resolution: {integrity: sha512-oJlA3XiRm7Cyk6qFD2Jn8ak9B7jSy0qy00ADO3+8dpT0LSjFihQYv4C02LFCSYJV3Q37xYwwRy5m+IpIiUzqWw==}
+    engines: {node: '>=0.4.0'}
+    hasBin: true
 
   assertion-error@2.0.1:
     resolution: {integrity: sha512-Izi8RQcffqCeNVgFigKli1ssklIbpHnCYc6AknXGYoB6grJqyeby7jv12JUQgmTAnIDnbck1uxksT4dzN3PWBA==}
@@ -756,23 +761,26 @@ snapshots:
 
   '@jridgewell/sourcemap-codec@1.6.0': {}
 
-  '@memberjunction/core@5.51.2':
+  '@memberjunction/core@6.3.0-edge.1':
     dependencies:
-      '@memberjunction/global': 5.51.2
-      '@memberjunction/sql-dialect': 5.51.2
+      '@memberjunction/global': 6.3.0-edge.1
+      '@memberjunction/sql-dialect': 6.3.0-edge.1
       debug: 4.4.3
       rxjs: 7.8.2
       zod: 3.25.76
     transitivePeerDependencies:
       - supports-color
 
-  '@memberjunction/global@5.51.2':
+  '@memberjunction/global@6.3.0-edge.1':
     dependencies:
+      acorn: 8.19.0
       lodash: 4.18.1
       rxjs: 7.8.2
       uuid: 13.0.2
 
-  '@memberjunction/sql-dialect@5.51.2': {}
+  '@memberjunction/sql-dialect@6.3.0-edge.1':
+    dependencies:
+      '@memberjunction/global': 6.3.0-edge.1
 
   '@oxc-project/types@0.148.0': {}
 
@@ -900,6 +908,8 @@ snapshots:
       '@vitest/pretty-format': 4.1.11
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.1
+
+  acorn@8.19.0: {}
 
   assertion-error@2.0.1: {}
 
