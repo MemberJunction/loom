@@ -1,0 +1,12 @@
+{
+  "$comment": "The release line status record. Each release line, the version it was cut at, and whether it is open or LTS. CI reads the copy on next; have one of its CODEOWNERS review changes. See guides/RELEASE_LINES.md.",
+  "developmentBranch": "next",
+  "lines": {
+    "0.1": {
+      "branch": "lts/0.1",
+      "status": "open",
+      "version": "0.1.0",
+      "releasesThrough": "branch"
+    }
+  }
+}
